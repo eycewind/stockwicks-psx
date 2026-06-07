@@ -1,0 +1,47 @@
+name: Rollback Ashakil
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_dir:
+        description: "Optional full backup dir. Leave blank to use latest backup."
+        required: false
+        default: ""
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload rollback script
+        run: |
+          RELEASE_ID="rollback-${GITHUB_SHA::8}-$(date +%Y%m%d%H%M%S)"
+          echo "RELEASE_ID=${RELEASE_ID}" >> "$GITHUB_ENV"
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "mkdir -p /tmp/stockwicks-ashakil-${RELEASE_ID}-deploy"
+
+          rsync -az -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            deploy/rollback_ashakil.sh \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/stockwicks-ashakil-${RELEASE_ID}-deploy/rollback_ashakil.sh"
+
+      - name: Rollback on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "chmod +x /tmp/stockwicks-ashakil-${RELEASE_ID}-deploy/rollback_ashakil.sh && \
+             ASHAKIL_APP_PATH='${{ secrets.ASHAKIL_APP_PATH }}' \
+             bash /tmp/stockwicks-ashakil-${RELEASE_ID}-deploy/rollback_ashakil.sh '${{ github.event.inputs.backup_dir }}'"
+
+      - name: Health check
+        run: |
+          curl -fsS --max-time 20 "${{ secrets.ASHAKIL_PUBLIC_URL }}"
