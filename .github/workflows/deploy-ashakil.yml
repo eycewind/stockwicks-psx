@@ -13,7 +13,7 @@ jobs:
 
       - name: Compile tracked Python files
         run: |
-          git ls-files '*.py' | xargs python -m py_compile
+          git ls-files -z '*.py' | xargs -0 python -m py_compile
 
       - name: Package release
         run: |
