@@ -35,15 +35,19 @@ rsync -a \
   --exclude '*.pyc' \
   "${APP_PATH}/" "${BACKUP_DIR}/"
 
-echo "Deploying release from ${RELEASE_SRC} to ${APP_PATH}"
+echo "Deploying app release from ${RELEASE_SRC}/app to ${APP_PATH}/app"
+if [[ ! -d "${RELEASE_SRC}/app" ]]; then
+  echo "ERROR: release app directory missing: ${RELEASE_SRC}/app"
+  exit 1
+fi
+
 rsync -a --delete \
-  --exclude '.env' \
-  --exclude 'venv' \
-  --exclude 'data' \
-  --exclude 'logs' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
-  "${RELEASE_SRC}/" "${APP_PATH}/"
+  --exclude 'cache' \
+  --exclude 'data' \
+  --exclude 'logs' \
+  "${RELEASE_SRC}/app/" "${APP_PATH}/app/"
 
 echo "Restarting ashakil services"
 sudo systemctl daemon-reload
