@@ -62,3 +62,7 @@ deploy_artifacts/
 *.tar
 *.tar.gz
 *.zip
+
+# Legacy unused scripts
+app/scripts/stock_bot_runner.py
+app/scripts/stocks/bots/stock_bot_worker.py
