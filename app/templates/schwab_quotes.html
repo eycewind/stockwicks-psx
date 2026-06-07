@@ -1,0 +1,82 @@
+<!-- /var/www/stockwicks/app/templates/auth/schwab_quotes.html -->
+{% extends "base.html" %}
+{% block title %}Schwab Real-Time Quote{% endblock %}
+
+{% block content %}
+<style>
+    .schwab-quote-card {
+        margin: 30px auto 0;
+        padding: 30px 25px 20px 25px;
+        background: #1a2657;
+        border-radius: 14px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+        color: #fff;
+        max-width: 550px;
+    }
+    .schwab-quote-card label {
+        font-weight: bold;
+        color: #bbf7d0;
+    }
+    .schwab-quote-card input[type=text] {
+        padding: 9px 12px;
+        width: 60%;
+        border: none;
+        border-radius: 7px;
+        margin-right: 8px;
+        font-size: 18px;
+    }
+    .schwab-quote-card button {
+        padding: 9px 24px;
+        background: #0aab40;
+        color: #100707;
+        border: none;
+        border-radius: 7px;
+        font-weight: bold;
+        font-size: 18px;
+        transition: 0.15s;
+    }
+    .schwab-quote-card button:hover { background: #15dd74; }
+    .schwab-quote-error {
+        margin: 18px 0 0 0;
+        background: #ffe6e6;
+        color: #c00;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        word-break: break-all;
+    }
+    .schwab-quote-result {
+        margin-top: 25px;
+        padding: 15px 16px;
+        background: #06102a;
+        border-radius: 7px;
+        color: #aaf7ff;
+        font-family: 'Fira Mono', 'Consolas', 'Menlo', monospace;
+        font-size: 15px;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+</style>
+
+<div class="schwab-quote-card">
+    <h2>Schwab Real-Time Quote</h2>
+    <form method="post">
+        <label for="symbol">Enter Symbol (e.g., <b>AAPL</b>):</label>
+        <input type="text" id="symbol" name="symbol" required placeholder="AAPL, MSFT, SPY..." value="{{ symbol or '' }}" autocomplete="off">
+        <button type="submit">Get Quote</button>
+    </form>
+
+    {% if error %}
+        <div class="schwab-quote-error">
+            {{ error }}
+        </div>
+    {% endif %}
+
+    {% if quote %}
+        <div class="schwab-quote-result">
+            <b>Quote for {{ symbol|upper }}</b>:
+            <pre>{{ quote }}</pre>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

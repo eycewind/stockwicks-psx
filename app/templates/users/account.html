@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+  <h1>Account</h1>
+  <p class="lead">Manage your StockWicks user account.</p>
+
+  <div class="card mt-4">
+    <div class="card-body">
+      <h5 class="card-title">User Info</h5>
+      <p><strong>Username:</strong> {{ user.username }}</p>
+      <p><strong>Email:</strong> {{ user.email }}</p>
+      <a href="/auth/logout" class="btn btn-outline-danger">Logout</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

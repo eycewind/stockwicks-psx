@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>DB Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 20px; }
+    header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    select, input, button { padding:6px 10px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 6px; font-size: 14px; vertical-align: top; }
+    th { background: #f3f3f3; text-align: left; position: sticky; top: 0; }
+    .row-actions { display:flex; gap:6px; }
+    .muted { color:#666; }
+    .pill { background:#eef; padding:2px 8px; border-radius:999px; font-size:12px; display:inline-flex; align-items:center; gap:6px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top: 16px;}
+    .card { border:1px solid #ddd; border-radius:10px; padding:12px;}
+    .sticky-toolbar { position: sticky; top: 0; background:white; padding:8px 0; z-index:10; }
+    .small { font-size:12px; }
+    .filters { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;}
+    .filters input[type="text"] { width: 220px; }
+    .filters .pill a { text-decoration:none; font-weight:bold; color:#444; }
+  </style>
+</head>
+<body>
+  <h2>Database Admin</h2>
+  <p class="small muted">Current connection: <strong>{{ current_dsn }}</strong></p>
+
+  <div class="card" style="margin:10px 0; padding:10px;">
+    <h4>Connect to DSN</h4>
+    <input id="dsnInput" type="text" placeholder="postgresql+psycopg2://user:pass@127.0.0.1:5432/dbname or postgresql+psycopg2:///dbname?host=/var/run/postgresql" style="width:60%" />
+    <button id="dsnConnect">Connect</button>
+    <button id="dsnDisconnect">Disconnect</button>
+    <span class="small muted">Requires ADMIN_TOKEN.</span>
+  </div>
+
+  <div class="sticky-toolbar">
+    <header>
+      <label>
+        Table:
+        <select id="tableSelect"></select>
+      </label>
+      <label>Limit: <input id="limitInput" type="number" value="50" min="1" style="width:80px"/></label>
+      <label>Offset: <input id="offsetInput" type="number" value="0" min="0" style="width:80px"/></label>
+      <label>Order by: <select id="orderBy"></select></label>
+      <label><input id="descChk" type="checkbox"/> Desc</label>
+      <button id="refreshBtn">Refresh</button>
+      <span class="muted small">Tip: set ADMIN_TOKEN in env &amp; pass ?token=XYZ on URL for a simple guard.</span>
+    </header>
+
+    <!-- Filter builder -->
+    <div class="filters">
+      <strong>Filter:</strong>
+      <select id="filterCol"></select>
+      <select id="filterOp">
+        <option value="=">=</option>
+        <option value="!=">!=</option>
+        <option value="contains">contains</option>
+        <option value=">">&gt;</option>
+        <option value=">=">&ge;</option>
+        <option value="<">&lt;</option>
+        <option value="<=">&le;</option>
+        <option value="between">between</option>
+      </select>
+      <input id="filterVal" type="text" placeholder='value (or "low,high" for between)' />
+      <button id="addFilterBtn" type="button">Add</button>
+      <button id="clearFiltersBtn" type="button">Clear</button>
+    </div>
+    <div id="activeFilters" class="small muted" style="margin-top:6px;">No filters applied</div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Rows</h3>
+      <div id="rowsInfo" class="small muted"></div>
+      <div style="overflow:auto; max-height: 55vh;">
+        <table id="rowsTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <button id="prevBtn">Prev</button>
+        <button id="nextBtn">Next</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Insert / Export</h3>
+      <div id="pkInfo" class="small muted"></div>
+      <h4>Insert Row</h4>
+      <form id="insertForm"></form>
+      <button id="insertBtn">Insert</button>
+
+      <hr/>
+      <h4>Export CSV</h4>
+      <div id="exportCols"></div>
+      <button id="exportBtn">Download CSV</button>
+    </div>
+  </div>
+
+<script>
+const Q = new URLSearchParams(window.location.search);
+const TOKEN = Q.get("token") || null;
+
+async function api(path, opts={}) {
+  const url = new URL(path, window.location.origin);
+  if (TOKEN) url.searchParams.set("token", TOKEN);
+  if (opts.params) {
+    for (const [k,v] of Object.entries(opts.params)) {
+      if (v === undefined || v === null) continue;
+      url.searchParams.set(k, v);
+    }
+  }
+  const res = await fetch(url, {headers: {'Content-Type':'application/json'}, ...opts});
+  if (!res.ok) {
+    const txt = await res.text().catch(()=>String(res.status));
+    throw new Error(txt || `HTTP ${res.status}`);
+  }
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return res.json();
+  return res.text();
+}
+
+const tableSel = document.getElementById('tableSelect');
+const orderSel = document.getElementById('orderBy');
+const limitInput = document.getElementById('limitInput');
+const offsetInput = document.getElementById('offsetInput');
+const descChk = document.getElementById('descChk');
+const rowsInfo = document.getElementById('rowsInfo');
+const rowsTable = document.getElementById('rowsTable');
+const pkInfo = document.getElementById('pkInfo');
+const insertForm = document.getElementById('insertForm');
+const exportColsDiv = document.getElementById('exportCols');
+const filterCol = document.getElementById('filterCol');
+const filterOp  = document.getElementById('filterOp');
+const filterVal = document.getElementById('filterVal');
+const activeFiltersEl = document.getElementById('activeFilters');
+
+let filters = []; // [{col, op, val}]
+
+document.getElementById('refreshBtn').onclick = loadRows;
+document.getElementById('prevBtn').onclick = () => {
+  const o = Math.max(0, parseInt(offsetInput.value||0) - parseInt(limitInput.value||50));
+  offsetInput.value = o; loadRows();
+};
+document.getElementById('nextBtn').onclick = () => {
+  offsetInput.value = parseInt(offsetInput.value||0) + parseInt(limitInput.value||50);
+  loadRows();
+};
+document.getElementById('insertBtn').onclick = insertRow;
+document.getElementById('exportBtn').onclick = exportCSV;
+
+document.getElementById('dsnConnect').onclick = async () => {
+  try {
+    const dsn = document.getElementById('dsnInput').value.trim();
+    if (!dsn) return alert('Enter DSN');
+    await api('/admin/db/connect', { method:'POST', body: JSON.stringify({ dsn }) });
+    alert('Connected. Reloading…'); location.reload();
+  } catch (e) { alert(`Error: ${e?.message || e}`); }
+};
+document.getElementById('dsnDisconnect').onclick = async () => {
+  try {
+    await api('/admin/db/disconnect', { method:'POST' });
+    alert('Disconnected. Reloading…'); location.reload();
+  } catch (e) { alert(`Error: ${e?.message || e}`); }
+};
+
+document.getElementById('addFilterBtn').onclick = () => {
+  const col = filterCol.value;
+  const op  = filterOp.value;
+  const raw = filterVal.value.trim();
+  if (!col || !op) return alert('Pick a column and operator');
+
+  let val = raw;
+  if (op === 'between') {
+    const parts = raw.split(',').map(s => s.trim());
+    if (parts.length !== 2) return alert('For between, enter "low,high"');
+    val = parts;
+  } else if (!raw && !['=','!='].includes(op)) {
+    return alert('Enter a value');
+  }
+
+  filters.push({ col, op, val });
+  filterVal.value = '';
+  renderActiveFilters();
+  loadRows();
+};
+
+document.getElementById('clearFiltersBtn').onclick = () => {
+  filters = []; renderActiveFilters(); loadRows();
+};
+
+function renderActiveFilters() {
+  if (!filters.length) { activeFiltersEl.textContent = 'No filters applied'; return; }
+  activeFiltersEl.innerHTML = 'Filters: ' + filters.map((f,i) =>
+    `<span class="pill" style="margin-right:6px;">
+       ${f.col} ${f.op} ${Array.isArray(f.val) ? f.val.join('..') : String(f.val)}
+       <a href="#" onclick="removeFilter(${i});return false;" title="remove">×</a>
+     </span>`
+  ).join('');
+}
+window.removeFilter = (idx) => {
+  filters.splice(idx,1); renderActiveFilters(); loadRows();
+};
+
+async function init() {
+  const t = await api('/admin/db/tables');
+  tableSel.innerHTML = t.tables.map(n => `<option value="${n}">${n}</option>`).join('');
+  tableSel.onchange = onTableChanged;
+  await onTableChanged();
+  renderActiveFilters();
+}
+
+async function onTableChanged() {
+  const table = tableSel.value;
+  if (!table) return;
+  const meta = await api('/admin/db/columns', { params:{ table } });
+
+  // order-by + filter column options
+  const opts = meta.columns.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+  orderSel.innerHTML = opts;
+  filterCol.innerHTML = opts;
+
+  pkInfo.textContent = meta.primary_keys.length ? `Primary key: ${meta.primary_keys.join(', ')}` : 'No primary key detected';
+
+  // insert form
+  insertForm.innerHTML = meta.columns.map(c => {
+    const t = (c.type || '').toLowerCase();
+    let inputType = 'text';
+    if (t.includes('int') || t.includes('numeric') || t.includes('float') || t.includes('double')) inputType = 'number';
+    if (t.includes('bool')) inputType = 'checkbox';
+    if (t.includes('date') || t.includes('time')) inputType = 'text';
+    const req = c.nullable ? '' : ' <span class="pill">required</span>';
+    if (inputType === 'checkbox') {
+      return `<div><label><input name="${c.name}" type="checkbox"/> ${c.name}${req}</label></div>`;
+    }
+    return `<div><label>${c.name}${req}<br/><input name="${c.name}" type="${inputType}" style="width:100%"/></label></div>`;
+  }).join('');
+
+  // export checkboxes
+  exportColsDiv.innerHTML = meta.columns.map(c =>
+    `<label style="display:inline-block;margin:4px 8px 4px 0;">
+       <input type="checkbox" name="expcol" value="${c.name}" checked/> ${c.name}
+     </label>`
+  ).join('');
+
+  await loadRows();
+}
+
+async function loadRows() {
+  const table = tableSel.value;
+  const limit = parseInt(limitInput.value||50);
+  const offset = parseInt(offsetInput.value||0);
+  const order_by = orderSel.value;
+  const desc = descChk.checked;
+
+  const data = await api('/admin/db/rows', {
+    params:{ table, limit, offset, order_by, desc, filters: JSON.stringify(filters) }
+  });
+
+  rowsInfo.textContent = `Showing ${data.rows.length} rows (offset ${data.offset})`;
+
+  const cols = data.columns;
+  rowsTable.querySelector('thead').innerHTML = `<tr>${cols.map(c=>`<th>${c}</th>`).join('')}<th>Actions</th></tr>`;
+  rowsTable.querySelector('tbody').innerHTML = data.rows.map((r) => {
+    const cells = cols.map(c => {
+      const v = r[c] === null || r[c] === undefined ? '' : r[c];
+      return `<td contenteditable="true" data-col="${c}">${escapeHtml(v)}</td>`;
+    }).join('');
+    return `<tr data-row='${escapeHtml(JSON.stringify(r))}'>${cells}
+      <td class="row-actions">
+        <button onclick="updateRow(this)">Save</button>
+        <button onclick="deleteRow(this)">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return (''+s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+}
+
+async function insertRow() {
+  const table = tableSel.value;
+  const fields = [...insertForm.querySelectorAll('input')];
+  const values = {};
+  for (const f of fields) {
+    if (f.type === 'checkbox') values[f.name] = f.checked;
+    else values[f.name] = f.value;
+  }
+  await api('/admin/db/insert', { method:'POST', body: JSON.stringify({ table, values }) });
+  alert('Inserted OK'); await loadRows();
+}
+
+async function updateRow(btn) {
+  const tr = btn.closest('tr');
+  const original = JSON.parse(tr.getAttribute('data-row'));
+  const edited = {};
+  [...tr.querySelectorAll('td[data-col]')].forEach(td => {
+    edited[td.getAttribute('data-col')] = td.innerText;
+  });
+  const pkMeta = await api('/admin/db/columns', { params:{ table: tableSel.value } });
+  for (const pk of pkMeta.primary_keys) edited[pk] = original[pk];
+  await api('/admin/db/update', { method:'POST', body: JSON.stringify({ table: tableSel.value, values: edited }) });
+  alert('Updated OK'); await loadRows();
+}
+
+async function deleteRow(btn) {
+  const tr = btn.closest('tr');
+  const original = JSON.parse(tr.getAttribute('data-row'));
+  const pkMeta = await api('/admin/db/columns', { params:{ table: tableSel.value } });
+  if (!pkMeta.primary_keys.length) { alert('No PK on this table — delete disabled.'); return; }
+  const values = {};
+  for (const pk of pkMeta.primary_keys) values[pk] = original[pk];
+  if (!confirm(`Delete row with PK ${JSON.stringify(values)} ?`)) return;
+  await api('/admin/db/delete', { method:'POST', body: JSON.stringify({ table: tableSel.value, values }) });
+  alert('Deleted OK'); await loadRows();
+}
+
+async function exportCSV() {
+  const table = tableSel.value;
+  const cols = [...exportColsDiv.querySelectorAll('input[name=expcol]:checked')].map(c => c.value);
+  if (!cols.length) { alert('Select at least one column'); return; }
+  const url = new URL('/admin/db/export', window.location.origin);
+  url.searchParams.set('table', table);
+  url.searchParams.set('columns', cols.join(','));
+  if (filters.length) url.searchParams.set('filters', JSON.stringify(filters));
+  if (TOKEN) url.searchParams.set('token', TOKEN);
+  const a = document.createElement('a');
+  a.href = url.toString();
+  a.download = `${table}_export.csv`;
+  document.body.appendChild(a);
+  a.click(); a.remove();
+}
+
+init().catch(e => alert(`Init error: ${e?.message || e}`));
+</script>
+</body>
+</html>

@@ -1,0 +1,95 @@
+<!--/var/www/stockwicks/app/templates/zero_dte_friday.html-->
+{% extends "base.html" %}
+{% block title %}0DTE Friday Scanner{% endblock %}
+
+{% block content %}
+<style>
+    .banner-heading {
+        background-color: #1e3a8a;
+        color: white;
+        padding: 15px 60px;
+        border-radius: 20px;
+        font-size: 28px;
+        font-weight: bold;
+        text-align: center;
+        margin: 20px auto;
+        display: inline-block;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+    }
+    body {
+        font-family: 'Poppins', sans-serif;
+        background-color: #0d0d2b;
+        color: white;
+        text-align: center;
+    }
+
+    .form-card {
+        background-color: #1a1a3d;
+        padding: 30px;
+        border-radius: 12px;
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5);
+        max-width: 600px;
+        margin: 0 auto 30px auto;
+        text-align: center;
+    }
+
+    .form-card h3 {
+        color: #ffffff;
+        margin-bottom: 20px;
+    }
+
+    .form-card input {
+        padding: 12px;
+        font-size: 16px;
+        border-radius: 8px;
+        border: none;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+
+    .btn-styled {
+        background-color: #6ff22e;
+        color: #000;
+        border: none;
+        padding: 12px 24px;
+        font-size: 16px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+    }
+
+    .btn-styled:hover {
+        background-color: #85f65a;
+    }
+
+    .error-message {
+        color: #ff6b6b;
+        background-color: #2a2a5c;
+        padding: 12px;
+        margin: 20px auto;
+        border-radius: 8px;
+        max-width: 600px;
+        text-align: center;
+    }
+</style>
+
+<div class="container text-center">
+    <h1 class="banner-heading">Nearest Friday Expiry Options Picks</h1>
+    <p class="website-name">www.stockwicks.com</p>
+
+    {% if error %}
+    <div class="error-message">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="form-card">
+        <h3>Enter Stock Symbol</h3>
+        <form method="POST" action="/auth/zero-dte-friday">
+            <input type="text" name="symbol" placeholder="e.g. TSLA, SPY" required>
+            <button type="submit" class="btn-styled">Scan Nearest Friday</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

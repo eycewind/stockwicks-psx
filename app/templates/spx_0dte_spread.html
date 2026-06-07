@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>SPX 0DTE Credit Spread Results</h2>
+<p><strong>Expiration Date:</strong> {{ expiry_date }}</p>
+<p><strong>Current SPX Price:</strong> {{ current_price }}</p>
+
+{% if recommendations %}
+    <table border="1" cellpadding="6" cellspacing="0">
+        <thead>
+            <tr>
+                {% for col in recommendations[0].keys() %}
+                    <th>{{ col | replace("_", " ") | title }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in recommendations %}
+                <tr>
+                    {% for key, val in row.items() %}
+                        <td>
+                            {% if key == "credit" or key == "Stop_Loss" or key == "Exit_Price" %}
+                                ${{ "%.2f"|format(val) }}
+                            {% else %}
+                                {{ val if val is not none else "N/A" }}
+                            {% endif %}
+                        </td>
+                    {% endfor %}
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p style="color: red;"><strong>No valid spread recommendations found.</strong></p>
+{% endif %}
+{% endblock %}

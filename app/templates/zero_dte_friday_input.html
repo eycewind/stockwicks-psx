@@ -1,0 +1,22 @@
+<!--/var/www/stockwicks/app/templates/zero_dte_friday_input.html-->
+{% extends "base.html" %}
+{% block title %}0DTE Friday Scanner{% endblock %}
+
+{% block content %}
+<div class="container text-center">
+    <h1 class="banner-heading">0DTE Friday Scanner</h1>
+    <p class="website-name">www.stockwicks.com</p>
+
+    {% if error %}
+        <div class="error-message">{{ error }}</div>
+    {% endif %}
+
+    <div class="form-wrapper">
+        <form method="POST" action="/auth/zero-dte-friday">
+            <label for="symbol">Enter Stock Symbol</label>
+            <input class="form-control" type="text" name="symbol" placeholder="e.g. TSLA, SPY" required>
+            <button class="btn-styled mt-2" type="submit">Scan Nearest Friday</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

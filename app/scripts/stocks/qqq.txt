@@ -1,0 +1,102 @@
+Rank	Company	Symbol	Allocation (%)	Cumulative Weight (%)	as of
+1	NVIDIA Corp	NVDA	10.23	10.23	11/1/2025
+2	Apple Inc	AAPL	8.34	18.57	11/1/2025
+3	Microsoft Corp	MSFT	8	26.57	11/1/2025
+4	Broadcom Inc	AVGO	5.98	32.55	11/1/2025
+5	Amazon.com Inc	AMZN	5.41	37.96	11/1/2025
+6	Tesla Inc	TSLA	3.46	41.42	11/1/2025
+7	Alphabet Inc Class A	GOOGL	3.4	44.82	11/1/2025
+8	Alphabet Inc Class C	GOOG	3.18	48	11/1/2025
+9	Meta Platforms Inc	META	2.92	50.92	11/1/2025
+10	Netflix Inc	NFLX	2.43	53.35	11/1/2025
+11	Palantir Technologies Inc	PLTR	2.33	55.68	11/1/2025
+12	Advanced Micro Devices Inc	AMD	2.13	57.81	11/1/2025
+13	Costco Wholesale Corp	COST	2.07	59.88	11/1/2025
+14	Cisco Systems Inc	CSCO	1.48	61.36	11/1/2025
+15	Micron Technology Inc	MU	1.28	62.64	11/1/2025
+16	T-Mobile US Inc	TMUS	1.21	63.85	11/1/2025
+17	Shopify Inc	SHOP	1.09	64.94	11/1/2025
+18	PepsiCo Inc	PEP	1.02	65.96	11/1/2025
+18	Lam Research Corp	LRCX	1.02	66.98	11/1/2025
+20	Linde PLC	LIN	1	67.98	11/1/2025
+20	AppLovin Corp	APP	1	68.98	11/1/2025
+20	QUALCOMM Inc	QCOM	1	69.98	11/1/2025
+23	Intuitive Surgical Inc	ISRG	0.98	70.96	11/1/2025
+24	Intuit Inc	INTU	0.95	71.91	11/1/2025
+24	Applied Materials Inc	AMAT	0.95	72.86	11/1/2025
+26	Intel Corp	INTC	0.9	73.76	11/1/2025
+27	Booking Holdings Inc	BKNG	0.84	74.6	11/1/2025
+28	Amgen Inc	AMGN	0.82	75.42	11/1/2025
+28	KLA Corp	KLAC	0.82	76.24	11/1/2025
+30	Gilead Sciences Inc	GILD	0.76	77	11/1/2025
+30	Texas Instruments Inc	TXN	0.76	77.76	11/1/2025
+32	Palo Alto Networks Inc	PANW	0.75	78.51	11/1/2025
+33	Adobe Inc	ADBE	0.74	79.25	11/1/2025
+34	Crowdstrike Holdings Inc	CRWD	0.7	79.95	11/1/2025
+35	Honeywell International Inc	HON	0.65	80.6	11/1/2025
+36	MercadoLibre Inc	MELI	0.6	81.2	11/1/2025
+36	Constellation Energy Corp	CEG	0.6	81.8	11/1/2025
+38	Analog Devices Inc	ADI	0.59	82.39	11/1/2025
+39	Vertex Pharmaceuticals Inc	VRTX	0.56	82.95	11/1/2025
+40	Automatic Data Processing Inc	ADP	0.54	83.49	11/1/2025
+41	Comcast Corp	CMCSA	0.52	84.01	11/1/2025
+41	DoorDash Inc	DASH	0.52	84.53	11/1/2025
+43	Cadence Design Systems Inc	CDNS	0.47	85	11/1/2025
+43	Starbucks Corp	SBUX	0.47	85.47	11/1/2025
+45	PDD Holdings Inc	PDD	0.46	85.93	11/1/2025
+45	ASML Holding NV	ASML	0.46	86.39	11/1/2025
+47	Synopsys Inc	SNPS	0.43	86.82	11/1/2025
+48	Marvell Technology Inc	MRVL	0.41	87.23	11/1/2025
+48	O'Reilly Automotive Inc	ORLY	0.41	87.64	11/1/2025
+50	Mondelez International Inc	MDLZ	0.38	88.02	11/1/2025
+50	Cintas Corp	CTAS	0.38	88.4	11/1/2025
+52	Marriott International Inc/MD	MAR	0.36	88.76	11/1/2025
+					
+54	Thomson Reuters Corp	TRI	0.35	89.47	11/1/2025
+54	Regeneron Pharmaceuticals Inc	REGN	0.35	89.82	11/1/2025
+56	CSX Corp	CSX	0.34	90.16	11/1/2025
+56	PayPal Holdings Inc	PYPL	0.34	90.5	11/1/2025
+56	Fortinet Inc	FTNT	0.34	90.84	11/1/2025
+59	Monster Beverage Corp	MNST	0.33	91.17	11/1/2025
+59	Autodesk Inc	ADSK	0.33	91.5	11/1/2025
+59	American Electric Power Co Inc	AEP	0.33	91.83	11/1/2025
+62	Axon Enterprise Inc	AXON	0.29	92.12	11/1/2025
+63	Warner Bros Discovery Inc	WBD	0.28	92.4	11/1/2025
+63	Airbnb Inc	ABNB	0.28	92.68	11/1/2025
+65	Workday Inc	WDAY	0.27	92.95	11/1/2025
+65	Ross Stores Inc	ROST	0.27	93.22	11/1/2025
+65	Datadog Inc	DDOG	0.27	93.49	11/1/2025
+65	NXP Semiconductors NV	NXPI	0.27	93.76	11/1/2025
+69	PACCAR Inc	PCAR	0.26	94.02	11/1/2025
+69	Zscaler Inc	ZS	0.26	94.28	11/1/2025
+69	IDEXX Laboratories Inc	IDXX	0.26	94.54	11/1/2025
+69	Electronic Arts Inc	EA	0.26	94.8	11/1/2025
+73	AstraZeneca PLC	AZN	0.25	95.05	11/1/2025
+73	Roper Technologies Inc	ROP	0.25	95.3	11/1/2025
+73	Xcel Energy Inc	XEL	0.25	95.55	11/1/2025
+76	Take-Two Interactive Software Inc	TTWO	0.24	95.79	11/1/2025
+76	Exelon Corp	EXC	0.24	96.03	11/1/2025
+76	Fastenal Co	FAST	0.24	96.27	11/1/2025
+76	Baker Hughes Co	BKR	0.24	96.51	11/1/2025
+80	Paychex Inc	PAYX	0.22	96.73	11/1/2025
+81	Copart Inc	CPRT	0.21	96.94	11/1/2025
+81	Diamondback Energy Inc	FANG	0.21	97.15	11/1/2025
+81	Coca-Cola Europacific Partners PLC	CCEP	0.21	97.36	11/1/2025
+84	Keurig Dr Pepper Inc	KDP	0.19	97.55	11/1/2025
+85	Cognizant Technology Solutions Corp	CTSH	0.18	97.73	11/1/2025
+85	GE HealthCare Technologies Inc	GEHC	0.18	97.91	11/1/2025
+87	Microchip Technology Inc	MCHP	0.17	98.08	11/1/2025
+88	Charter Communications Inc	CHTR	0.16	98.24	11/1/2025
+88	Verisk Analytics Inc	VRSK	0.16	98.4	11/1/2025
+90	CoStar Group Inc	CSGP	0.15	98.55	11/1/2025
+90	Kraft Heinz Co/The	KHC	0.15	98.7	11/1/2025
+90	Old Dominion Freight Line Inc	ODFL	0.15	98.85	11/1/2025
+93	Atlassian Corp	TEAM	0.14	98.99	11/1/2025
+94	ARM Holdings PLC	ARM	0.12	99.11	11/1/2025
+94	Dexcom Inc	DXCM	0.12	99.23	11/1/2025
+94	Biogen Inc	BIIB	0.12	99.35	11/1/2025
+97	Trade Desk Inc/The	TTD	0.11	99.46	11/1/2025
+97	CDW Corp/DE	CDW	0.11	99.57	11/1/2025
+99	ON Semiconductor Corp	ON	0.1	99.67	11/1/2025
+99	GLOBALFOUNDRIES Inc	GFS	0.1	99.77	11/1/2025
+99	Lululemon Athletica Inc	LULU	0.1	99.87	11/1/2025

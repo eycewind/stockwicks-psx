@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Volatility Scalper{% endblock %}
+
+{% block content %}
+<style>
+    /* Styles learned from your AI Strategy Evaluator page */
+    .container { width: 90%; max-width: 960px; margin: auto; text-align: center; }
+    h1.banner-heading {
+        display: inline-block; background-color: #1e3a8a; color: white;
+        padding: 15px 30px; border-radius: 25px; font-size: 2.5rem;
+        font-weight: bold; margin-bottom: 20px;
+    }
+    .form-container {
+        background-color: #1b1b3a; padding: 25px; border-radius: 12px;
+        max-width: 600px; margin: auto; box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2);
+    }
+    .form-container h3 { font-size: 1.5rem; margin-bottom: 15px; color: #eee; }
+    .form-container input {
+        width: 80%; padding: 12px; border-radius: 8px; border: none;
+        font-size: 1rem; text-align: center; margin-bottom: 10px;
+    }
+    .form-container button {
+        background-color: #00c6ff; color: white; border: none; padding: 12px 20px;
+        font-size: 1rem; font-weight: bold; border-radius: 8px; cursor: pointer;
+    }
+    .result-container { margin-top: 30px; text-align: left;}
+    .analysis-card {
+        background: #161b22; border: 1px solid #2d3748; border-radius: 12px;
+        color: #e5e7eb; padding: 25px 30px; margin-bottom: 20px;
+    }
+    .analysis-card h4 {
+        color: #22d3ee; font-weight: 600; margin-bottom: 15px;
+        font-size: 1.5rem; border-bottom: 1px solid #2d3748; padding-bottom: 10px;
+    }
+    .analysis-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    .analysis-table td { padding: 12px; text-align: left; border-bottom: 1px solid #2d3748; }
+    .analysis-table tr:last-child td { border-bottom: none; }
+    .analysis-table td:nth-child(odd) { color: #9ca3af; font-weight: 600; }
+    .conclusion-box { font-family: monospace; white-space: pre-wrap; background-color: #1b1b3a; padding: 15px; border-radius: 8px; border: 1px solid #4f5b66;}
+    .signal-box {
+        background: linear-gradient(90deg, #166534 0%, #22d3ee 100%);
+        color: white; padding: 20px; border-radius: 12px; margin-bottom: 20px;
+        text-align: center; font-size: 1.25rem; font-weight: 600;
+        text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+    }
+    .signal-box.bearish {
+        background: linear-gradient(90deg, #991b1b 0%, #f472b6 100%);
+    }
+    .recommendations-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 20px;
+    }
+    .summary-box {
+        background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+        border: 2px solid #00c6ff; padding: 25px; border-radius: 15px;
+        box-shadow: 0 0 25px rgba(46, 204, 255, 0.4); text-align: left;
+    }
+    .summary-box h3 {
+        margin-top: 0; color: #fff; text-align: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.2); padding-bottom: 10px;
+        display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .summary-box .item { display: flex; justify-content: space-between; font-size: 1.1rem; padding: 8px 0;}
+    .summary-box .item-label { color: #d0d0d0; }
+    .summary-box .item-value { color: #ffffff; font-weight: 600; }
+    .profit { color: #6ff22e; }
+    .loss { color: #ff6666; }
+</style>
+
+<div class="container">
+    <h1 class="banner-heading">⚡️ Volatility Scalper</h1>
+    <div class="form-container">
+        <h3>Enter Stock Symbol</h3>
+        <form action="{{ url_for('volatility_scalper_submit') }}" method="post">
+            <input type="text" name="symbol" placeholder="e.g., TSLA" value="{{ symbol if symbol }}" required>
+            <button type="submit">Scan for Setups</button>
+        </form>
+    </div>
+
+    {% if symbol %}
+    <div class="result-container">
+        <div class="analysis-card">
+            <h4>Analysis for <span style="color: white;">{{ symbol }}</span></h4>
+            {% if analysis %}
+                <table class="analysis-table">
+                    <tbody>
+                        <tr>
+                            <td>Short-Term Bias</td><td>{{ analysis.get('Short-Term Bias', 'N/A') }}</td>
+                            <td>Live Price</td><td>{{ analysis.get('Live Price', 'N/A') }}</td>
+                        </tr>
+                        <tr>
+                            <td>ATM IV</td><td>{{ analysis.get('ATM IV', 'N/A') }}</td>
+                            <td>Target Expiration</td><td>{{ analysis.get('Target Expiration', 'N/A') }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            {% endif %}
+        </div>
+
+        {% if signal_message %}
+            <div class="signal-box {% if 'Sell CALL' in signal_message %}bearish{% endif %}">
+                {{ signal_message }}
+            </div>
+        {% endif %}
+
+        {% if recommendations %}
+            <div class="recommendations-grid">
+                {% for rec in recommendations %}
+                <div class="summary-box">
+                    <h3>🏆 Recommendation #{{ loop.index }}</h3>
+                    <div class="item"><span class="item-label">Action:</span> <span class="item-value">{{ rec.Action }}</span></div>
+                    <div class="item"><span class="item-label">Symbol:</span> <span class="item-value">{{ rec.symbol }}</span></div>
+                    <div class="item"><span class="item-label">Strike:</span> <span class="item-value">{{ rec.strike }}</span></div>
+                    <div class="item"><span class="item-label">Premium (Bid):</span> <span class="item-value">${{ rec.bid }}</span></div>
+                    <div class="item"><span class="item-label">Delta:</span> <span class="item-value">{{ rec.delta }}</span></div>
+                    <div class="item"><span class="item-label">Take Profit:</span> <span class="item-value profit">${{ rec.Exit_Price }}</span></div>
+                    <div class="item"><span class="item-label">Stop Loss:</span> <span class="item-value loss">${{ rec.Stop_Loss }}</span></div>
+                </div>
+                {% endfor %}
+            </div>
+        {% elif not error and raw_output and 'Conclusion:' in raw_output %}
+            <div class="analysis-card">
+                <h4>Conclusion</h4>
+                <div class="conclusion-box">
+                    {{ raw_output.split('Conclusion:')[1] | trim }}
+                </div>
+            </div>
+        {% endif %}
+
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

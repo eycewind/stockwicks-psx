@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}StockWicks - Paper Stock Trade Bot{% endblock %}
+
+{% block content %}
+<style>
+  body { background:#0d0d2b; font-family:'Poppins',sans-serif; color:#fff; }
+  .container { width: 80%; margin: auto; text-align: center; }
+  h1 { font-size: 2.2rem; margin-top: 30px; color: #4fd1c5; text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
+
+  .balance-box { margin: 30px auto; background:#1b1b3a; padding: 20px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,.4);
+                 width: 50%; font-size:1.8rem; font-weight:bold; color:#6ff22e; }
+  .section-title { margin-top: 40px; color:#4fd1c5; font-size:1.6rem; }
+
+  .trade-form { background:#1b1b3a; padding:20px; width: 60%; margin: 20px auto; border-radius:10px; box-shadow:0 4px 10px rgba(0,0,0,.3); text-align:left; }
+  .trade-form h2 { color:#4fd1c5; margin-bottom:15px; text-align:center; }
+  .trade-form label { display:block; margin-bottom:6px; font-weight:bold; }
+  .trade-form input, .trade-form select { width:100%; padding:10px; margin-bottom:12px; background:#27274c; border:none; color:#fff; border-radius:6px; }
+  .trade-form .row { display:flex; gap:12px; }
+  .trade-form .row > div { flex:1; }
+  .trade-form .checks { display:flex; flex-wrap: wrap; gap:20px; align-items:center; margin:8px 0 14px; color:#a7a7c7; }
+  .trade-form button { width:100%; background:#4fd1c5; color:#000; padding:12px; border:none; font-weight:bold; cursor:pointer; border-radius:6px; transition:.3s; }
+  .trade-form button:hover { background:#38b2ac; }
+
+  table.trade-table { width: 100%; margin: 20px auto; border-collapse: collapse;
+                      background:#1b1b3a; color:#fff; border-radius:8px; overflow:hidden; }
+  table.trade-table th { background:#2d2d5c; padding:12px; text-align: left; }
+  table.trade-table td { padding:10px; border-top:1px solid #333; vertical-align:middle; text-align: left; }
+  .no-trades { color:#aaa; padding:20px; text-align:center; }
+
+  .btn { padding:8px 14px; border:none; border-radius:6px; cursor:pointer; font-weight:600; text-decoration: none; display: inline-block; }
+  .btn-stop   { background:#ff4d4d; color:#fff; }
+  .btn-stop:hover { background:#cc0000; }
+  .btn-delete { background:#a94bff; color:#fff; }
+  .btn-delete:hover { filter:brightness(0.9); }
+</style>
+
+<div class="container">
+  <h1>🤖 Paper Stock Trade Bot Dashboard This is trading bot file</h1>
+
+  <div class="balance-box">
+    Bot Account Balance:<br>
+    ${{ "%.2f"|format(paper_account.current_balance) }}<br>
+    {% if total_pl >= 0 %}
+      <span style="color:limegreen; font-size: 1.2rem;">+${{ "%.2f"|format(total_pl) }} (+{{ "%.2f"|format(pl_percent) }}%)</span>
+    {% else %}
+      <span style="color:red; font-size: 1.2rem;">-${{ "%.2f"|format(total_pl|abs) }} ({{ "%.2f"|format(pl_percent) }}%)</span>
+    {% endif %}
+  </div>
+
+  <div class="trade-form">
+    <h2>🚀 Start a Stock Bot</h2>
+    <form method="post" action="/auth/papertradebot/start">
+      <div class="row">
+        <div>
+          <label>Symbol</label>
+          <input name="symbol" placeholder="e.g., AAPL" required />
+        </div>
+<div>
+  <label>Interval</label>
+  <select name="interval" required>
+    <option>1min</option>
+    <option>5min</option>
+    <option>10min</option>
+    <option>15min</option>
+    <option>30min</option>
+    <option>1d</option>
+  </select>
+</div>
+        <div>
+          <label>Algorithm</label>
+          <select name="algo_name" required>
+            <option value="Algo1">Algo1 (VWAP)</option>
+            <option value="Algo2">Algo2 (ATR Trend)</option>
+            <option value="Algo3">Algo3 (SMI)</option>
+          </select>
+        </div>
+        <div>
+          <label>Trade Size (qty)</label>
+          <input type="number" name="trade_size" min="1" step="1" value="100" required />
+        </div>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" name="notify_email" value="on"> Email Alerts</label>
+        <label><input type="checkbox" name="allow_short_selling" value="on"> Allow Short</label>
+      </div>
+      <button type="submit">Start Bot</button>
+    </form>
+  </div>
+
+  <h2 class="section-title">✅ Active Stock Bots</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>ID</th><th>Symbol</th><th>Interval</th><th>Algo</th><th>Size</th><th>Status</th><th>Updated (ET)</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% if all_bots %}
+      {% for b in all_bots %}
+      <tr>
+        <td>{{ b.id }}</td>
+        <td>{{ b.symbol }}</td>
+        <td>{{ b.interval }}</td>
+        <td>{{ b.algo_name }}</td>
+        <td>{{ b.trade_size }}</td>
+        <td>{{ b.status }}</td>
+        <td>{{ b.updated_at.strftime('%Y-%m-%d %H:%M') if b.updated_at else 'N/A' }}</td>
+        <td>
+          <form method="post" action="/auth/papertradebot/stop/{{ b.id }}" style="display:inline;">
+            <button class="btn btn-stop">🛑 Stop</button>
+          </form>
+          <form method="post" action="/auth/papertradebot/cancel/{{ b.id }}" style="display:inline;" onsubmit="return confirm('Delete bot #{{ b.id }}?');">
+            <button class="btn btn-delete">🗑️ Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="8" class="no-trades">No active bots found.</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <h2 class="section-title">📌 Open Bot Trades</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Bot</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry Price</th><th>Entry Time (ET)</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% if open_trades %}
+      {% for t in open_trades %}
+      <tr>
+        <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else "N/A" }})</td>
+        <td>{{ t.symbol }}</td>
+        <td>{{ t.position_side|capitalize }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>${{ "%.2f"|format(t.entry_price) }}</td>
+        <td>{{ t.entry_time.strftime('%Y-%m-%d %H:%M') if t.entry_time else 'N/A' }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="6" class="no-trades">No open positions.</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <h2 class="section-title">📜 Bot Trade History</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Bot</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P/L</th><th>Closed (ET)</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% if closed_trades %}
+      {% for t in closed_trades %}
+      <tr>
+        <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else "N/A" }})</td>
+        <td>{{ t.symbol }}</td>
+        <td>{{ t.position_side|capitalize }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>${{ "%.2f"|format(t.entry_price) }}</td>
+        <td>${{ "%.2f"|format(t.exit_price) }}</td>
+        <td>
+          {% set pl = t.pnl if t.pnl is not none else 0.0 %}
+          {% if pl >= 0 %}
+            <span style="color:limegreen;">+${{ "%.2f"|format(pl) }}</span>
+          {% else %}
+            <span style="color:red;">-${{ "%.2f"|format(-pl) }}</span>
+          {% endif %}
+        </td>
+        <td>{{ t.exit_time.strftime('%Y-%m-%d %H:%M') if t.exit_time else "N/A" }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="8" class="no-trades">No trade history yet.</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

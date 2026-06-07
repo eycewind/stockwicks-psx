@@ -1,0 +1,206 @@
+<!---/var/www/stockwicks/app/templates/zero_dte_friday_results.html-->
+{% extends "base.html" %}
+
+{% block title %}
+    Nearest Friday Option Picks Results
+{% endblock %}
+
+{% block content %}
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        background-color: #0d0d2b;
+        color: white;
+        text-align: center;
+    }
+    .banner-heading {
+        display: inline-block;
+        background-color: #1e3a8a;
+        color: white;
+        padding: 15px 30px;
+        border-radius: 25px;
+        font-size: 2.5rem;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        margin-bottom: 20px;
+    }
+    .form-container {
+        background-color: #1b1b3a;
+        padding: 25px;
+        border-radius: 12px;
+        width: 60%;
+        margin: auto;
+        box-shadow: 0 4px 10px rgba(255,255,255,0.2);
+        margin-bottom: 30px;
+    }
+    .form-container h3 {
+        color: white;
+        font-size: 1.5rem;
+        font-weight: bold;
+    }
+    .form-container form {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 15px;
+    }
+    .form-container input {
+        width: 80%;
+        padding: 12px;
+        border-radius: 8px;
+        border: none;
+        font-size: 1rem;
+        text-align: center;
+    }
+    .form-container button {
+        background-color: #00c6ff;
+        color: white;
+        border: none;
+        padding: 12px 20px;
+        font-size: 1rem;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    .form-container button:hover {
+        background-color: #009ac9;
+        transform: scale(1.05);
+    }
+    .vertical-pick-title {
+        color: #39a9f3;
+        margin-top: 28px;
+        margin-bottom: 5px;
+        font-size: 1.15rem;
+        font-weight: bold;
+    }
+    .vertical-table {
+        width: 55%;
+        margin: 0 auto 38px auto;
+        border-collapse: collapse;
+        background-color: #1b1b3a;
+        color: white;
+        font-size: 1.02rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.14);
+    }
+    .vertical-table th, .vertical-table td {
+        border: 1px solid #333;
+        padding: 12px;
+        text-align: left;
+    }
+    .vertical-table th {
+        background-color: #00c6ff;
+        color: black;
+        width: 200px;
+    }
+    .vertical-table tr:nth-child(even) {
+        background-color: #23235b;
+    }
+    .scroll-box {
+        max-height: none;
+        background-color: transparent;
+        padding: 0;
+        border-radius: 0;
+        margin-top: 0;
+    }
+    .no-data {
+        text-align: center;
+        color: #ffffff;
+        margin-top: 15px;
+    }
+</style>
+<div class="container text-center">
+    <h1 class="banner-heading">Nearest Friday Option Picks Results{% if symbol %} for {{ symbol }}{% endif %}</h1>
+    <p class="website-name">www.stockwicks.com</p>
+
+    {% if error %}
+        <div class="error-message">{{ error }}</div>
+    {% endif %}
+
+    <div class="form-container">
+        <h3>Enter Stock Symbol</h3>
+        <form method="POST" action="/auth/zero-dte-friday">
+            <input class="form-control" type="text" name="symbol" placeholder="e.g. TSLA, SPY" required>
+            <button type="submit">Scan Nearest Friday</button>
+        </form>
+    </div>
+
+    {% if recommendations %}
+        <div class="scroll-box">
+            {% set custom_order = [
+                'Date', 'Time', 'Symbol', 'Strikeprice', 'Expiry',
+                'Side', 'Ask', 'Bid', 'Totalvolume', 'Stop Loss', 'Exit Price', 'Gamma', 'Delta'
+            ] %}
+            {% for pick in recommendations %}
+                <div class="vertical-pick-title">Option Pick {{ loop.index }}</div>
+                <table class="vertical-table">
+                    <tbody>
+                        {% for key in custom_order %}
+                            {% if key == 'Expiry' %}
+                                <tr>
+                                    <th>Expiry</th>
+                                    <td class="expiry-cell"
+                                        data-symbol="{{ pick.Symbol or pick.symbol or pick.optionSymbol or pick.optionsymbol }}">
+                                        {{ pick.Expiry }}
+                                    </td>
+                                </tr>
+                            {% elif pick[key] is defined %}
+                                <tr>
+                                    <th>{{ key|replace("_", " ")|title }}</th>
+                                    <td>{{ pick[key] }}</td>
+                                </tr>
+                            {% endif %}
+                        {% endfor %}
+                        {# Show Action field last #}
+                        {% if pick.Action is defined %}
+                        <tr>
+                            <th>Action</th>
+                            <td>{{ pick.Action }}</td>
+                        </tr>
+                        {% endif %}
+                        {# Show any extra fields not listed above #}
+                        {% for key, value in pick.items() %}
+                            {% if key not in custom_order and key != "Expiry" and key != "Action" %}
+                            <tr>
+                                <th>{{ key|replace("_", " ")|title }}</th>
+                                <td>{{ value }}</td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="no-data">No recommendations found.</div>
+    {% endif %}
+</div>
+
+<!-- JavaScript: Client-side expiry extraction and fill -->
+<script>
+function parseExpiryFromSymbol(symbol) {
+    if (!symbol) return '';
+    symbol = symbol.replace(/\s+/g, '');
+    // OCC: find 6 digit YYMMDD before C or P (case-insensitive)
+    let m = symbol.match(/(\d{6})[CP]/i);
+    if (m) {
+        let y = parseInt('20' + m[1].slice(0,2), 10);
+        let mon = m[1].slice(2,4);
+        let day = m[1].slice(4,6);
+        return `${y}-${mon}-${day}`;
+    }
+    return '';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.expiry-cell').forEach(function(cell) {
+        let val = cell.textContent.trim();
+        if (!val || val === 'FAILED' || val === 'N/A') {
+            let symbol = cell.getAttribute('data-symbol');
+            let extracted = parseExpiryFromSymbol(symbol);
+            if (extracted) cell.textContent = extracted;
+        }
+    });
+});
+</script>
+{% endblock %}

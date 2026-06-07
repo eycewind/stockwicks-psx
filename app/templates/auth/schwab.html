@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Integrate Schwab Account{% endblock %}
+
+{% block content %}
+<div class="container text-center" style="margin-top:40px;">
+    <h1>Integrate Your Schwab Account</h1>
+    <p>Click the button below to securely link your Schwab account with StockWicks.</p>
+    <form id="start-schwab-auth" method="get" action="/auth/schwab/start">
+        <button type="submit" class="btn btn-primary" style="background-color:#2042A0; color:#fff;">
+            🔗 Start Schwab Authentication
+        </button>
+    </form>
+    <br>
+    <div id="auth-url-display"></div>
+    <script>
+    document.getElementById('start-schwab-auth').onsubmit = async function(e) {
+        e.preventDefault();
+        const resp = await fetch('/auth/schwab/start');
+        const data = await resp.json();
+        if(data.auth_url) {
+            window.location.href = data.auth_url;
+        } else {
+            document.getElementById('auth-url-display').innerHTML = "<span style='color:red;'>Failed to generate Schwab login URL.</span>";
+        }
+    }
+    </script>
+</div>
+{% endblock %}

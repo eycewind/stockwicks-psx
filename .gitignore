@@ -1,0 +1,64 @@
+# Secrets / environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Logs / runtime data
+logs/
+*.log
+data/
+cache/
+app/cache/
+app/logs/
+app/data/
+
+# Tokens / auth
+*tokens*.json
+*token*.json
+schwab_token.json
+schwab_tokens.json
+
+# Backups / temp
+*.bak
+*.bak.*
+*.bak*
+*_backup*
+*_archive*
+app.broken_*
+_cleanup_archive_*
+tmp/
+temp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local deploy artifacts
+deploy_artifacts/
+*.tar
+*.tar.gz
+*.zip

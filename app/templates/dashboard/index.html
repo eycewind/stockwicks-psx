@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - StockWicks{% endblock %}
+
+{% block content %}
+{% set url_prefix = request.headers.get("x-forwarded-prefix", "") if request is defined else "" %}
+
+<div class="container" style="max-width: 1100px; margin: 0 auto;">
+  <h1 style="font-size: 34px; margin-bottom: 8px;">StockWicks Commercial Dashboard</h1>
+  <p style="color:#ffb86b; font-size:16px; margin-top:0; margin-bottom:24px;">Client: ashakil</p>
+
+  <p style="font-size: 18px; margin-bottom: 32px;">
+    Welcome{% if user %}, {{ user.username }}{% endif %}.
+  </p>
+
+  <div style="
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 22px;
+  ">
+
+    <div style="background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25);">
+      <h3>Broker Setup</h3>
+      <p>Connect or check your Schwab brokerage setup.</p>
+      <a class="btn btn-primary" href="{{ url_prefix }}/broker/setup">Setup Brokerage</a>
+    </div>
+
+    <div style="background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25);">
+      <h3>Trade Bot</h3>
+      <p>Create, start, stop, and monitor paper trading bots.</p>
+      <a class="btn btn-primary" href="{{ url_prefix }}/auth/papertradebot">Open Trade Bot</a>
+    </div>
+
+    <div style="background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25);">
+      <h3>Replay Simulator</h3>
+      <p>Replay historical sessions and inspect bot behavior.</p>
+      <a class="btn btn-primary" href="{{ url_prefix }}/replay-simulator">Open Replay</a>
+    </div>
+
+    <div style="background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25);">
+      <h3>Account</h3>
+      <p>Manage your profile and account settings.</p>
+      <a class="btn btn-secondary" href="{{ url_prefix }}/account">Open Account</a>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

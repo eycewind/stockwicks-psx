@@ -1,0 +1,560 @@
+{% extends "base.html" %}
+
+{% block title %}StockWicks - Schwab Trade Console{% endblock %}
+
+{% block content %}
+<style>
+  .trade-console { --gap:14px; color:#e9ecf1; }
+  .trade-console header { padding:18px 20px; border-bottom:1px solid #293241; }
+  .trade-console h1 { font-size:20px; margin:0; }
+  .trade-console .wrap { max-width:1100px; margin:0 auto; padding:20px; display:grid; grid-template-columns:1.1fr 1fr; gap:var(--gap); }
+  .trade-console .card { background:#121722; border:1px solid #1e2635; border-radius:10px; padding:16px; }
+  .trade-console .card h2 { margin:0 0 10px 0; font-size:16px; }
+  .trade-console .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .trade-console label { display:block; font-size:12px; opacity:.85; margin-bottom:6px; }
+  .trade-console input, .trade-console select, .trade-console button, .trade-console textarea {
+    width:100%; box-sizing:border-box; padding:10px 12px; border-radius:8px;
+    border:1px solid #2a3244; background:#0e1220; color:#e9ecf1; outline:none;
+  }
+  .trade-console input:focus, .trade-console select:focus, .trade-console textarea:focus { border-color:#3d72fe; box-shadow:0 0 0 3px rgba(61,114,254,.15); }
+  .trade-console button { cursor:pointer; font-weight:600; }
+  .trade-console .btn-row { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
+  .trade-console .btn-primary { background:#3d72fe; border-color:#3d72fe; }
+  .trade-console .btn-ghost { background:transparent; }
+  .trade-console .hint { font-size:12px; opacity:.85; margin-top:4px; }
+  .trade-console .muted { opacity:.75; }
+  .trade-console table { width:100%; border-collapse:collapse; font-size:13px; }
+  .trade-console th, .trade-console td { border-bottom:1px solid #212a3b; padding:8px 6px; text-align:left; }
+  .trade-console th { font-weight:600; }
+  .trade-console .right { text-align:right; }
+  .trade-console .status { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid #2a3244; display:inline-block; }
+  .trade-console .ok { color:#65d69a; }
+  .trade-console .err { color:#ff7b7b; }
+  .trade-console .pre { white-space:pre-wrap; background:#0e1220; border:1px dashed #27304a; border-radius:8px; padding:8px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+  .trade-console .flex { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .trade-console .spacer { height:10px; }
+  .trade-console .banner { background:#172033; border:1px solid #253050; border-radius:10px; padding:12px; margin:0 0 14px 0; display:flex; align-items:center; gap:12px; }
+  .trade-console .banner .msg { flex:1; }
+  @media (max-width: 900px) { .trade-console .wrap { grid-template-columns:1fr; } }
+  .trade-console, .trade-console * { color: #ffffff !important; }
+</style>
+
+<div class="trade-console">
+  <header><h1>Schwab Trade Console</h1></header>
+
+  <div class="wrap">
+    <!-- Left: Manual Trade -->
+    <section class="card">
+      <h2>Place Order</h2>
+
+      <div id="noAccountsBanner" class="banner" style="display:none">
+        <div class="msg">No Schwab accounts found yet. Sync from Schwab or re-link your Schwab connection.</div>
+        <div class="btn-row" style="margin:0">
+          <button class="btn-ghost" id="btnBannerSync">Sync Accounts</button>
+          <button class="btn-primary" id="btnRelink">Re-link Schwab</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="accountId">Account</label>
+          <select id="accountId">
+            <option value="">Select Account</option>
+          </select>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn-ghost" id="btnSyncLoad">Sync &amp; Load Accounts</button>
+            <button class="btn-ghost" id="btnLoadOnly">Load Accounts</button>
+            <button id="btnUnlink" class="btn-ghost" style="margin-left:auto">De-link Schwab</button>
+          </div>
+        </div>
+        <div>
+          <label for="duration">Duration</label>
+          <select id="duration">
+            <option value="DAY">DAY</option>
+            <option value="GOOD_TILL_CANCEL">GOOD_TILL_CANCEL</option>
+            <option value="FILL_OR_KILL">FILL_OR_KILL</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="symbol">Symbol</label>
+          <input id="symbol" placeholder="e.g., AAPL" />
+        </div>
+        <div>
+          <label for="qty">Quantity</label>
+          <input id="qty" type="number" step="0.0001" min="0" placeholder="e.g., 1" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="side">Side</label>
+          <select id="side">
+            <option value="BUY">BUY</option>
+            <option value="SELL">SELL</option>
+          </select>
+        </div>
+        <div>
+          <label for="orderType">Order Type</label>
+          <select id="orderType">
+            <option value="MARKET">MARKET</option>
+            <option value="LIMIT">LIMIT</option>
+            <option value="STOP">STOP</option>
+            <option value="STOP_LIMIT">STOP_LIMIT</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div id="limitWrap" style="display:none">
+          <label for="limitPrice">Limit Price</label>
+          <input id="limitPrice" type="number" step="0.01" min="0" placeholder="e.g., 180.00" />
+        </div>
+        <div id="stopWrap" style="display:none">
+          <label for="stopPrice">Stop Price</label>
+          <input id="stopPrice" type="number" step="0.01" min="0" placeholder="e.g., 175.00" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="assetType">Asset Type</label>
+          <select id="assetType">
+            <option value="EQUITY">EQUITY</option>
+            <option value="OPTION">OPTION</option>
+          </select>
+        </div>
+        <div></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="btnSubmit">Submit Order</button>
+        <button class="btn-ghost" id="btnReset">Reset</button>
+      </div>
+
+      <div class="spacer"></div>
+      <div id="orderResult" class="pre" style="display:none"></div>
+    </section>
+
+    <!-- Right column (stacked): Open Orders, Open Positions, Trade History -->
+    <div style="display:flex; flex-direction:column; gap: var(--gap);">
+      <!-- Open Orders -->
+      <section class="card">
+        <h2>Open Orders</h2>
+        <div class="flex">
+          <div style="min-width:240px; flex:1">
+            <label for="openAccountId">Account</label>
+            <select id="openAccountId">
+              <option value="">Select Account</option>
+            </select>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <div style="overflow:auto">
+          <table id="ordersTable">
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th class="right">Qty</th>
+                <th class="right">Price</th>
+                <th>Status</th>
+                <th>Placed</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="ordersBody">
+              <tr><td colspan="9" class="muted">No data yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="spacer"></div>
+        <div id="toast" class="hint"></div>
+      </section>
+
+      <!-- Open Positions -->
+      <section class="card">
+        <h2>Open Positions</h2>
+        <div class="flex">
+          <div style="min-width:240px; flex:1">
+            <label for="posAccountId">Account</label>
+            <select id="posAccountId">
+              <option value="">Select Account</option>
+            </select>
+          </div>
+          <div>
+            <button id="btnLoadPositions" class="btn-ghost">Load</button>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <div style="overflow:auto">
+          <table id="positionsTable">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th class="right">Avg Price</th>
+                <th class="right">Mkt Price</th>
+                <th class="right">P/L</th>
+              </tr>
+            </thead>
+            <tbody id="positionsBody">
+              <tr><td colspan="5" class="muted">No data yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Trade History -->
+      <section class="card">
+        <h2>Trade History</h2>
+        <div class="row">
+          <div>
+            <label for="histAccountId">Account</label>
+            <select id="histAccountId">
+              <option value="">Select Account</option>
+            </select>
+          </div>
+          <div>
+            <label for="histSymbol">Symbol (optional)</label>
+            <input id="histSymbol" placeholder="e.g., AAPL" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="histStart">Start</label>
+            <input id="histStart" type="datetime-local" />
+          </div>
+          <div>
+            <label for="histEnd">End</label>
+            <input id="histEnd" type="datetime-local" />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="btnLoadHistory" class="btn-ghost">Load History</button>
+        </div>
+        <div class="spacer"></div>
+        <div style="overflow:auto">
+          <table id="historyTable">
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th class="right">Qty</th>
+                <th>Status</th>
+                <th>Entered</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody">
+              <tr><td colspan="7" class="muted">No data yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+  // --- endpoints ---
+  const EP_SYNC_ACCOUNTS = "/trade/accounts/sync";
+  const EP_LIST_ACCOUNTS = "/trade/accounts";
+  const EP_PLACE_ORDER   = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders`;
+  const EP_OPEN_ORDERS   = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders`;
+  const EP_CANCEL_ORDER  = (orderId, accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders/${encodeURIComponent(orderId)}`;
+  const EP_POSITIONS     = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/positions`;
+  const EP_TRADE_HISTORY = (accountId, qs) => `/trade/accounts/${encodeURIComponent(accountId)}/history${qs ? ("?" + qs) : ""}`;
+
+  // If your app mounts ui_router under /auth, this keeps the same UX as your screenshot.
+  const RELINK_URL = `/auth/schwab/connect?next=${encodeURIComponent(window.location.origin + '/auth/trade/ui')}`;
+
+  // --- elements ---
+  const accountIdSel      = document.querySelector("#accountId");
+  const openAccountIdSel  = document.querySelector("#openAccountId");
+  const orderTypeSel      = document.querySelector("#orderType");
+  const limitWrap         = document.querySelector("#limitWrap");
+  const stopWrap          = document.querySelector("#stopWrap");
+  const limitPrice        = document.querySelector("#limitPrice");
+  const stopPrice         = document.querySelector("#stopPrice");
+  const symbolEl          = document.querySelector("#symbol");
+  const qtyEl             = document.querySelector("#qty");
+  const sideEl            = document.querySelector("#side");
+  const durationEl        = document.querySelector("#duration");
+  const assetTypeEl       = document.querySelector("#assetType");
+  const orderResult       = document.querySelector("#orderResult");
+  const ordersBody        = document.querySelector("#ordersBody");
+  const toast             = document.querySelector("#toast");
+
+  const posAccountIdSel   = document.querySelector("#posAccountId");
+  const positionsBody     = document.querySelector("#positionsBody");
+  const histAccountIdSel  = document.querySelector("#histAccountId");
+  const histSymbolEl      = document.querySelector("#histSymbol");
+  const histStartEl       = document.querySelector("#histStart");
+  const histEndEl         = document.querySelector("#histEnd");
+  const historyBody       = document.querySelector("#historyBody");
+
+  const noAccountsBanner  = document.querySelector("#noAccountsBanner");
+
+  // banner buttons
+  document.querySelector("#btnBannerSync").addEventListener("click", (e) => { e.preventDefault(); syncAndLoad(); });
+  document.querySelector("#btnRelink").addEventListener("click", (e) => { e.preventDefault(); window.location.href = RELINK_URL; });
+
+  function showToast(msg, ok=true) {
+    toast.textContent = msg;
+    toast.className = ok ? "hint ok" : "hint err";
+    setTimeout(() => { toast.textContent = ""; }, 4000);
+  }
+
+  function setPriceVisibility() {
+    const t = orderTypeSel.value;
+    limitWrap.style.display = (t === "LIMIT" || t === "STOP_LIMIT") ? "" : "none";
+    stopWrap.style.display  = (t === "STOP"  || t === "STOP_LIMIT") ? "" : "none";
+  }
+  orderTypeSel.addEventListener("change", setPriceVisibility);
+  setPriceVisibility();
+
+  function opt(label, value) {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = label;
+    return o;
+  }
+
+  function clearSelect(sel) {
+    while (sel.options.length > 1) sel.remove(1);
+  }
+
+  async function apiFetch(url, opts={}) {
+    const res = await fetch(url, { credentials: "include", redirect: "follow", ...opts });
+    if (res.redirected && res.url.includes("/auth/login")) {
+      window.location.href = res.url; throw new Error("Redirecting to login...");
+    }
+    const text = await res.text();
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch {}
+    if (!res.ok) {
+      const msg = body?.detail || body?.error || text || `HTTP ${res.status}`;
+      if (msg.toLowerCase().includes("no valid schwab token") || msg.toLowerCase().includes("refresh token")) {
+        window.location.href = RELINK_URL;
+      }
+      throw new Error(msg);
+    }
+    return body;
+  }
+
+  function extractAccounts(arr) {
+    const out = [];
+    (arr || []).forEach(item => {
+      const num  = item?.account_number || item?.accountNumber;
+      const hash = item?.account_hash || item?.accountHash || null;
+      const nick = item?.nickname || item?.account_type || "Schwab Account";
+      if (num) out.push({ number: String(num), hash: hash || String(num), label: `${nick} (${num})` });
+    });
+    return out;
+  }
+
+  async function loadAccounts() {
+    try {
+      const data = await apiFetch(EP_LIST_ACCOUNTS, { method: "GET" });
+      const accounts = extractAccounts(data);
+      [accountIdSel, openAccountIdSel, posAccountIdSel, histAccountIdSel].forEach(sel => { if (sel) { clearSelect(sel); accounts.forEach(a => sel.appendChild(opt(a.label, a.hash))); } });
+      noAccountsBanner.style.display = accounts.length ? "none" : "";
+      showToast(`Loaded ${accounts.length} account(s).`);
+    } catch (e) {
+      showToast(`Load accounts failed: ${e.message}`, false);
+    }
+  }
+  async function syncAndLoad() {
+    try { await apiFetch(EP_SYNC_ACCOUNTS, { method: "POST" }); await loadAccounts(); } catch (e) { showToast(`Sync failed: ${e.message}`, false); }
+  }
+
+  async function submitOrder() {
+    const payload = {
+      symbol: symbolEl.value.trim().toUpperCase(),
+      side: sideEl.value,
+      order_type: orderTypeSel.value,
+      quantity: parseFloat(qtyEl.value),
+      duration: durationEl.value,
+      asset_type: assetTypeEl.value
+    };
+    const t = payload.order_type;
+    if (!payload.symbol) return showToast("Symbol is required", false);
+    if (!payload.quantity || payload.quantity <= 0) return showToast("Quantity must be > 0", false);
+    const acc = accountIdSel.value.trim();
+    if (!acc) return showToast("Please select an account", false);
+    if (t === "LIMIT" || t === "STOP_LIMIT") {
+      const lp = parseFloat(limitPrice.value);
+      if (!lp || lp <= 0) return showToast("Limit price required", false);
+      payload.limit_price = lp;
+    }
+    if (t === "STOP" || t === "STOP_LIMIT") {
+      const sp = parseFloat(stopPrice.value);
+      if (!sp || sp <= 0) return showToast("Stop price required", false);
+      payload.stop_price = sp;
+    }
+    try {
+      const res = await apiFetch(EP_PLACE_ORDER(acc), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      orderResult.style.display = "block"; orderResult.textContent = JSON.stringify(res, null, 2);
+      showToast("Order submitted."); refreshOrders(); loadPositions(); loadHistory();
+    } catch (e) {
+      orderResult.style.display = "block"; orderResult.textContent = "Error: " + e.message;
+      showToast(e.message, false);
+    }
+  }
+
+  function renderOrders(orders, accountIdUsed) {
+    ordersBody.innerHTML = "";
+    const arr = Array.isArray(orders) ? orders : (orders?.orders ?? []);
+    if (!arr || !arr.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 9; td.className = "muted"; td.textContent = "No open orders.";
+      tr.appendChild(td); ordersBody.appendChild(tr); return;
+    }
+    arr.forEach(o => {
+      const orderId = o.orderId ?? o.id ?? o.order_id ?? "";
+      const legs = o.orderLegCollection ?? [];
+      const leg = Array.isArray(legs) && legs.length ? legs[0] : {};
+      const symbol = leg.instrument?.symbol ?? "";
+      const side = leg.instruction ?? "";
+      const qty = leg.quantity ?? "";
+      const type = o.orderType ?? "";
+      const status = o.status ?? o.statusDescription ?? "WORKING";
+      const placed = o.enteredTime ?? o.orderEnteredTime ?? "";
+      let price = "";
+      if (o.price && o.stopPrice) price = `${o.price} / ${o.stopPrice}`;
+      else if (o.price) price = o.price; else if (o.stopPrice) price = o.stopPrice;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${orderId}</td>
+        <td>${symbol}</td>
+        <td>${side}</td>
+        <td>${type}</td>
+        <td class="right">${qty}</td>
+        <td class="right">${price}</td>
+        <td><span class="status">${status}</span></td>
+        <td>${(placed || "").toString().replace("T", " ").replace("Z", "")}</td>
+        <td class="right"><button data-oid="${orderId}" class="btn-ghost btn-cancel">Cancel</button></td>`;
+      ordersBody.appendChild(tr);
+      tr.querySelector(".btn-cancel").addEventListener("click", async () => {
+        if (!orderId) return;
+        try { await apiFetch(EP_CANCEL_ORDER(orderId, accountIdUsed), { method: "DELETE" }); showToast(`Cancel sent for ${orderId}.`); refreshOrders(); }
+        catch (e) { showToast(`Cancel failed: ${e.message}`, false); }
+      });
+    });
+  }
+  async function refreshOrders() {
+    const acct = openAccountIdSel.value.trim();
+    if (!acct) return;
+    try { const res = await apiFetch(EP_OPEN_ORDERS(acct), { method: "GET" }); const orders = res?.orders ?? res; renderOrders(orders, acct); }
+    catch (e) { showToast(e.message, false); }
+  }
+
+  function renderPositions(positions) {
+    positionsBody.innerHTML = "";
+    const arr = Array.isArray(positions) ? positions : (positions?.positions ?? []);
+    if (!arr || !arr.length) {
+      const tr = document.createElement("tr"); const td = document.createElement("td");
+      td.colSpan = 5; td.className = "muted"; td.textContent = "No open positions.";
+      tr.appendChild(td); positionsBody.appendChild(tr); return;
+    }
+    arr.forEach(p => {
+      const sym = (p.instrument?.symbol) || p.symbol || ""
+      const qty = p.longQuantity ?? p.shortQuantity ?? p.quantity ?? "";
+      const avg = p.averagePrice ?? p.averagePriceForPositions ?? "";
+      const mkt = p.marketValue ?? p.marketPrice ?? "";
+      const pl  = p.currentDayProfitLoss ?? p.unrealizedProfitLoss ?? "";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${sym}</td><td>${qty}</td><td class="right">${avg}</td><td class="right">${mkt}</td><td class="right">${pl}</td>`;
+      positionsBody.appendChild(tr);
+    });
+  }
+  async function loadPositions() {
+    const acct = posAccountIdSel.value.trim();
+    if (!acct) return;
+    try { const res = await apiFetch(EP_POSITIONS(acct), { method: "GET" }); renderPositions(res); }
+    catch (e) { showToast(e.message, false); }
+  }
+
+  function renderHistory(arr) {
+    historyBody.innerHTML = "";
+    const list = Array.isArray(arr) ? arr : (arr?.orders ?? []);
+    if (!list || !list.length) {
+      const tr = document.createElement("tr"); const td = document.createElement("td");
+      td.colSpan = 7; td.className = "muted"; td.textContent = "No history for filters.";
+      tr.appendChild(td); historyBody.appendChild(tr); return;
+    }
+    list.forEach(o => {
+      const orderId = o.orderId ?? o.id ?? "";
+      const legs = o.orderLegCollection ?? [];
+      const leg = Array.isArray(legs) && legs.length ? legs[0] : {};
+      const symbol = leg.instrument?.symbol ?? "";
+      const side = leg.instruction ?? "";
+      const qty = leg.quantity ?? "";
+      const type = o.orderType ?? "";
+      const status = o.status ?? "";
+      const entered = (o.enteredTime ?? "").toString().replace("T", " ").replace("Z", "");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${orderId}</td><td>${symbol}</td><td>${side}</td><td>${type}</td><td class="right">${qty}</td><td>${status}</td><td>${entered}</td>`;
+      historyBody.appendChild(tr);
+    });
+  }
+  function toISOZ(localVal) {
+    if (!localVal) return null;
+    const d = new Date(localVal);
+    return d.toISOString().replace(".000Z","Z");
+  }
+  async function loadHistory() {
+    const acct = histAccountIdSel.value.trim(); if (!acct) return;
+    const sym = (histSymbolEl.value || "").trim().toUpperCase();
+    const start = toISOZ(histStartEl.value);
+    const end   = toISOZ(histEndEl.value);
+    const params = new URLSearchParams();
+    if (start) params.set("start", start);
+    if (end)   params.set("end", end);
+    if (sym)   params.set("symbol", sym);
+    try { const res = await apiFetch(EP_TRADE_HISTORY(acct, params.toString()), { method: "GET" }); renderHistory(res); }
+    catch (e) { showToast(e.message, false); }
+  }
+
+  // wire buttons
+  document.querySelector("#btnSyncLoad").addEventListener("click", (e) => { e.preventDefault(); syncAndLoad(); });
+  document.querySelector("#btnLoadOnly").addEventListener("click", (e) => { e.preventDefault(); loadAccounts(); });
+  document.querySelector("#btnSubmit").addEventListener("click", (e) => { e.preventDefault(); submitOrder(); });
+  document.querySelector("#btnReset").addEventListener("click", (e) => {
+    e.preventDefault();
+    symbolEl.value = ""; qtyEl.value = ""; limitPrice.value = ""; stopPrice.value = "";
+    orderTypeSel.value = "MARKET"; setPriceVisibility(); sideEl.value = "BUY"; durationEl.value = "DAY";
+    orderResult.style.display = "none"; orderResult.textContent = "";
+  });
+  document.querySelector("#btnLoadPositions").addEventListener("click", (e) => { e.preventDefault(); loadPositions(); });
+  document.querySelector("#btnLoadHistory").addEventListener("click", (e) => { e.preventDefault(); loadHistory(); });
+
+  document.getElementById('btnUnlink').addEventListener('click', async () => {
+    if (!confirm('This will remove your Schwab token and linked accounts from StockWicks. Continue?')) return;
+    try {
+      const res = await fetch('/trade/unlink', { method: 'POST', headers: { 'Accept': 'application/json' } });
+      if (!res.ok) { const txt = await res.text(); alert('Unlink failed: ' + txt); return; }
+      const data = await res.json();
+      alert('De-linked.\nDeleted token file: ' + data.deleted_token_file + '\nDeleted accounts: ' + data.deleted_accounts);
+      await loadAccounts();
+      ordersBody.innerHTML = '<tr><td colspan="9" class="muted">No data yet</td></tr>';
+      positionsBody.innerHTML = '<tr><td colspan="5" class="muted">No data yet</td></tr>';
+      historyBody.innerHTML = '<tr><td colspan="7" class="muted">No data yet</td></tr>';
+    } catch (e) { alert('Network error: ' + e); }
+  });
+
+  // auto refresh on account change
+  document.querySelector("#openAccountId").addEventListener("change", refreshOrders);
+  document.querySelector("#posAccountId").addEventListener("change", loadPositions);
+  document.querySelector("#histAccountId").addEventListener("change", loadHistory);
+
+  // init
+  (async function init(){ try { await loadAccounts(); } catch {} })();
+</script>
+{% endblock %}

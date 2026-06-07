@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Confirm Option Bot - StockWicks{% endblock %}
+{% block content %}
+<style>
+  body { background-color: #0d0d2b; font-family: 'Poppins', sans-serif; color: #fff; }
+  .container { width: 80%; margin: auto; text-align: center; }
+  h2 { font-size: 2.2rem; margin-top: 30px; color: #4fd1c5; text-shadow: 1px 1px 3px rgba(0,0,0,0.5); }
+
+  .card { background: #1b1b3a; padding: 20px; width: 60%; margin: 20px auto; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); text-align: left; }
+  .card h3 { color: #4fd1c5; margin-bottom: 12px; }
+  .card p { margin: 0 0 10px 0; color: #e5e7eb; }
+  .card .line { font-weight: 600; color: #fff; }
+  .muted { color: #a7a7c7; font-size: .9rem; }
+
+  .card button { width: 100%; background: #4fd1c5; color: #000; padding: 12px; border: none; font-weight: bold; cursor: pointer; border-radius: 6px; transition: .3s; }
+  .card button:hover { background: #38b2ac; }
+
+  details { margin-top: 10px; }
+  code { color: #e1e1ff; word-break: break-all; }
+</style>
+
+<div class="container">
+  <h2>🚦 Confirm Option Bot for {{ symbol }}</h2>
+
+  {# ===================== DEBIT ===================== #}
+  {% if debit %}
+    {% set dleg = debit.legs[0] if debit.legs and debit.legs|length > 0 else {} %}
+    {% set d_type = (dleg.type or 'CALL')|upper %}
+    {% set d_strike = debit.strike or dleg.strike %}
+    {% set d_exp = debit.expiry or dleg.expiry %}
+    {% set d_occ = debit.occ or dleg.occ %}
+
+    <div class="card">
+      <h3>📈 Debit Trade</h3>
+      <p class="line">
+        <strong>{{ d_type }}</strong>
+        {{ d_strike }} • exp {{ d_exp }}
+        &nbsp; @ {{ debit.entry_net_price }} &nbsp; | &nbsp; SL {{ debit.stop_loss }} &nbsp; | &nbsp; TP {{ debit.take_profit }}
+      </p>
+      <p class="muted">Contract: {{ d_occ if d_occ else '—' }}</p>
+
+      <form method="post" action="/auth/papertradebot/options/start">
+        <input type="hidden" name="symbol" value="{{ symbol }}">
+        <input type="hidden" name="algo_name" value="debit_v1">
+        <input type="hidden" name="option_type" value="{{ d_type }}">
+        <input type="hidden" name="algo_params_json" value='{{ debit.meta | tojson }}'>
+        <input type="hidden" name="notify_email" value="{{ notify_email }}">
+        <button type="submit">✅ Launch Debit Bot</button>
+      </form>
+
+      <details>
+        <summary>View legs</summary>
+        <pre><code>{{ debit.legs | tojson(indent=2) }}</code></pre>
+      </details>
+    </div>
+  {% endif %}
+
+  {# ===================== CREDIT ===================== #}
+  {% if credit and credit.legs and credit.legs|length >= 2 %}
+    {% set sleg = credit.legs[0] %}
+    {% set lleg = credit.legs[1] %}
+    {% set c_type = (sleg.type or 'CALL')|upper %}
+    {% set short_strike = credit.short_strike or sleg.strike %}
+    {% set long_strike  = credit.long_strike  or lleg.strike %}
+    {% set c_exp = credit.expiry or sleg.expiry or lleg.expiry %}
+    {% set short_occ = credit.short_occ or sleg.occ %}
+    {% set long_occ  = credit.long_occ  or lleg.occ %}
+
+    <div class="card">
+      <h3>💰 Credit Spread</h3>
+      <p class="line">
+        <strong>{{ short_strike }}/{{ long_strike }} {{ c_type }}</strong>
+        • exp {{ c_exp }}
+        &nbsp; @ {{ credit.entry_net_price }} &nbsp; | &nbsp; SL {{ credit.stop_loss }} &nbsp; | &nbsp; TP {{ credit.take_profit }}
+      </p>
+      <p class="muted">Contracts: {{ short_occ if short_occ else '—' }} &nbsp;/&nbsp; {{ long_occ if long_occ else '—' }}</p>
+
+      <form method="post" action="/auth/papertradebot/options/start">
+        <input type="hidden" name="symbol" value="{{ symbol }}">
+        <input type="hidden" name="algo_name" value="credit_spread_v1">
+        <input type="hidden" name="option_type" value="{{ c_type }}">
+        <input type="hidden" name="algo_params_json" value='{{ credit.meta | tojson }}'>
+        <input type="hidden" name="notify_email" value="{{ notify_email }}">
+        <button type="submit">✅ Launch Credit Bot</button>
+      </form>
+
+      <details>
+        <summary>View legs</summary>
+        <pre><code>{{ credit.legs | tojson(indent=2) }}</code></pre>
+      </details>
+    </div>
+  {% endif %}
+
+  {# ===================== Empty state ===================== #}
+  {% if not debit and not credit and not bot_pick %}
+    <div class="card">
+      <h3>❌ No suitable trade strategy found for {{ symbol }}</h3>
+      {% if debit_reason or credit_reason or bot_reason %}
+        <p class="muted">
+          {{ debit_reason or credit_reason or bot_reason }}
+        </p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

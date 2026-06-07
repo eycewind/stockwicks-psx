@@ -1,0 +1,894 @@
+{% extends "base.html" %}
+
+{% block title %}StockWicks - TD Options Paper Trade Bot{% endblock %}
+
+{% block content %}
+
+<style>
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+  .field label{display:block;font-weight:600;margin-bottom:6px;}
+  .field input,.field select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:#e5e7eb;}
+  .hint{font-size:12px;opacity:.75;margin-top:6px;}
+  .btn-primary{padding:12px 14px;border:none;border-radius:12px;}
+  .edit-field { width:80px; padding:6px 8px; border-radius:6px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.04); color:#e5e7eb; }
+</style>
+
+<style>
+  body { background:#0d0d2b; font-family:'Poppins',sans-serif; color:#fff; }
+  .container { width: 90%; max-width: 1400px; margin: auto; text-align: center; }
+  h1 { font-size: 2.2rem; margin-top: 30px; color: #4fd1c5; text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
+
+  .trade-form { background:#1b1b3a; padding: 20px; width: 80%; max-width: 900px; margin: 20px auto; border-radius: 10px; text-align: left; }
+  .trade-form h2 { color: #4fd1c5; margin-bottom: 15px; text-align: center; }
+  .trade-form label { display: block; margin-bottom: 6px; font-weight: bold; }
+  .trade-form input, .trade-form select, .trade-form textarea { width: 100%; padding: 10px; margin-bottom: 12px; background: #27274c; border: none; color: white; border-radius: 6px; }
+  .bot-input-row { display:flex; flex-wrap:wrap; gap:15px; margin-bottom:12px; }
+  .bot-input { flex:1; min-width:150px; }
+  .trade-form button { width: 100%; background: #4fd1c5; color: #000; padding: 12px; border: none; font-weight: bold; cursor: pointer; border-radius: 6px; }
+  .hint { color:#a7a7c7; font-size:.9em; margin-top:-6px; display:block; margin-bottom:12px; }
+
+  .balance-box { margin: 20px auto 10px; background:#1b1b3a; padding: 20px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,.4);
+                 width: 50%; font-size:1.8rem; font-weight:bold; color:#6ff22e; }
+
+  .section-title { margin-top: 30px; color:#4fd1c5; font-size:1.6rem; }
+
+  table.trade-table { width: 100%; margin: 16px auto; border-collapse: collapse; background:#1b1b3a; color:#fff; border-radius:8px; overflow:hidden; }
+  table.trade-table th { background:#2d2d5c; padding:12px; }
+  table.trade-table td { padding:10px; border-bottom:1px solid #333; vertical-align:top; }
+  .no-trades { color:#aaa; padding:20px; text-align:center; }
+
+  .btn { padding:6px 12px; border:none; border-radius:6px; cursor:pointer; font-weight:600; font-size:13px; white-space:nowrap; display:inline-block; text-align:center; min-width:70px; }
+  .btn-stop{ background:#ff4d4d; color:#fff; } .btn-stop:hover{ background:#cc0000; }
+  .btn-delete{ background:#a94bff; color:#fff; } .btn-delete:hover{ filter:brightness(0.9); }
+  .btn-start{ background:#4fd1c5; color:#000; } .btn-start:hover{ filter:brightness(0.95); }
+  .btn-close{ background:#ffd24d; color:#000; } .btn-close:hover{ filter:brightness(0.95); }
+  .btn-restart{ background:#ffd24d; color:#000; } .btn-restart:hover{ filter:brightness(0.95); }
+  .btn-save{ background:#4fd1c5; color:#000; } .btn-save:hover{ filter:brightness(0.95); }
+
+  /* Summary tiles */
+  .summary-card {
+    width: 90%;
+    margin: 10px auto 0;
+    background:#151533; border:1px solid #2a2a55;
+    border-radius:12px; padding:18px;
+    box-shadow:0 4px 12px rgba(0,0,0,.35); text-align:left;
+  }
+  .summary-header { display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:12px; }
+  .summary-header h3 { color:#4fd1c5; margin:0; }
+  .summary-filters { display:flex; gap:12px; flex-wrap:wrap; }
+  .summary-filters select, .summary-filters input[type=date] {
+    background:#27274c; color:#fff; border:none; border-radius:8px; padding:8px 10px; min-width:160px;
+  }
+  .summary-grid { display:grid; grid-template-columns: repeat(6, 1fr); gap:12px; margin-top:6px; }
+  .metric { background:#1b1b3a; border-radius:10px; padding:12px; }
+  .metric .label { color:#a7a7c7; font-size:12px; margin-bottom:6px; }
+  .metric .value { font-size:18px; font-weight:700; }
+  .metric .value.positive { color: #6ff22e; }
+  .metric .value.negative { color: #ff6666; }
+  @media (max-width: 980px){ .summary-grid { grid-template-columns: repeat(2, 1fr); } }
+
+  /* Charts */
+  .charts-card{
+    width:80%;
+    margin:14px auto 0;
+    background:#151533; border:1px solid #2a2a55;
+    border-radius:12px; padding:16px;
+    box-shadow:0 4px 12px rgba(0,0,0,.35); text-align:left;
+  }
+  .chart-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .chart{
+    background:#1b1b3a; border-radius:10px; padding:12px;
+    max-width:520px; margin:0 auto;
+  }
+  .chart-title{ color:#a7a7c7; font-size:14px; margin:0 0 8px 0; }
+  .chart svg{ width:100%; height:180px; display:block; }
+  @media (max-width:980px){ .chart-row{ grid-template-columns:1fr; } }
+
+  .actions-column {
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+  padding: 10px !important;
+}
+
+.actions-column .btn {
+  margin: 0 4px;
+  min-width: 72px;
+}
+</style>
+
+<div class="container">
+  <h1>🟢 TD Options Paper Trade Bot Dashboard</h1>
+
+  {# Endpoint map (no inline # comments to avoid Jinja errors) #}
+  {% set EP = {
+    "start_new": "/auth/papertradebot/options/create",
+    "start_existing": "/auth/papertradebot/options",
+    "stop": "/auth/papertradebot/options",
+    "delete": "/auth/papertradebot/options",
+    "close_trade": "/auth/papertradebot/options/trades"
+  } %}
+
+  <!-- Start Bot -->
+  <div class="trade-form">
+    <h2>🚀 Start New Option Bot</h2>
+    
+<form action="{{ url_for('start_option_paper_bot') }}" method="post" style="margin-top: 10px;">
+  <div class="grid-3">
+    <div class="field">
+      <label>Symbol</label>
+      <input name="symbol" value="SPY" placeholder="SPY / TSLA / QQQ" required />
+    </div>
+
+    <div class="field">
+      <label>Style</label>
+      <select name="style">
+        <option value="credit" selected>CREDIT (Sell premium)</option>
+        <option value="debit">DEBIT (Buy premium)</option>
+      </select>
+      <div class="hint">Leave default if unsure.</div>
+    </div>
+
+    <div class="field">
+      <label>Contract Qty</label>
+      <input name="trade_size" type="number" min="1" placeholder="(blank = script sizing)" />
+      <div class="hint">Optional override. Real cost is premium × 100 (e.g., $4.50 premium = $450).</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="field">
+      <label>Min Premium ($)</label>
+      <input name="min_premium" type="number" step="0.01" value="0.20" placeholder="0.20" />
+      <div class="hint">Entry premium filter (bid for credit, ask for debit).</div>
+    </div>
+
+    <div class="field">
+      <label>Max Premium ($)</label>
+      <input name="max_premium" type="number" step="0.01" value="100.00" placeholder="100.00" />
+      <div class="hint">Entry premium filter (bid for credit, ask for debit).</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="field">
+      <label>Max Allocation ($)</label>
+      <input name="max_allocation_usd" type="number" step="1" min="0" placeholder="(optional) e.g. 1000, 5000" />
+      <div class="hint">Sizing uses real cost: premium × 100. Example: $4.50 premium ≈ $450 per contract.</div>
+    </div>
+
+    <div class="field">
+      <label>Exit Target</label>
+      <select name="exit_target">
+        <option value="" selected>(blank = default behavior)</option>
+        <option value="target1">Target 1</option>
+        <option value="target2">Target 2</option>
+      </select>
+      <div class="hint">Stops always use the algo recommended stop price.</div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="align-items:center; margin-top: 8px;">
+    <div class="field" style="display:flex; gap:10px; align-items:center;">
+      <input type="checkbox" id="notify_email" name="notify_email" value="yes" checked />
+      <label for="notify_email" style="margin:0;">Notification Email</label>
+    </div>
+  
+  {% if show_mirror_controls %}
+  <div class="grid-2" style="align-items:center; margin-top: 0px;">
+    <div class="field" style="display:flex; gap:10px; align-items:center;">
+      <input type="checkbox" id="mirror_live" name="mirror_live" />
+      <label for="mirror_live" style="margin:0;">Mirror trades to Schwab (LIVE)</label>
+    </div>
+    <div class="hint" style="margin:0;">If enabled, the bot will place the same order in your Schwab account.</div>
+  </div>
+  {% endif %}
+</div>
+
+  <button class="btn btn-primary" type="submit" style="margin-top: 10px; width: 100%;">
+    ✅ Start Bot (Guru Pick — 4 Expirations)
+  </button>
+</form>
+
+  </div>
+
+  <!-- Balance -->
+  <div class="balance-box">
+    Bot Account Balance:<br>
+    ${{ "%.2f"|format(bot_account.current_balance) }}<br>
+    {% if total_pl >= 0 %}
+      <span style="color:limegreen;">+${{ "%.2f"|format(total_pl) }} (+{{ "%.2f"|format(pl_percent) }}%)</span>
+    {% else %}
+      <span style="color:red;">-${{ "%.2f"|format(total_pl|abs) }} ({{ "%.2f"|format(pl_percent) }}%)</span>
+    {% endif %}
+  </div>
+
+  <!-- Active Bots -->
+  <h2 class="section-title">
+    {% if all_bots and (all_bots | selectattr('is_active') | list | length) > 0 %}✅ Active Option Bots{% else %}💤 No Active Option Bots{% endif %}
+  </h2>
+  <table class="trade-table">
+    <thead><tr><th>Symbol</th><th>Algo</th><th>Params</th><th>Email</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody>
+    {% if all_bots %}
+      {% for bot in all_bots %}
+      <tr data-bot-id="{{ bot.id }}">
+        <td>{{ bot.symbol }}</td>
+        <td>{{ bot.algo_name }}</td>
+        <td>
+          {% if bot.algo_params %}
+            <pre style="font-size:.8em;text-align:left;white-space:pre-wrap;margin:0;">{{ bot.algo_params }}</pre>
+          {% else %}
+            <span style="color:#a7a7c7;">default</span>
+          {% endif %}
+        </td>
+        <td>{% if bot.notify_email %}<span style="color:#6ff22e;">Yes</span>{% else %}<span style="color:#cfcfe6;">No</span>{% endif %}</td>
+        <td>{{ bot.status or '—' }}</td>
+        <td>
+          {% if bot.is_active %}
+            <button class="btn btn-stop js-stop"    data-bot-id="{{ bot.id }}">🛑 Stop</button>
+            <button class="btn btn-restart js-restart" data-bot-id="{{ bot.id }}">🔄 Restart</button>
+            <button class="btn btn-delete js-delete" data-bot-id="{{ bot.id }}">🗑 Delete</button>
+          {% else %}
+            <button class="btn btn-start js-start"   data-bot-id="{{ bot.id }}">▶️ Start</button>
+            <button class="btn btn-delete js-delete" data-bot-id="{{ bot.id }}">🗑 Delete</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="6" class="no-trades">No bots</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <!-- Open Trades -->
+  <h2 class="section-title">📌 Open Bot Trades</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Bot</th>
+        <th>Underlying</th>
+        <th>Holding</th>
+        <th>Position</th>
+        <th>Qty</th>
+        <th>Entry</th>
+        <th>Entry Time (ET)</th>
+        <th>Mark</th>
+        <th>P/L (Real-time)</th>
+        <th>Stop Loss</th>
+        <th>Target1</th>
+        <th class="actions-column">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="open-body">
+      {% if open_trades %}
+        {% for t in open_trades %}
+        {% set upl = (t.unrealized_pl if t.unrealized_pl is not none else 0.0) %}
+        <tr id="opt-row-{{ t.id }}">
+          <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else '' }})</td>
+          <td>{{ t.underlying_symbol }}</td>
+<td>
+  {# Holding details: show single-leg or spread legs #}
+  {% if (t.trade_type or '')|upper == 'SPREAD' and t.option_symbol_short %}
+    <div style="text-align:left;">
+      <div style="font-family:monospace;">{{ t.option_symbol }}</div>
+      <div style="opacity:.85;">
+        {{ (t.side or '')|upper }} {{ "%.2f"|format(t.strike_price) if t.strike_price is not none else "" }}
+        {% if t.expiry_date %} • {{ t.expiry_date.strftime("%Y-%m-%d") }}{% endif %}
+      </div>
+      <div style="font-family:monospace;margin-top:6px;">{{ t.option_symbol_short }}</div>
+      <div style="opacity:.85;">
+        {{ (t.side_short or '')|upper }} {{ "%.2f"|format(t.strike_price_short) if t.strike_price_short is not none else "" }}
+        {% if t.expiry_date_short %} • {{ t.expiry_date_short.strftime("%Y-%m-%d") }}{% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div style="text-align:left;">
+      <div style="font-family:monospace;">{{ t.option_symbol }}</div>
+      <div style="opacity:.85;">
+        {{ (t.side or '')|upper }} {{ "%.2f"|format(t.strike_price) if t.strike_price is not none else "" }}
+        {% if t.expiry_date %} • {{ t.expiry_date.strftime("%Y-%m-%d") }}{% endif %}
+      </div>
+    </div>
+  {% endif %}
+</td>
+          <td>{{ (t.trade_type or '')|upper }} {{ (t.position_side or '')|upper }}</td>
+          <td>{{ t.quantity }}</td>
+          <td>${{ "%.2f"|format(t.entry_price) }}</td>
+          <td>{{ t.entry_time if t.entry_time else "N/A" }}</td>
+          <td>${{ "%.4f"|format(t.current_mark_price or 0.0) }}</td>
+          <td>
+            {% if upl >= 0 %}
+              <span style="color:limegreen;font-weight:700;">+${{ "%.2f"|format(upl) }}</span>
+            {% else %}
+              <span style="color:#ff6b6b;font-weight:700;">-${{ "%.2f"|format(-upl) }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <input type="number" step="0.01" class="edit-field edit-sl"
+                  value="{{ '%.2f'|format(t.planned_stop_loss) if t.planned_stop_loss is not none else '' }}">
+          </td>
+<td>
+  <input type="number" step="0.01" class="edit-field edit-t1"
+        value="{{
+          '%.2f'|format(
+            t.planned_take_profit_1
+              if t.planned_take_profit_1 is not none
+              else t.planned_take_profit
+          )
+          if (t.planned_take_profit_1 is not none or t.planned_take_profit is not none)
+          else ''
+        }}">
+</td>
+
+          <td class="actions-column">
+            <button class="btn btn-close" onclick="closeOptionTrade(event, '{{ t.id }}')">Close</button>
+            <button class="btn btn-save" onclick="saveTradeUpdates(event, '{{ t.id }}')">💾 Save</button>
+          </td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="12" class="no-trades">No open positions.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <!-- Performance Summary + Filters -->
+  <div class="summary-card" id="summary-card" aria-live="polite">
+    <div class="summary-header">
+      <h3>📊 Performance Summary</h3>
+      <div class="summary-filters">
+        <select id="symbolFilter"><option value="__all__">All Symbols</option></select>
+        <select id="botFilter"><option value="__all__">All Bots</option></select>
+        <input id="dateFrom" type="date" aria-label="From date">
+        <input id="dateTo"   type="date" aria-label="To date">
+      </div>
+    </div>
+    <div class="summary-grid">
+      <div class="metric"><div class="label">Trades</div><div class="value" id="mTrades">0</div></div>
+      <div class="metric"><div class="label">Wins</div><div class="value" id="mWins">0</div></div>
+      <div class="metric"><div class="label">Losses</div><div class="value" id="mLosses">0</div></div>
+      <div class="metric"><div class="label">Win rate</div><div class="value" id="mWinRate">0.0%</div></div>
+      <div class="metric"><div class="label">Net P/L</div><div class="value" id="mNetPL">$0.00</div></div>
+      <div class="metric"><div class="label">Extremes</div><div class="value" id="mExtremes">—</div></div>
+    </div>
+  </div>
+
+  <!-- Daily charts -->
+  <div class="charts-card" aria-live="polite">
+    <div class="chart-row">
+      <div class="chart">
+        <h4 class="chart-title">Daily Success Rate (%)</h4>
+        <svg id="winRateChart" viewBox="0 0 600 200" preserveAspectRatio="none"></svg>
+      </div>
+      <div class="chart">
+        <h4 class="chart-title">Daily Net P/L ($)</h4>
+        <svg id="netPlChart" viewBox="0 0 600 200" preserveAspectRatio="none"></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- Closed Trades → embedded JSON -->
+  <h2 class="section-title">📜 Bot Trade History</h2>
+  <table class="trade-table" id="history-table">
+    <thead><tr>
+      <th>Bot</th><th>Opt</th><th>Und</th><th>Pos</th><th>Side</th><th>Qty</th>
+      <th>En</th><th>Ex</th><th>PnL</th><th>In</th><th>Out</th>
+    </tr></thead>
+    <tbody id="history-body">
+      {% if closed_trades %}
+        {% for t in closed_trades %}
+          {# --- FIX: recompute realized PnL from entry/exit + position_side, because some SELL rows are stored with inverted sign --- #}
+          {% set entry = (t.entry_price if t.entry_price is not none else 0.0) %}
+          {% set exitp = (t.exit_price if t.exit_price is not none else None) %}
+          {% set qty = (t.quantity if t.quantity is not none else 0) %}
+          {% set ps = (t.position_side or '')|lower %}
+          {% if exitp is not none %}
+            {% if ps == 'sell' %}
+              {% set pl = (entry - exitp) * 100.0 * qty %}
+            {% else %}
+              {% set pl = (exitp - entry) * 100.0 * qty %}
+            {% endif %}
+          {% else %}
+            {% set pl = (t.pnl if t.pnl is not none else 0.0) %}
+          {% endif %}
+          <tr class="hist-row"
+              data-symbol="{{ t.underlying_symbol }}"
+              data-bot="{{ t.bot_id }}"
+              data-pl="{{ '%.2f'|format(pl) }}">
+            <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else "" }})</td>
+            <td style="font-family:monospace; text-align:left;">{{ t.option_symbol }}</td>
+            <td>{{ t.underlying_symbol }}</td>
+            <td>{{ (t.position_side or '')|upper }}</td>
+            <td>{{ (t.side or '')|upper }}</td>
+            <td>{{ t.quantity }}</td>
+            <td>${{ "%.2f"|format(entry) }}</td>
+            <td>${{ "%.2f"|format(exitp) if exitp is not none else 'N/A' }}</td>
+            <td>
+              {% if pl >= 0 %}
+                <span style="color:limegreen;">+${{ "%.2f"|format(pl) }}</span>
+              {% else %}
+                <span style="color:#ff6b6b;">-${{ "%.2f"|format(-pl) }}</span>
+              {% endif %}
+            </td>
+            <td>{{ t.entry_time if t.entry_time else "N/A" }}</td>
+            <td>{{ t.exit_time if t.exit_time else "N/A" }}</td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="11" class="no-trades">No trade history yet.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  {% set ns = namespace(items=[]) %}
+  {% for t in (closed_trades or []) %}
+    {% set entry = (t.entry_price if t.entry_price is not none else 0.0) %}
+    {% set exitp = (t.exit_price if t.exit_price is not none else None) %}
+    {% set qty = (t.quantity if t.quantity is not none else 0) %}
+    {% set ps = (t.position_side or '')|lower %}
+    {% if exitp is not none %}
+      {% if ps == 'sell' %}
+        {% set pl = (entry - exitp) * 100.0 * qty %}
+      {% else %}
+        {% set pl = (exitp - entry) * 100.0 * qty %}
+      {% endif %}
+    {% else %}
+      {% set pl = (t.pnl if t.pnl is not none else 0.0) %}
+    {% endif %}
+    {% set _ = ns.items.append({
+      "bot_id": t.bot_id,
+      "option_symbol": (t.option_symbol or ''),
+      "underlying_symbol": (t.underlying_symbol or ''),
+      "position_side": (t.position_side or ''),
+      "side": (t.side or ''),
+      "quantity": (t.quantity or 0),
+      "entry_price": (t.entry_price or 0.0),
+      "exit_price": (t.exit_price or 0.0),
+      "pnl": (pl or 0.0),
+      "entry_time": (t.entry_time|string),
+      "exit_time": (t.exit_time|string),
+      "algo_name": (t.bot.algo_name if t.bot else '')
+    }) %}
+  {% endfor %}
+  <script id="closed-trades-json" type="application/json">{{ ns.items | tojson }}</script>
+</div>
+
+
+<script>
+/* ---------- Start bot form defaults → pack to JSON ---------- */
+(function () {
+  const DEFAULTS = {
+    scalper_v1:        { tp: 25,  sl: 25,  width: null },
+    guru_v1:           { tp: 50,  sl: 100, width: null },
+    debit_spread_v1:   { tp: 50,  sl: 50,  width: 5 },
+    credit_spread_v1:  { tp: 50,  sl: 100, width: 5 },
+  };
+  const form      = document.getElementById('start-bot-form');
+  const algoSel   = document.getElementById('algo-select');
+  const tpInput   = document.getElementById('tp-pct');
+  const slInput   = document.getElementById('sl-pct');
+  const widthWrap = document.getElementById('width-wrap');
+  const widthInput= document.getElementById('width-dol');
+  const hiddenTA  = document.getElementById('algo_params_json');
+
+  function isSpreadAlgo(key){ return key==='debit_spread_v1'||key==='credit_spread_v1'; }
+  function applyDefaults() {
+    const key = (algoSel && algoSel.value) || 'guru_v1';
+    const d = DEFAULTS[key] || {};
+    if (!tpInput.value && d.tp!=null) tpInput.value = d.tp;
+    if (!slInput.value && d.sl!=null) slInput.value = d.sl;
+    if (isSpreadAlgo(key)) { widthWrap.style.display=''; if (!widthInput.value && d.width!=null) widthInput.value=d.width; }
+    else { widthWrap.style.display='none'; widthInput.value=''; }
+  }
+  if (algoSel){ algoSel.addEventListener('change', applyDefaults); applyDefaults(); }
+  if (form){
+    form.addEventListener('submit', function(){
+      const payload = {};
+      const tp = parseFloat(tpInput.value);
+      const sl = parseFloat(slInput.value);
+      const wd = parseFloat(widthInput.value);
+      if (!Number.isNaN(tp)) payload.tp_pct = tp;
+      if (!Number.isNaN(sl)) payload.sl_pct = sl;
+      if (widthWrap.style.display !== 'none' && !Number.isNaN(wd)) payload.width = wd;
+      hiddenTA.value = Object.keys(payload).length ? JSON.stringify(payload) : '';
+    });
+  }
+})();
+
+/* ---------- Manual Close for an open option trade (AJAX) ---------- */
+async function closeOptionTrade(evt, tradeId){
+  evt.preventDefault();
+  const btn = evt.currentTarget;
+  const row = document.getElementById(`opt-row-${tradeId}`);
+  const original = btn.textContent;
+  try{
+    btn.disabled = true; btn.textContent = 'Closing…';
+    const res = await fetch(`{{ EP.close_trade }}/${tradeId}/close`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok || !data.ok){
+      const msg = (data && (data.detail||data.message)) || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    if (row) row.remove();
+  }catch(e){
+    alert(`Close failed: ${e.message || e}`);
+  }finally{
+    btn.disabled = false; btn.textContent = original;
+  }
+}
+
+/* ---------- Manual Update for an open option trade (AJAX) ---------- */
+async function saveTradeUpdates(evt, tradeId) {
+  evt.preventDefault();
+  const btn = evt.currentTarget;
+  const row = document.getElementById(`opt-row-${tradeId}`);
+  const slInput = row.querySelector('.edit-sl');
+  const t1Input = row.querySelector('.edit-t1');
+
+  const sl = slInput.value ? parseFloat(slInput.value) : null;
+  const tp = t1Input.value ? parseFloat(t1Input.value) : null;
+
+  const original = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Saving…';
+
+    const res = await fetch(`{{ EP.close_trade }}/${tradeId}/update`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ stop_loss: sl, exit_target: tp })
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+  } catch (e) {
+    alert(`Save failed: ${e.message || e}`);
+  } finally {
+    btn.disabled = false; btn.textContent = original;
+  }
+}
+
+
+/* ---------- Start / Stop / Delete button wiring ---------- */
+(function(){
+  async function postJSON(url, method='POST') {
+    const res = await fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    });
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok || data.ok === false) {
+      const msg = (data && (data.detail||data.message)) || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+    return data;
+  }
+  function delegate(){
+    // Start existing
+    document.querySelectorAll('.js-start').forEach(btn=>{
+      btn.onclick = async (e)=>{
+        const b = e.currentTarget; const id = b.dataset.botId;
+        const tr = b.closest('tr'); const td = tr ? tr.querySelector('td:last-child') : null;
+        b.disabled = true; const old=b.textContent; b.textContent='Starting…';
+        try{
+          await postJSON(`{{ EP.start_existing }}/${id}/start`,'POST');
+          if (td){
+            td.innerHTML = '';
+            const stop = document.createElement('button');
+            stop.className = 'btn btn-stop js-stop'; stop.dataset.botId = id; stop.textContent = '🛑 Stop';
+            const restart = document.createElement('button');
+            restart.className = 'btn btn-restart js-restart'; restart.dataset.botId = id; restart.textContent = '🔄 Restart';
+            const del  = document.createElement('button');
+            del.className  = 'btn btn-delete js-delete'; del.dataset.botId = id; del.textContent  = '🗑 Delete';
+            td.appendChild(stop); td.appendChild(restart); td.appendChild(del);
+            delegate(); // bind the new buttons
+          }
+        }catch(err){ alert(err.message||err); }
+        finally{ b.disabled=false; b.textContent=old; }
+      };
+    });
+    // Stop
+    document.querySelectorAll('.js-stop').forEach(btn=>{
+      btn.onclick = async (e)=>{
+        const b = e.currentTarget; const id = b.dataset.botId;
+        const tr = b.closest('tr'); const td = tr ? tr.querySelector('td:last-child') : null;
+        b.disabled = true; const old=b.textContent; b.textContent='Stopping…';
+        try{
+          await postJSON(`{{ EP.stop }}/${id}/stop`,'POST');
+          if (td){
+            td.innerHTML = '';
+            const start = document.createElement('button');
+            start.className = 'btn btn-start js-start'; start.dataset.botId = id; start.textContent = '▶️ Start';
+            const del  = document.createElement('button');
+            del.className  = 'btn btn-delete js-delete'; del.dataset.botId = id; del.textContent  = '🗑 Delete';
+            td.appendChild(start); td.appendChild(del);
+            delegate();
+          }
+        }catch(err){ alert(err.message||err); }
+        finally{ b.disabled=false; b.textContent=old; }
+      };
+    });
+    // Restart (only for active bots)
+    document.querySelectorAll('.js-restart').forEach(btn=>{
+      btn.onclick = async (e)=>{
+        const b = e.currentTarget; const id = b.dataset.botId;
+        const tr = b.closest('tr');
+        const statusTd = tr ? tr.querySelector('td:nth-child(5)') : null;
+        b.disabled = true; const old=b.textContent; b.textContent='Restarting…';
+        try{
+          await postJSON(`{{ EP.start_existing }}/${id}/restart`,'POST');
+          if (statusTd) statusTd.textContent = 'RUNNING';
+        }catch(err){ alert(err.message||err); }
+        finally{ b.disabled=false; b.textContent=old; }
+      };
+    });
+    // Delete
+    document.querySelectorAll('.js-delete').forEach(btn=>{
+      btn.onclick = async (e)=>{
+        const b = e.currentTarget; const id = b.dataset.botId;
+        if(!confirm(`Delete option bot #${id}? History will be kept.`)) return;
+        const tr = b.closest('tr');
+        b.disabled = true; const old=b.textContent; b.textContent='Deleting…';
+        try{
+          await postJSON(`{{ EP.delete }}/${id}`,'DELETE');
+          if (tr) tr.remove();
+        }catch(err){ alert(err.message||err); }
+        finally{ b.disabled=false; b.textContent=old; }
+      };
+    });
+  }
+  // initial bind
+  delegate();
+})();
+
+/* ---------- Summary + Charts ---------- */
+(function () {
+  const histBody = document.getElementById('history-body');
+  const winRateSVG = document.getElementById('winRateChart');
+  const netPlSVG   = document.getElementById('netPlChart');
+
+  let LOADED = [];
+
+  function fmtMoneySigned(n){ const s=n>=0?'+':'-'; return `${s}$${Math.abs(n).toFixed(2)}`; }
+  function parseExitTs(row){
+    if(!row.exit_time) return null;
+    const iso = String(row.exit_time).replace(/(\.\d{3})\d+$/,'$1');
+    const ts = Date.parse(iso);
+    return Number.isFinite(ts) ? ts : null;
+  }
+  function yyyymmddFromTs(ts){
+    const d = new Date(ts), y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${dd}`;
+  }
+
+  function setText(id, text){ const el=document.getElementById(id); if(el) el.textContent=text; }
+  function renderHistoryRows(rows){
+    histBody.innerHTML = '';
+    if(!rows.length){ histBody.innerHTML = `<tr><td colspan="11" class="no-trades">No trade history yet.</td></tr>`; return; }
+    for(const r of rows){
+      const tr = document.createElement('tr');
+      tr.className='hist-row';
+      tr.dataset.symbol = r.symbol;
+      tr.dataset.bot = String(r.bot_id);
+      tr.dataset.pl  = String(Number(r.pl||0));
+
+      const pos = r.position_side ? r.position_side.toUpperCase() : '';
+      const side = r.side ? r.side.toUpperCase() : '';
+
+      const plNum = Number(r.pl||0);
+      const plHTML = plNum>=0 ? `<span style="color:limegreen;">${fmtMoneySigned(plNum)}</span>`
+                              : `<span style="color:#ff6b6b;">${fmtMoneySigned(plNum)}</span>`;
+
+      tr.innerHTML = `
+        <td>#${r.bot_id}${r.algo_name? ' ('+r.algo_name+')':''}</td>
+        <td style="font-family:monospace;text-align:left;">${r.option_symbol || ''}</td>
+        <td>${r.symbol}</td>
+        <td>${pos}</td>
+        <td>${side}</td>
+        <td>${Number(r.qty??0)}</td>
+        <td>$${Number(r.entry||0).toFixed(2)}</td>
+        <td>$${Number(r.exit||0).toFixed(2)}</td>
+        <td>${plHTML}</td>
+        <td>${r.entry_time ? String(r.entry_time).replace('T',' ') : 'N/A'}</td>
+        <td>${r.exit_time ? String(r.exit_time).replace('T',' ') : 'N/A'}</td>
+      `;
+      histBody.appendChild(tr);
+    }
+  }
+  function renderSummaryFrom(rows){
+    let trades=0,wins=0,losses=0,net=0,maxW=-Infinity,maxL=Infinity,maxWS='',maxLS='';
+    for(const r of rows){
+      const pl=Number(r.pl||0);
+      trades++; if(pl>0)wins++; else if(pl<0)losses++;
+      net+=pl; if(pl>maxW){maxW=pl;maxWS=r.symbol} if(pl<maxL){maxL=pl;maxLS=r.symbol}
+    }
+    const wr = (wins+losses)?(wins/(wins+losses)*100):0;
+    setText('mTrades', trades); setText('mWins', wins); setText('mLosses', losses);
+    setText('mWinRate', wr.toFixed(1)+'%');
+    const netEl = document.getElementById('mNetPL');
+    if(netEl){ netEl.textContent = fmtMoneySigned(net); netEl.classList.toggle('positive', net>=0); netEl.classList.toggle('negative', net<0); }
+    const ex = document.getElementById('mExtremes');
+    if(ex){
+      if(!trades) ex.textContent='—';
+      else ex.innerHTML = `Biggest win: <span class="value ${maxW>=0?'positive':'negative'}">${fmtMoneySigned(maxW)}</span>${maxWS?` (${maxWS})`:''}
+       | Biggest loss: <span class="value ${maxL>=0?'positive':'negative'}">${fmtMoneySigned(maxL)}</span>${maxLS?` (${maxLS})`:''}`;
+    }
+  }
+  function rebuildOptions(fromRows){
+    const symSel = document.getElementById('symbolFilter');
+    const botSel = document.getElementById('botFilter');
+    const uniqueSyms = new Set(['__all__']);
+    const uniqueBots = new Set(['__all__']);
+    for(const r of fromRows){ uniqueSyms.add(r.symbol); uniqueBots.add(String(r.bot_id)); }
+    symSel.innerHTML=''; botSel.innerHTML='';
+    for(const v of uniqueSyms){ const o=document.createElement('option'); o.value=v; o.textContent=(v==='__all__'?'All Symbols':v); symSel.appendChild(o); }
+    for(const v of uniqueBots){ const o=document.createElement('option'); o.value=v; o.textContent=(v==='__all__'?'All Bots':`#${v}`); botSel.appendChild(o); }
+  }
+  function aggregateDaily(rows){
+    const map = new Map();
+    for(const r of rows){
+      const ts = parseExitTs(r);
+      if(ts==null) continue;
+      const key = yyyymmddFromTs(ts);
+      const pl  = Number(r.pl||0);
+      const b = map.get(key) || { date:key, trades:0, wins:0, losses:0, netPL:0 };
+      b.trades++; if(pl>0)b.wins++; else if(pl<0)b.losses++; b.netPL+=pl; map.set(key,b);
+    }
+    const arr=[...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
+    for(const d of arr){ const denom=(d.wins+d.losses); d.winRate = denom ? (d.wins/denom*100) : 0; }
+    return arr;
+  }
+  function clearSVG(svg){ while(svg && svg.firstChild) svg.removeChild(svg.firstChild); }
+  function renderWinRateLine(svg,data){
+    clearSVG(svg); if(!svg||!data.length) return;
+    const W=svg.viewBox.baseVal.width||600, H=svg.viewBox.baseVal.height||200;
+    const L=36,R=16,T=24,B=32, iW=W-L-R, iH=H-T-B;
+    const yMin=0,yMax=100, y=v=>H-B-((v-yMin)/(yMax-yMin))*iH;
+    const n=data.length, step=n>1? iW/(n-1) : 0, x=i=>L+i*step;
+    const g=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','g');
+    for(const t of [0,50,100]){
+      const yy=y(t), ln=document.createElementNS(g.namespaceURI,'line');
+      ln.setAttribute('x1',L); ln.setAttribute('x2',W-R); ln.setAttribute('y1',yy); ln.setAttribute('y2',yy);
+      ln.setAttribute('stroke','#2a2a55'); ln.setAttribute('stroke-width','1'); g.appendChild(ln);
+      const lbl=document.createElementNS(g.namespaceURI,'text'); lbl.setAttribute('x','6'); lbl.setAttribute('y',yy+4);
+      lbl.setAttribute('fill','#a7a7c7'); lbl.setAttribute('font-size','10'); lbl.textContent=t+'%'; g.appendChild(lbl);
+    }
+    svg.appendChild(g);
+    const pts=data.map((d,i)=>`${x(i)},${y(d.winRate)}`).join(' ');
+    const pl=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','polyline');
+    pl.setAttribute('points',pts); pl.setAttribute('fill','none'); pl.setAttribute('stroke','#4fd1c5'); pl.setAttribute('stroke-width','2');
+    svg.appendChild(pl);
+    data.forEach((d,i)=>{
+      const cx=x(i), cy=y(d.winRate);
+      const c=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','circle');
+      c.setAttribute('cx',cx); c.setAttribute('cy',cy); c.setAttribute('r','2.5'); c.setAttribute('fill','#4fd1c5'); svg.appendChild(c);
+      const ly=Math.max(T+10, Math.min(H-B-2, cy-6));
+      const t=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','text');
+      t.setAttribute('x',cx); t.setAttribute('y',ly); t.setAttribute('fill','#a7f1e9'); t.setAttribute('font-size','11'); t.setAttribute('font-weight','600');
+      t.setAttribute('text-anchor','middle'); t.style.paintOrder='stroke'; t.style.stroke='#000'; t.style.strokeWidth='0.8px';
+      t.textContent = `${d.winRate.toFixed(0)}%`; svg.appendChild(t);
+    });
+    const maxTicks=6, stepTick=Math.max(1, Math.ceil(n/maxTicks));
+    for(let i=0;i<n;i+=stepTick){
+      const tx=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','text');
+      tx.setAttribute('x',x(i)); tx.setAttribute('y',H-6); tx.setAttribute('fill','#a7a7c7'); tx.setAttribute('font-size','10');
+      tx.setAttribute('text-anchor','middle'); tx.textContent=data[i].date.slice(5); svg.appendChild(tx);
+    }
+  }
+  function renderNetPlBars(svg,data){
+    clearSVG(svg); if(!svg||!data.length) return;
+    const W=svg.viewBox.baseVal.width||600, H=svg.viewBox.baseVal.height||200;
+    const L=40,R=18,T=28,B=36, iW=W-L-R, iH=H-T-B;
+    const vals=data.map(d=>d.netPL), vMax=Math.max(0,...vals), vMin=Math.min(0,...vals);
+    const y=v=>H-B-((v-vMin)/((vMax-vMin)||1))*iH;
+    const n=data.length, gap=6, maxBar=28, bw=Math.min(maxBar,(iW-gap*(n-1))/n);
+    const totalW=n*bw+(n-1)*gap; let x=L+(iW-totalW)/2;
+    const zero=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','line');
+    zero.setAttribute('x1',L); zero.setAttribute('x2',W-R); zero.setAttribute('y1',y(0)); zero.setAttribute('y2',y(0));
+    zero.setAttribute('stroke','#2a2a55'); zero.setAttribute('stroke-width','1'); svg.appendChild(zero);
+    data.forEach(d=>{
+      const y0=y(0), y1=y(d.netPL), h=Math.abs(y1-y0);
+      const rect=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','rect');
+      rect.setAttribute('x',x); rect.setAttribute('y',Math.min(y0,y1)); rect.setAttribute('width',bw); rect.setAttribute('height',h);
+      rect.setAttribute('fill', d.netPL>=0 ? 'limegreen' : 'red'); svg.appendChild(rect);
+      let ly = d.netPL>=0 ? Math.min(y0,y1)-6 : Math.max(y0,y1)+16;
+      const top=T+12, bottom=H-B-2;
+      if(ly<top && d.netPL>=0) ly=Math.min(y0,y1)+14;
+      if(ly>bottom && d.netPL<0) ly=Math.max(y0,y1)-4;
+      ly=Math.max(top, Math.min(bottom, ly));
+      const label=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','text');
+      label.setAttribute('x',x+bw/2); label.setAttribute('y',ly);
+      label.setAttribute('fill','#fff'); label.setAttribute('font-size','13'); label.setAttribute('font-weight','700'); label.setAttribute('text-anchor','middle');
+      label.style.paintOrder='stroke'; label.style.stroke='#000'; label.style.strokeWidth='0.9px';
+      const sign = d.netPL >= 0 ? '+' : '-';
+      label.textContent = `${sign}$${Math.abs(d.netPL).toFixed(2)}`; svg.appendChild(label);
+      x += bw + gap;
+    });
+    const maxTicks=6, stepTick=Math.max(1, Math.ceil(n/maxTicks));
+    x=L+(iW-totalW)/2;
+    for(let i=0;i<n;i++){
+      if(i%stepTick===0){
+        const t=svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg','text');
+        t.setAttribute('x',x+bw/2); t.setAttribute('y',H-6); t.setAttribute('fill','#a7a7c7'); t.setAttribute('font-size','10');
+        t.setAttribute('text-anchor','middle'); t.textContent=data[i].date.slice(5); svg.appendChild(t);
+      }
+      x += bw + gap;
+    }
+  }
+
+  function recomputeAndRender(){
+    const symSel = document.getElementById('symbolFilter');
+    const botSel = document.getElementById('botFilter');
+    const sym = symSel.value, bot=botSel.value;
+    const rows = LOADED
+      .map(r => ({ ...r, exit_ts: (r.exit_time ? Date.parse(String(r.exit_time)) : null) }))
+      .filter(r => (sym==='__all__'||r.symbol===sym) && (bot==='__all__'||String(r.bot_id)===bot));
+    renderHistoryRows(rows);
+    renderSummaryFrom(rows);
+    const daily = (function(){
+      const map = new Map();
+      for(const r of rows){
+        const ts = r.exit_ts; if(ts==null) continue;
+        const key = (new Date(ts)).toISOString().slice(0,10);
+        const pl  = Number(r.pl||0);
+        const b = map.get(key) || { date:key, trades:0, wins:0, losses:0, netPL:0 };
+        b.trades++; if(pl>0)b.wins++; else if(pl<0)b.losses++; b.netPL+=pl; map.set(key,b);
+      }
+      const arr=[...map.values()].sort((a,b)=>a.date.localeCompare(b.date));
+      for(const d of arr){ const denom=(d.wins+d.losses); d.winRate = denom ? (d.wins/denom*100) : 0; }
+      return arr;
+    })();
+    renderWinRateLine(document.getElementById('winRateChart'), daily);
+    renderNetPlBars(document.getElementById('netPlChart'), daily);
+  }
+
+  const el = document.getElementById('closed-trades-json');
+  const raw = el ? el.textContent || '[]' : '[]';
+  let parsed = [];
+  try { parsed = JSON.parse(raw); } catch { parsed = []; }
+  // Normalize keys (older JS expects symbol/entry/exit/pl etc.)
+  LOADED = (parsed || []).map(p => ({
+    bot_id: p.bot_id,
+    option_symbol: p.option_symbol,
+    symbol: (p.underlying_symbol || p.symbol || ''),
+    underlying_symbol: (p.underlying_symbol || p.symbol || ''),
+    position_side: (p.position_side || ''),
+    side: (p.side || ''),
+    qty: (p.quantity ?? p.qty ?? 0),
+    entry: (p.entry_price ?? p.entry ?? 0),
+    exit: (p.exit_price ?? p.exit ?? 0),
+    pl: (p.pnl ?? p.pl ?? 0),
+    entry_time: p.entry_time,
+    exit_time: p.exit_time,
+    algo_name: p.algo_name
+  }));
+
+  (function rebuildFilters(){
+    const symSel = document.getElementById('symbolFilter');
+    const botSel = document.getElementById('botFilter');
+    const uniqueSyms = new Set(['__all__']);
+    const uniqueBots = new Set(['__all__']);
+    for(const r of LOADED){ uniqueSyms.add(r.symbol); uniqueBots.add(String(r.bot_id)); }
+    symSel.innerHTML=''; botSel.innerHTML='';
+    for(const v of uniqueSyms){ const o=document.createElement('option'); o.value=v; o.textContent=(v==='__all__'?'All Symbols':v); symSel.appendChild(o); }
+    for(const v of uniqueBots){ const o=document.createElement('option'); o.value=v; o.textContent=(v==='__all__'?'All Bots':`#${v}`); botSel.appendChild(o); }
+  })();
+
+  ['symbolFilter','botFilter','dateFrom','dateTo'].forEach(id=>{
+    const e=document.getElementById(id); if(e) e.addEventListener('change', recomputeAndRender);
+  });
+  recomputeAndRender();
+})();
+</script>
+{% endblock %}

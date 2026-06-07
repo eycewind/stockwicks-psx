@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Username Recovery - StockWicks{% endblock %}
+
+{% block content %}
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        background-color: #0d0d2b;
+        color: white;
+    }
+
+    .recover-container {
+        max-width: 400px;
+        margin: 50px auto;
+        padding: 30px;
+        background-color: #1a1a40;
+        border-radius: 10px;
+        box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2);
+        text-align: center;
+    }
+
+    .recover-container h2 {
+        color: white;
+        margin-bottom: 20px;
+    }
+
+    .recover-container p {
+        font-size: 16px;
+        margin-bottom: 15px;
+    }
+
+    .recover-container a {
+        display: inline-block;
+        color: #f16d0f;
+        text-decoration: none;
+        font-size: 14px;
+        margin-top: 10px;
+    }
+
+    .recover-container a:hover {
+        text-decoration: underline;
+    }
+</style>
+
+<div class="container">
+    <div class="recover-container">
+        <h2>Username Recovery</h2>
+        <p>An email has been sent to <strong>{{ email }}</strong> with your username.</p>
+        <p>Please check your inbox for further instructions.</p>
+        <a href="{{ request.url_for('login_page') }}">Return to Login</a>
+    </div>
+</div>
+
+{% endblock %}

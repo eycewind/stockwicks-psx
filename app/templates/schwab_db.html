@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Link Schwab for Trading{% endblock %}
+
+{% block content %}
+<div style="max-width: 600px; margin: auto; padding: 36px 0;">
+    <h2 style="color:#2042A0; margin-bottom:18px;">Link Schwab Account for Trading</h2>
+    <p>
+        This will securely link your Schwab account to enable <b>real trade execution</b>.<br>
+        You’ll be redirected to Schwab’s login page. Approve access, and tokens will be saved
+        directly in your StockWicks account.<br>
+        <span style="color:crimson;">You must complete the login quickly (within 30 seconds) due to Schwab's time limit!</span>
+    </p>
+    <button id="start-btn" class="btn-styled" style="background:#2042A0; color:#fff; font-size:1.2rem; padding: 14px 32px;">Start</button>
+    <div id="schwab-auth-url" style="margin-top:30px;"></div>
+</div>
+
+<script>
+document.getElementById('start-btn').onclick = async function() {
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = "Generating...";
+    try {
+        // call the DB-based start endpoint
+        const resp = await fetch('/auth/schwab/db/start');
+        const data = await resp.json();
+        if (data.auth_url) {
+            // redirect to Schwab login
+            window.location.href = data.auth_url;
+        } else {
+            document.getElementById('schwab-auth-url').innerHTML =
+                "<span style='color:red;'>Failed to generate auth link.</span>";
+        }
+    } catch (err) {
+        document.getElementById('schwab-auth-url').innerHTML =
+            "<span style='color:red;'>Network error. Try again.</span>";
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Start";
+    }
+};
+</script>
+{% endblock %}

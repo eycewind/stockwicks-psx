@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Integrate Schwab Account{% endblock %}
+
+{% block content %}
+<div style="max-width: 600px; margin: auto; padding: 36px 0;">
+    <h2 style="color:#2042A0; margin-bottom:18px;">Integrate Schwab Account</h2>
+    <p>
+        Click <b>Start</b> to securely link your Schwab account.<br>
+        You will be redirected to Schwab to log in and approve access.<br>
+        <span style="color:crimson;">You must complete the login quickly (within 30 seconds) due to Schwab's time limit!</span>
+    </p>
+    <button id="start-btn" class="btn-styled" style="background:#2042A0; color:#fff; font-size:1.2rem; padding: 14px 32px;">Start</button>
+    <div id="schwab-auth-url" style="margin-top:30px;"></div>
+</div>
+<script>
+document.getElementById('start-btn').onclick = async function() {
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = "Generating...";
+    try {
+        const resp = await fetch('/auth/schwab/start');
+        const data = await resp.json();
+        if (data.auth_url) {
+            // Redirect immediately (recommended):
+            window.location.href = data.auth_url;
+            // --- Or show a manual link:
+            // document.getElementById('schwab-auth-url').innerHTML =
+            //     `<a href="${data.auth_url}" target="_blank" class="btn-styled" style="background:#1e90ff; color:#fff;">Open Schwab Login</a>`;
+        } else {
+            document.getElementById('schwab-auth-url').innerHTML = "<span style='color:red;'>Failed to generate auth link.</span>";
+        }
+    } catch (err) {
+        document.getElementById('schwab-auth-url').innerHTML = "<span style='color:red;'>Network error. Try again.</span>";
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Start";
+    }
+};
+</script>
+{% endblock %}

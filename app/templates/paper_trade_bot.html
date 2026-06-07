@@ -1,0 +1,1068 @@
+<!--/var/www/stockwicks/app/templates/td_paper_trade_bot.html-->
+{% extends "base.html" %}
+
+{% block title %}StockWicks - Paper Stock Trade Bot{% endblock %}
+
+{% block content %}
+<style>
+  body { background:#0d0d2b; font-family:'Poppins',sans-serif; color:#fff; }
+  .container { width: 80%; margin: auto; text-align: center; }
+  h1 { font-size: 2.2rem; margin-top: 30px; color: #4fd1c5; text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
+
+  .balance-box { margin: 30px auto; background:#1b1b3a; padding: 20px; border-radius:12px; box-shadow:0 4px 10px rgba(0,0,0,.4);
+                 width: 50%; font-size:1.8rem; font-weight:bold; color:#6ff22e; }
+  .section-title { margin-top: 40px; color:#4fd1c5; font-size:1.6rem; }
+
+  .trade-form { background:#1b1b3a; padding:20px; width: 60%; margin: 20px auto; border-radius:10px; box-shadow:0 4px 10px rgba(0,0,0,.3); text-align:left; }
+  .trade-form h2 { color:#4fd1c5; margin-bottom:15px; text-align:center; }
+  .trade-form label { display:block; margin-bottom:6px; font-weight:bold; }
+  .trade-form input, .trade-form select { width:100%; padding:10px; margin-bottom:12px; background:#27274c; border:none; color:#fff; border-radius:6px; }
+  .trade-form .row { display:flex; gap:12px; }
+  .trade-form .row > div { flex:1; }
+  .trade-form .checks { display:flex; gap:20px; align-items:center; margin:8px 0 14px; color:#a7a7c7; flex-wrap: wrap; }
+  .trade-form .checks label { display:flex; align-items:center; gap:8px; font-weight:600; }
+  .trade-form small { color:#a7a7c7; display:block; margin-top:-6px; margin-bottom:12px; }
+  .trade-form button { width:100%; background:#4fd1c5; color:#000; padding:12px; border:none; font-weight:bold; cursor:pointer; border-radius:6px; transition:.3s; }
+  .trade-form button:hover { background:#38b2ac; }
+
+  table.trade-table { width: 90%; margin: 20px auto; border-collapse: collapse;
+                      background:#1b1b3a; color:#fff; border-radius:8px; overflow:hidden; }
+  table.trade-table th { background:#2d2d5c; padding:12px; }
+  table.trade-table td { padding:10px; border-bottom:1px solid #333; vertical-align:top; }
+  .no-trades { color:#aaa; padding:20px; text-align:center; }
+
+  .btn { padding:6px 12px; border:none; border-radius:6px; cursor:pointer; font-weight:600; font-size:13px; white-space:nowrap; display:inline-block; text-align:center; min-width:70px; }
+  .btn-stop{ background:#ff4d4d; color:#fff; } .btn-stop:hover{ background:#cc0000; }
+  .btn-delete{ background:#a94bff; color:#fff; } .btn-delete:hover{ filter:brightness(0.9); }
+  .btn-close{ background:#ffd24d; color:#000; } .btn-close:hover{ filter:brightness(0.95); }
+  .btn-close-all{ background:#f59e0b; color:#000; } .btn-close-all:hover{ filter:brightness(0.95); }
+  .btn-restart{ background:#4fd1c5; color:#000; }
+  .btn-restart:hover{ background:#38b2ac; }
+  /* 📊 Summary card */
+  .summary-card {
+    width: 90%;
+    margin: 10px auto 0;
+    background:#151533;
+    border:1px solid #2a2a55;
+    border-radius:12px;
+    padding:18px;
+    box-shadow:0 4px 12px rgba(0,0,0,.35);
+    text-align:left;
+  }
+  .summary-header {
+    display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:12px;
+  }
+  .summary-header h3 { color:#4fd1c5; margin:0; }
+  .summary-filters { display:flex; gap:12px; flex-wrap:wrap; }
+  .summary-filters select {
+    background:#27274c; color:#fff; border:none; border-radius:8px; padding:8px 10px; min-width:160px;
+  }
+  .summary-grid {
+    display:grid; grid-template-columns: repeat(6, 1fr); gap:12px; margin-top:6px;
+  }
+  .metric {
+    background:#1b1b3a; border-radius:10px; padding:12px;
+  }
+  .metric .label { color:#a7a7c7; font-size:12px; margin-bottom:6px; }
+  .metric .value { font-size:18px; font-weight:700; }
+  .metric .value.positive { color: #6ff22e; }
+  .metric .value.negative { color: #ff6666; }
+
+  @media (max-width: 980px){
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  /* 📈 Summary charts */
+.charts-card{
+  width:80%;                 /* was 90% */
+  margin:14px auto 0;
+  background:#151533; border:1px solid #2a2a55;
+  border-radius:12px; padding:16px;
+  box-shadow:0 4px 12px rgba(0,0,0,.35); text-align:left;
+}
+.chart-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.chart{
+  background:#1b1b3a; border-radius:10px; padding:12px;
+  max-width:520px;          /* hard cap so charts don’t get overly wide */
+  margin:0 auto;            /* center each chart */
+}
+.chart-title{ color:#a7a7c7; font-size:14px; margin:0 0 8px 0; }
+.chart svg{ width:100%; height:180px; display:block; }
+@media (max-width:980px){ .chart-row{ grid-template-columns:1fr; } }
+
+</style>
+
+<div class="container">
+  <h1>🤖 Paper Stock Trade Bot Dashboard</h1>
+
+  <!-- Bot Account Balance -->
+  <div class="balance-box">
+    Bot Account Balance:<br>
+    ${{ "%.2f"|format(paper_account.current_balance) }}<br>
+    {% if total_pl >= 0 %}
+      <span style="color:limegreen;">+${{ "%.2f"|format(total_pl) }} (+{{ "%.2f"|format(pl_percent) }}%)</span>
+    {% else %}
+      <span style="color:red;">-${{ "%.2f"|format(total_pl|abs) }} ({{ "%.2f"|format(pl_percent) }}%)</span>
+    {% endif %}
+  </div>
+  <a class="btn"
+   href="{{ url_for('trade_ui') }}"
+   target="_blank"
+   rel="noopener noreferrer">
+  Open Trade Console
+</a>
+  <!-- Start a New Bot -->
+  <div class="trade-form">
+    <h2>🚀 Start a Stock Bot</h2>
+    <form method="post" action="/auth/papertradebot/start">
+      <div class="row">
+        <div>
+          <label>Symbol</label>
+          <input name="symbol" placeholder="AAPL" required />
+        </div>
+        <div>
+          <label>Interval</label>
+            <select name="interval" required>
+            <option>1min</option>
+            <option>5min</option>
+            <option>10min</option>
+            <option>15min</option>
+            <option>30min</option>
+            <option>1d</option>
+          </select>
+        </div>
+        <div>
+          <label>Algo</label>
+          <select name="algo_name" required>
+            <option value="Algo1_MM">Algo1_MM - FeatureSet_1 (Original 12)</option>
+            <option value="Algo2_MM">Algo2_MM - FeatureSet_2 (OBV/VWAP 26)</option>
+            <option value="Algo3_MM">Algo3_MM - FeatureSet_3 (SMI only)</option>
+            <option value="Algo4_MM">Algo4_MM - FeatureSet_4 (Production Legacy)</option>
+            <option value="Algo5_MM">Algo5_MM - FeatureSet_5 (MACD only)</option>
+            <option value="Algo1">Algo1 – Scalping</option>
+            <option value="Algo2">Algo2 – Trend</option>
+            <option value="Algo3">Algo3 – Swing</option>
+            <option value="AlgoMM">AlgoMM – Market Maker</option>
+          </select>
+
+        </div>
+        <div>
+          <label>Trade Size (qty)</label>
+          <input type="number" name="trade_size" min="1" step="1" value="100" required />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Hard Stop ($)</label>
+          <input type="number" name="hard_stop_usd" min="0" step="1" value="300" />
+          <small>Default 300. Exit if open P/L reaches this loss.</small>
+        </div>
+        <div>
+          <label>Trail Activation Profit ($)</label>
+          <input type="number" name="trailing_stop_activation" min="0" step="1" value="75" />
+          <small>Default 75. Profit trail starts after this open profit.</small>
+        </div>
+        <div>
+          <label>Trail Giveback Distance ($)</label>
+          <input type="number" name="trailing_stop_distance" min="0" step="1" value="35" />
+          <small>Default 35. Exit after this giveback from peak profit.</small>
+        </div>
+        <div>
+          <label>Probability Trail Drop</label>
+          <input type="number" name="prob_trail_drop" min="0" max="1" step="0.01" value="0.05" />
+          <small>Exit if smoothed probability drops this much from peak.</small>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Long Entry Avg Prob</label>
+          <input type="number" name="long_entry_prob" min="0" max="1" step="0.01" value="0.60" />
+          <small>Enter long when smoothed probability crosses above this.</small>
+        </div>
+        <div>
+          <label>Short Entry Avg Prob</label>
+          <input type="number" name="short_entry_prob" min="0" max="1" step="0.01" value="0.40" />
+          <small>Enter short when smoothed probability crosses below this.</small>
+        </div>
+      </div>
+
+      <div class="checks">
+        <label>
+          <input type="checkbox" name="notify_email" value="yes"
+                 {% if bot and bot.notify_email %}checked{% endif %}>
+          Email Alerts
+        </label>
+        <label>
+          <input type="checkbox" name="allow_short_selling" value="on"
+                 {% if bot and bot.allow_short_selling %}checked{% endif %}>
+          Allow Short
+        </label>
+        <label>
+          <input type="checkbox" name="eod_auto_close" value="on"
+                 {% if bot and bot.eod_auto_close %}checked{% endif %}>
+          Close EOD
+        </label>
+      </div>
+
+      <small>EOD Tip: The End of Day toggle closes any remaining positions at 3:50 pm ET Daily. For Day Traders with no overnight hold</small>
+
+      <button type="submit">Start Bot</button>
+    </form>
+  </div>
+
+  <!-- Active Bots -->
+  <h2 class="section-title">✅ Active Stock Bots</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>ID</th><th>Symbol</th><th>Interval</th><th>Algo</th><th>Size</th><th>Status</th><th>Updated (ET)</th><th>EOD Auto Close</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% if all_bots and all_bots|length > 0 %}
+      {% for b in all_bots %}
+      <tr>
+        <td>{{ b.id }}</td>
+        <td>{{ b.symbol }}</td>
+        <td>{{ b.interval }}</td>
+        <td>{{ b.algo_name }}</td>
+        <td>{{ b.trade_size }}</td>
+        <td>{{ b.status }}</td>
+        <td>{{ b.updated_at }}</td>
+        <td>
+          <label style="display:inline-flex;align-items:center;gap:8px;color:#a7a7c7;">
+            <input type="checkbox" disabled {% if b.eod_auto_close %}checked{% endif %}>
+            {{ "On" if b.eod_auto_close else "Off" }}
+          </label>
+        </td>
+<td>
+  {% if b.is_active and b.status == "RUNNING" %}
+    <!-- Running: show Stop + Delete -->
+    <form method="post" action="/auth/papertradebot/stop/{{ b.id }}" style="display:inline;">
+      <button class="btn btn-stop">🛑 Stop</button>
+    </form>
+  {% else %}
+    <!-- Stopped/inactive: show Restart + Delete -->
+    <form method="post" action="/auth/papertradebot/restart/{{ b.id }}" style="display:inline;">
+      <button class="btn btn-restart">🔄 Restart</button>
+    </form>
+  {% endif %}
+  <form method="post"
+        action="/auth/papertradebot/cancel/{{ b.id }}"
+        style="display:inline;"
+        onsubmit="return confirm('Delete bot #{{ b.id }}?');">
+    <button class="btn btn-delete">🗑 Delete</button>
+  </form>
+</td>
+
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="9" class="no-trades">No bots found</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <!-- Open Positions -->
+  <h2 class="section-title">📌 Open Bot Trades</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Bot</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Entry Time (ET)</th><th>P/L (Real-time)</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% if open_trades and open_trades|length > 0 %}
+      {% for t in open_trades %}
+      <tr id="trade-row-{{ t.id }}">
+  <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else "" }})</td>
+  <td>{{ t.symbol }}</td>
+  <td>
+    {% if t.position_side == "long" %}Buy (expecting price up)
+    {% elif t.position_side == "short" %}Sell (expecting price down)
+    {% else %}{{ t.position_side }}{% endif %}
+  </td>
+  <td>{{ t.quantity }}</td>
+  <td>${{ "%.2f"|format(t.entry_price) }}</td>
+  <td>{{ t.entry_time.strftime("%Y-%m-%d %H:%M:%S") if t.entry_time else "N/A" }}</td>
+
+  {# NEW: compute live PL for open rows #}
+  {% set cp = t.current_price if t.current_price is not none else (t.live_price if t.live_price is defined and t.live_price is not none else t.entry_price) %}
+  {% if t.position_side == "short" %}{% set pl = (t.entry_price - cp) * t.quantity %}{% else %}{% set pl = (cp - t.entry_price) * t.quantity %}{% endif %}
+
+  <td>
+    {% if pl >= 0 %}
+      <span style="color:limegreen;">+${{ "%.2f"|format(pl) }}</span>
+    {% else %}
+      <span style="color:red;">-${{ "%.2f"|format(-pl) }}</span>
+    {% endif %}
+  </td>
+  <td>
+    <button class="btn btn-close" onclick="closeTrade(event, '{{ t.id }}')">Close</button>
+  </td>
+</tr>
+
+
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="8" class="no-trades">No open positions.</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+    <!-- 🔮 AlgoMM Probability Chart -->
+  <h2 class="section-title">📈 AlgoMM Probability Chart</h2>
+  <div class="charts-card">
+    <div class="summary-header">
+      <h3>UP / DOWN Probabilities vs Thresholds</h3>
+      <div class="summary-filters">
+        <select id="probBotSelect" aria-label="Select bot for probability chart">
+          {% set mm_bots = all_bots | selectattr("algo_name", "equalto", "AlgoMM") | list %}
+          {% if mm_bots and mm_bots|length > 0 %}
+            {% for b in mm_bots %}
+              <option value="{{ b.id }}">#{{ b.id }} {{ b.symbol }} ({{ b.interval }})</option>
+            {% endfor %}
+          {% else %}
+            <option value="">No AlgoMM bots</option>
+          {% endif %}
+        </select>
+      </div>
+    </div>
+    <div class="chart">
+      <h4 class="chart-title">UP / DOWN probability (0–1) with thresholds</h4>
+      <svg id="probChart" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+
+  <!-- 📊 Performance Summary -->
+  <div class="summary-card" id="summary-card" aria-live="polite">
+    <div class="summary-header">
+      <h3>📊 Performance Summary</h3>
+<div class="summary-filters">
+  <select id="symbolFilter" aria-label="Filter by symbol">
+    <option value="__all__">All Symbols</option>
+  </select>
+  <select id="botFilter" aria-label="Filter by bot">
+    <option value="__all__">All Bots</option>
+  </select>
+  
+  <!-- NEW: date range -->
+  <input id="dateFrom" type="date" aria-label="From date">
+  <input id="dateTo"   type="date" aria-label="To date">
+</div>
+    </div>
+    <div class="summary-grid">
+      <div class="metric"><div class="label">Trades</div><div class="value" id="mTrades">0</div></div>
+      <div class="metric"><div class="label">Wins</div><div class="value" id="mWins">0</div></div>
+      <div class="metric"><div class="label">Losses</div><div class="value" id="mLosses">0</div></div>
+      <div class="metric"><div class="label">Win rate</div><div class="value" id="mWinRate">0.0%</div></div>
+      <div class="metric"><div class="label">Net P/L</div><div class="value" id="mNetPL">$0.00</div></div>
+      <div class="metric">
+        <div class="label">Extremes</div>
+        <div class="value" id="mExtremes">—</div>
+      </div>
+    </div>
+  </div>
+<!-- 📈 Daily Performance Charts (driven by the same filters) -->
+<div class="charts-card" aria-live="polite">
+  <div class="chart-row">
+    <div class="chart">
+      <h4 class="chart-title">Daily Success Rate (%)</h4>
+      <svg id="winRateChart" viewBox="0 0 600 200" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="chart">
+      <h4 class="chart-title">Daily Net P/L ($)</h4>
+      <svg id="netPlChart" viewBox="0 0 600 200" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+</div>
+  <!-- Closed Trades -->
+  <h2 class="section-title">📜 Bot Trade History</h2>
+  <table class="trade-table" id="history-table">
+    <thead>
+      <tr>
+        <th>Bot</th><th>Symbol</th><th>Side</th><th>Qty</th>
+<th>Entry</th><th>Entry Time (ET)</th>
+<th>Exit</th><th>Exit Time (ET)</th>
+<th>P/L</th>
+      </tr>
+    </thead>
+    <tbody id="history-body">
+    {% if closed_trades and closed_trades|length > 0 %}
+      {% for t in closed_trades %}
+        {% set pl = (t.profit_loss if t.profit_loss is not none else 0.0) %}
+<tr class="hist-row"
+    data-symbol="{{ t.symbol }}"
+    data-bot="{{ t.bot_id }}"
+    data-pl="{{ '%.2f'|format(pl) }}">
+  <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else "" }})</td>
+  <td>{{ t.symbol }}</td>
+  <td>{{ t.position_side|capitalize }}</td>
+  <td>{{ t.quantity }}</td>
+  <td>${{ "%.2f"|format(t.entry_price) }}</td>
+  <td>{{ t.entry_time.strftime("%Y-%m-%d %H:%M:%S") if t.entry_time else "N/A" }}</td>
+  <td>${{ "%.2f"|format(t.exit_price) }}</td>
+  <td>{{ t.exit_time.strftime("%Y-%m-%d %H:%M:%S") if t.exit_time else "N/A" }}</td>
+  <td>
+    {% if pl >= 0 %}
+      <span style="color:limegreen;">+${{ "%.2f"|format(pl) }}</span>
+    {% else %}
+      <span style="color:red;">-${{ "%.2f"|format(-pl) }}</span>
+    {% endif %}
+  </td>
+</tr>
+
+
+        <td>{{ t.exit_time.strftime("%Y-%m-%d %H:%M:%S") if t.exit_time else "N/A" }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="8" class="no-trades">No trade history yet.</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+<script>
+(function () {
+  // --- Elements -------------------------------------------------------------
+  const histBody   = document.getElementById('history-body');
+  const symSel     = document.getElementById('symbolFilter');
+  const botSel     = document.getElementById('botFilter');
+  const dateFrom   = document.getElementById('dateFrom');
+  const dateTo     = document.getElementById('dateTo');
+
+  const winRateSVG = document.getElementById('winRateChart');
+  const netPlSVG   = document.getElementById('netPlChart');
+
+  // Prob chart elements
+  const probSvg    = document.getElementById('probChart');
+  const probBotSel = document.getElementById('probBotSelect');
+
+  // --- State ----------------------------------------------------------------
+  // [{bot_id, symbol, side, qty, entry, exit, pl, exit_time, exit_ts}]
+  let loadedRows = [];
+
+  // --- Utils ----------------------------------------------------------------
+  function fmtMoneySigned(n) {
+    const s = n >= 0 ? '+' : '-';
+    return `${s}$${Math.abs(n).toFixed(2)}`;
+  }
+
+  async function fetchJSON(url) {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  function parseExitTs(row) {
+    if (!row.exit_time) return null;
+    const iso = row.exit_time.replace(/(\.\d{3})\d+$/, '$1');
+    const ts = Date.parse(iso);
+    return Number.isFinite(ts) ? ts : null;
+  }
+
+  function yyyymmddFromTs(ts) {
+    const d = new Date(ts);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  }
+
+  // --- Rendering: history table & summary -----------------------------------
+  function renderHistoryRows(rows) {
+    histBody.innerHTML = '';
+    if (!rows || rows.length === 0) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="8" class="no-trades">No trade history yet.</td>`;
+      histBody.appendChild(tr);
+      return;
+    }
+    for (const r of rows) {
+      const tr = document.createElement('tr');
+      tr.className = 'hist-row';
+      tr.dataset.symbol = r.symbol;
+      tr.dataset.bot    = String(r.bot_id);
+      tr.dataset.pl     = String(Number(r.pl || 0));
+
+      const side = r.side ? (r.side[0].toUpperCase() + r.side.slice(1)) : '';
+      const plNum = Number(r.pl || 0);
+      const plHTML = plNum >= 0
+        ? `<span style="color:limegreen;">${fmtMoneySigned(plNum)}</span>`
+        : `<span style="color:red;">${fmtMoneySigned(plNum)}</span>`;
+
+      tr.innerHTML = `
+        <td>#${r.bot_id} ${(r.algo_name ? '('+r.algo_name+')' : '')}</td>
+        <td>${r.symbol}</td>
+        <td>${side}</td>
+        <td>${Number(r.qty ?? 0)}</td>
+        <td>$${Number(r.entry || 0).toFixed(2)}</td>
+        <td>${r.entry_time ? r.entry_time.replace('T', ' ') : 'N/A'}</td>
+        <td>$${Number(r.exit || 0).toFixed(2)}</td>
+        <td>${r.exit_time ? r.exit_time.replace('T', ' ') : 'N/A'}</td>
+        <td>${plHTML}</td>
+      `;
+
+      histBody.appendChild(tr);
+    }
+  }
+
+  function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  function renderSummaryFrom(rows) {
+    let trades = 0, wins = 0, losses = 0, net = 0;
+    let maxWin = -Infinity, maxLoss = Infinity, maxWinSym = '', maxLossSym = '';
+
+    for (const r of rows) {
+      const pl = Number(r.pl || 0);
+      trades += 1;
+      if (pl > 0) wins += 1;
+      else if (pl < 0) losses += 1;
+      net += pl;
+      if (pl > maxWin)  { maxWin  = pl; maxWinSym  = r.symbol; }
+      if (pl < maxLoss) { maxLoss = pl; maxLossSym = r.symbol; }
+    }
+    const winRate = (wins + losses) ? (wins / (wins + losses) * 100) : 0;
+
+    setText('mTrades', trades);
+    setText('mWins', wins);
+    setText('mLosses', losses);
+
+    const wrEl = document.getElementById('mWinRate');
+    if (wrEl) wrEl.textContent = winRate.toFixed(1) + '%';
+
+    const netEl = document.getElementById('mNetPL');
+    if (netEl) {
+      netEl.textContent = fmtMoneySigned(net);
+      netEl.classList.toggle('positive', net >= 0);
+      netEl.classList.toggle('negative', net < 0);
+    }
+
+    const extremesEl = document.getElementById('mExtremes');
+    if (extremesEl) {
+      if (trades === 0) {
+        extremesEl.textContent = '—';
+      } else {
+        extremesEl.innerHTML =
+          `Biggest win: <span class="value ${maxWin>=0?'positive':'negative'}">${fmtMoneySigned(maxWin)}</span>` +
+          (maxWinSym ? ` (${maxWinSym})` : '') +
+          ` | Biggest loss: <span class="value ${maxLoss>=0?'positive':'negative'}">${fmtMoneySigned(maxLoss)}</span>` +
+          (maxLossSym ? ` (${maxLossSym})` : '');
+      }
+    }
+  }
+
+  function rebuildSymbolOptions(fromRows) {
+    if (!symSel) return;
+    const current = symSel.value || '__all__';
+    const unique = new Set(['__all__']);
+    for (const r of fromRows) unique.add(r.symbol);
+
+    symSel.innerHTML = '';
+    for (const v of unique) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = (v === '__all__') ? 'All Symbols' : v;
+      symSel.appendChild(opt);
+    }
+    symSel.value = [...unique].includes(current) ? current : '__all__';
+  }
+
+  function rebuildBotOptions(fromRows) {
+    if (!botSel) return;
+
+    // If backend already filled with bots, don’t override unless it's only __all__
+    const hasBots = Array.from(botSel.options).some(o => o.value !== '__all__');
+    if (hasBots && botSel.value) return;
+
+    const current = botSel.value || '__all__';
+    const unique = new Set(['__all__']);
+    for (const r of fromRows) unique.add(String(r.bot_id));
+
+    botSel.innerHTML = '';
+    for (const v of unique) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = (v === '__all__') ? 'All Bots' : `#${v}`;
+      botSel.appendChild(opt);
+    }
+    botSel.value = [...unique].includes(current) ? current : '__all__';
+  }
+
+  // --- Filtering ------------------------------------------------------------
+  function getDateBoundary(inputEl, endOfDay = false) {
+    if (!inputEl || !inputEl.value) return null;
+    const d = new Date(inputEl.value + (endOfDay ? 'T23:59:59' : 'T00:00:00'));
+    const ts = d.getTime();
+    return Number.isFinite(ts) ? ts : null;
+  }
+
+  function filterRows() {
+    const sym    = symSel ? symSel.value : '__all__';
+    const tsFrom = getDateBoundary(dateFrom, false);
+    const tsTo   = getDateBoundary(dateTo, true);
+
+    return loadedRows.filter(r => {
+      const okSym  = (sym === '__all__') || (r.symbol === sym);
+      const ts     = r.exit_ts ?? null;
+      const okFrom = (tsFrom == null) || (ts != null && ts >= tsFrom);
+      const okTo   = (tsTo   == null) || (ts != null && ts <= tsTo);
+      return okSym && okFrom && okTo;
+    });
+  }
+
+  // === CHARTS: shared helpers ===============================================
+  function aggregateDaily(rows) {
+    const map = new Map();
+    for (const r of rows) {
+      if (r.exit_ts == null) continue;
+      const key = yyyymmddFromTs(r.exit_ts);
+      const pl  = Number(r.pl || 0);
+      const b = map.get(key) || { date:key, trades:0, wins:0, losses:0, netPL:0 };
+      b.trades += 1;
+      if (pl > 0) b.wins += 1;
+      else if (pl < 0) b.losses += 1;
+      b.netPL += pl;
+      map.set(key, b);
+    }
+    const arr = [...map.values()].sort((a,b) => a.date.localeCompare(b.date));
+    for (const d of arr) {
+      const denom = (d.wins + d.losses);
+      d.winRate = denom ? (d.wins / denom * 100) : 0;
+    }
+    return arr;
+  }
+
+  function clearSVG(svg) {
+    while (svg && svg.firstChild) svg.removeChild(svg.firstChild);
+  }
+
+  // === Win rate line chart ==================================================
+  function renderWinRateLine(svg, data) {
+    clearSVG(svg);
+    if (!svg || data.length === 0) return;
+
+    const W = svg.viewBox.baseVal.width  || 600;
+    const H = svg.viewBox.baseVal.height || 200;
+    const PAD_L = 36, PAD_R = 16, PAD_T = 24, PAD_B = 32;
+
+    const innerW = W - PAD_L - PAD_R;
+    const innerH = H - PAD_T - PAD_B;
+
+    const yMin = 0, yMax = 100;
+    const y = v => H - PAD_B - ((v - yMin) / (yMax - yMin)) * innerH;
+
+    const n = data.length;
+    const step = n > 1 ? innerW / (n - 1) : 0;
+    const x = i => PAD_L + i * step;
+
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    for (const t of [0, 50, 100]) {
+      const yy = y(t);
+      const ln = document.createElementNS(g.namespaceURI, 'line');
+      ln.setAttribute('x1', String(PAD_L));
+      ln.setAttribute('x2', String(W - PAD_R));
+      ln.setAttribute('y1', String(yy));
+      ln.setAttribute('y2', String(yy));
+      ln.setAttribute('stroke', '#2a2a55');
+      ln.setAttribute('stroke-width', '1');
+      g.appendChild(ln);
+
+      const lbl = document.createElementNS(g.namespaceURI, 'text');
+      lbl.setAttribute('x', '6');
+      lbl.setAttribute('y', String(yy + 4));
+      lbl.setAttribute('fill', '#a7a7c7');
+      lbl.setAttribute('font-size', '10');
+      lbl.textContent = t + '%';
+      g.appendChild(lbl);
+    }
+    svg.appendChild(g);
+
+    const pts = data.map((d, i) => `${x(i)},${y(d.winRate)}`).join(' ');
+    const pl = document.createElementNS(svg.namespaceURI, 'polyline');
+    pl.setAttribute('points', pts);
+    pl.setAttribute('fill', 'none');
+    pl.setAttribute('stroke', '#4fd1c5');
+    pl.setAttribute('stroke-width', '2');
+    svg.appendChild(pl);
+
+    data.forEach((d, i) => {
+      const cx = x(i), cy = y(d.winRate);
+      const c  = document.createElementNS(svg.namespaceURI, 'circle');
+      c.setAttribute('cx', String(cx));
+      c.setAttribute('cy', String(cy));
+      c.setAttribute('r', '2.5');
+      c.setAttribute('fill', '#4fd1c5');
+      svg.appendChild(c);
+
+      const labelYraw = cy - 6;
+      const labelY = Math.max(PAD_T + 10, Math.min(H - PAD_B - 2, labelYraw));
+      const t = document.createElementNS(svg.namespaceURI, 'text');
+      t.setAttribute('x', String(cx));
+      t.setAttribute('y', String(labelY));
+      t.setAttribute('fill', '#a7f1e9');
+      t.setAttribute('font-size', '11');
+      t.setAttribute('font-weight', '600');
+      t.setAttribute('text-anchor', 'middle');
+      t.style.paintOrder = 'stroke';
+      t.style.stroke = '#000';
+      t.style.strokeWidth = '0.8px';
+      t.textContent = `${d.winRate.toFixed(0)}%`;
+      svg.appendChild(t);
+    });
+
+    const maxTicks = 6;
+    const stepTick = Math.max(1, Math.ceil(n / maxTicks));
+    for (let i = 0; i < n; i += stepTick) {
+      const tx = document.createElementNS(svg.namespaceURI, 'text');
+      tx.setAttribute('x', String(x(i)));
+      tx.setAttribute('y', String(H - 6));
+      tx.setAttribute('fill', '#a7a7c7');
+      tx.setAttribute('font-size', '10');
+      tx.setAttribute('text-anchor', 'middle');
+      tx.textContent = data[i].date.slice(5);
+      svg.appendChild(tx);
+    }
+  }
+
+  // === Net P/L bar chart ====================================================
+  function renderNetPlBars(svg, data) {
+    clearSVG(svg);
+    if (!svg || data.length === 0) return;
+
+    const W = svg.viewBox.baseVal.width  || 600;
+    const H = svg.viewBox.baseVal.height || 200;
+    const PAD_L = 40, PAD_R = 18, PAD_T = 28, PAD_B = 36;
+
+    const innerW = W - PAD_L - PAD_R;
+    const innerH = H - PAD_T - PAD_B;
+
+    const vals = data.map(d => d.netPL);
+    const vMax = Math.max(0, ...vals);
+    const vMin = Math.min(0, ...vals);
+    const y = v => H - PAD_B - ((v - vMin) / ((vMax - vMin) || 1)) * innerH;
+
+    const n = data.length;
+    const gap = 6;
+    const maxBar = 28;
+    const bw = Math.min(maxBar, (innerW - gap * (n - 1)) / n);
+    const totalBarsW = n * bw + (n - 1) * gap;
+    let x = PAD_L + (innerW - totalBarsW) / 2;
+
+    const zero = document.createElementNS(svg.namespaceURI, 'line');
+    zero.setAttribute('x1', String(PAD_L));
+    zero.setAttribute('x2', String(W - PAD_R));
+    zero.setAttribute('y1', String(y(0)));
+    zero.setAttribute('y2', String(y(0)));
+    zero.setAttribute('stroke', '#2a2a55');
+    zero.setAttribute('stroke-width', '1');
+    svg.appendChild(zero);
+
+    data.forEach(d => {
+      const y0 = y(0);
+      const y1 = y(d.netPL);
+      const h = Math.abs(y1 - y0);
+
+      const rect = document.createElementNS(svg.namespaceURI, 'rect');
+      rect.setAttribute('x', String(x));
+      rect.setAttribute('y', String(Math.min(y0, y1)));
+      rect.setAttribute('width', String(bw));
+      rect.setAttribute('height', String(h));
+      rect.setAttribute('fill', d.netPL >= 0 ? 'limegreen' : 'red');
+      svg.appendChild(rect);
+
+      let labelY = d.netPL >= 0 ? Math.min(y0, y1) - 6 : Math.max(y0, y1) + 16;
+
+      const topLimit = PAD_T + 12;
+      const bottomLimit = H - PAD_B - 2;
+
+      if (labelY < topLimit && d.netPL >= 0) {
+        labelY = Math.min(y0, y1) + 14;
+      }
+      if (labelY > bottomLimit && d.netPL < 0) {
+        labelY = Math.max(y0, y1) - 4;
+      }
+      labelY = Math.max(topLimit, Math.min(bottomLimit, labelY));
+
+      const label = document.createElementNS(svg.namespaceURI, 'text');
+      label.setAttribute('x', String(x + bw / 2));
+      label.setAttribute('y', String(labelY));
+      label.setAttribute('fill', '#ffffff');
+      label.setAttribute('font-size', '13');
+      label.setAttribute('font-weight', '700');
+      label.setAttribute('text-anchor', 'middle');
+      label.style.paintOrder = 'stroke';
+      label.style.stroke = '#000';
+      label.style.strokeWidth = '0.9px';
+      const sign = d.netPL >= 0 ? '+' : '-';
+      label.textContent = `${sign}$${Math.abs(d.netPL).toFixed(2)}`;
+      svg.appendChild(label);
+
+      x += bw + gap;
+    });
+
+    const maxTicks = 6;
+    const stepTick = Math.max(1, Math.ceil(n / maxTicks));
+    x = PAD_L + (innerW - totalBarsW) / 2;
+    for (let i = 0; i < n; i++) {
+      if (i % stepTick === 0) {
+        const t = document.createElementNS(svg.namespaceURI, 'text');
+        t.setAttribute('x', String(x + bw / 2));
+        t.setAttribute('y', String(H - 6));
+        t.setAttribute('fill', '#a7a7c7');
+        t.setAttribute('font-size', '10');
+        t.setAttribute('text-anchor', 'middle');
+        t.textContent = data[i].date.slice(5);
+        svg.appendChild(t);
+      }
+      x += bw + gap;
+    }
+  }
+
+  function renderChartsFrom(rows) {
+    const daily = aggregateDaily(rows);
+    renderWinRateLine(winRateSVG, daily);
+    renderNetPlBars(netPlSVG, daily);
+  }
+
+  // === AlgoMM probability chart =============================================
+  function renderProbChart(points) {
+    if (!probSvg) return;
+    clearSVG(probSvg);
+    if (!points || points.length === 0) return;
+
+    const W = probSvg.viewBox.baseVal.width  || 600;
+    const H = probSvg.viewBox.baseVal.height || 220;
+    const PAD_L = 46, PAD_R = 18, PAD_T = 22, PAD_B = 32;
+
+    const innerW = W - PAD_L - PAD_R;
+    const innerH = H - PAD_T - PAD_B;
+
+    const yMin = 0.0, yMax = 1.0;
+    const y = v => H - PAD_B - ((v - yMin) / (yMax - yMin)) * innerH;
+
+    const n = points.length;
+    const step = n > 1 ? innerW / (n - 1) : 0;
+    const x = i => PAD_L + i * step;
+
+    const svgNS = probSvg.namespaceURI;
+
+    // grid lines
+    const grid = document.createElementNS(svgNS, 'g');
+    [0, 0.25, 0.5, 0.75, 1].forEach(val => {
+      const yy = y(val);
+      const line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('x1', String(PAD_L));
+      line.setAttribute('x2', String(W - PAD_R));
+      line.setAttribute('y1', String(yy));
+      line.setAttribute('y2', String(yy));
+      line.setAttribute('stroke', '#2a2a55');
+      line.setAttribute('stroke-width', '1');
+      grid.appendChild(line);
+
+      const label = document.createElementNS(svgNS, 'text');
+      label.setAttribute('x', '6');
+      label.setAttribute('y', String(yy + 4));
+      label.setAttribute('fill', '#a7a7c7');
+      label.setAttribute('font-size', '10');
+      label.textContent = val.toFixed(2);
+      grid.appendChild(label);
+    });
+    probSvg.appendChild(grid);
+
+    // threshold lines
+    const thresholds = [
+      { v: 0.60, label: 'Long entry 0.60'  },
+      { v: 0.55, label: 'Long exit 0.55'   },
+      { v: 0.40, label: 'Short entry 0.40' },
+      { v: 0.45, label: 'Short exit 0.45'  },
+    ];
+    const thGroup = document.createElementNS(svgNS, 'g');
+    thresholds.forEach(th => {
+      const yy = y(th.v);
+      const line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('x1', String(PAD_L));
+      line.setAttribute('x2', String(W - PAD_R));
+      line.setAttribute('y1', String(yy));
+      line.setAttribute('y2', String(yy));
+      line.setAttribute('stroke', '#ffd24d');
+      line.setAttribute('stroke-width', '1');
+      line.setAttribute('stroke-dasharray', '5,3');
+      thGroup.appendChild(line);
+
+      const txt = document.createElementNS(svgNS, 'text');
+      txt.setAttribute('x', String(W - PAD_R - 4));
+      txt.setAttribute('y', String(yy - 4));
+      txt.setAttribute('fill', '#ffd24d');
+      txt.setAttribute('font-size', '9');
+      txt.setAttribute('text-anchor', 'end');
+      txt.textContent = th.label;
+      thGroup.appendChild(txt);
+    });
+    probSvg.appendChild(thGroup);
+
+    // UP/DOWN lines
+    const upPts = points.map((p, i) => `${x(i)},${y(p.up)}`).join(' ');
+    const dnPts = points.map((p, i) => `${x(i)},${y(p.down)}`).join(' ');
+
+    const upLine = document.createElementNS(svgNS, 'polyline');
+    upLine.setAttribute('points', upPts);
+    upLine.setAttribute('fill', 'none');
+    upLine.setAttribute('stroke', '#4fd1c5');
+    upLine.setAttribute('stroke-width', '2');
+    probSvg.appendChild(upLine);
+
+    const dnLine = document.createElementNS(svgNS, 'polyline');
+    dnLine.setAttribute('points', dnPts);
+    dnLine.setAttribute('fill', 'none');
+    dnLine.setAttribute('stroke', '#a94bff');
+    dnLine.setAttribute('stroke-width', '2');
+    probSvg.appendChild(dnLine);
+
+    // last point dots + labels
+    const lastIdx = n - 1;
+    const last = points[lastIdx];
+
+    const upDot = document.createElementNS(svgNS, 'circle');
+    upDot.setAttribute('cx', String(x(lastIdx)));
+    upDot.setAttribute('cy', String(y(last.up)));
+    upDot.setAttribute('r', '3');
+    upDot.setAttribute('fill', '#4fd1c5');
+    probSvg.appendChild(upDot);
+
+    const dnDot = document.createElementNS(svgNS, 'circle');
+    dnDot.setAttribute('cx', String(x(lastIdx)));
+    dnDot.setAttribute('cy', String(y(last.down)));
+    dnDot.setAttribute('r', '3');
+    dnDot.setAttribute('fill', '#a94bff');
+    probSvg.appendChild(dnDot);
+
+    const labelGroup = document.createElementNS(svgNS, 'g');
+
+    const upLabel = document.createElementNS(svgNS, 'text');
+    upLabel.setAttribute('x', String(W - PAD_R - 4));
+    upLabel.setAttribute('y', String(y(last.up) - 6));
+    upLabel.setAttribute('fill', '#4fd1c5');
+    upLabel.setAttribute('font-size', '11');
+    upLabel.setAttribute('text-anchor', 'end');
+    upLabel.style.fontWeight = '600';
+    upLabel.textContent = `UP: ${last.up.toFixed(2)}`;
+    labelGroup.appendChild(upLabel);
+
+    const dnLabel = document.createElementNS(svgNS, 'text');
+    dnLabel.setAttribute('x', String(W - PAD_R - 4));
+    dnLabel.setAttribute('y', String(y(last.down) + 12));
+    dnLabel.setAttribute('fill', '#a94bff');
+    dnLabel.setAttribute('font-size', '11');
+    dnLabel.setAttribute('text-anchor', 'end');
+    dnLabel.style.fontWeight = '600';
+    dnLabel.textContent = `DOWN: ${last.down.toFixed(2)}`;
+    labelGroup.appendChild(dnLabel);
+
+    probSvg.appendChild(labelGroup);
+  }
+
+  async function refreshProbChart() {
+    if (!probSvg || !probBotSel) return;
+    const botId = probBotSel.value;
+    if (!botId) return;
+
+    try {
+      const data = await fetchJSON(
+        `/auth/papertradebot/bot_probs_json?bot_id=${encodeURIComponent(botId)}`
+      );
+      const points = (data && Array.isArray(data.points)) ? data.points : [];
+      renderProbChart(points);
+    } catch (err) {
+      console.error('Failed to load bot probabilities:', err);
+    }
+  }
+
+  // --- Recompute everything when filters change -----------------------------
+  function recomputeAndRender() {
+    const filtered = filterRows();
+    renderHistoryRows(filtered);
+    renderSummaryFrom(filtered);
+    renderChartsFrom(filtered);
+  }
+
+  // --- Load trades for selected bot (or ALL) --------------------------------
+  async function refreshForBot() {
+    const val = botSel ? botSel.value : '__all__';
+    const param = (val === '__all__') ? 'ALL' : encodeURIComponent(val);
+    const data = await fetchJSON(`/auth/papertradebot/trades_json?bot_id=${param}`);
+    const rows = (data && Array.isArray(data.trades)) ? data.trades : [];
+
+    loadedRows = rows.map(r => ({ ...r, exit_ts: parseExitTs(r) }));
+
+    if (val === '__all__') rebuildBotOptions(loadedRows);
+    rebuildSymbolOptions(loadedRows);
+    recomputeAndRender();
+  }
+
+  // --- Wire events ----------------------------------------------------------
+  if (symSel)   symSel.addEventListener('change', recomputeAndRender);
+  if (botSel)   botSel.addEventListener('change', refreshForBot);
+  if (dateFrom) dateFrom.addEventListener('change', recomputeAndRender);
+  if (dateTo)   dateTo.addEventListener('change', recomputeAndRender);
+
+  if (probBotSel) {
+    probBotSel.addEventListener('change', () => {
+      refreshProbChart();
+    });
+  }
+
+  // Expose so closeTrade can call it
+  window.refreshForBot = refreshForBot;
+
+  // First paint
+  refreshForBot().catch(err => console.error('Failed to load trades:', err));
+
+  // Start live probability updates (15s)
+  if (probBotSel && probBotSel.value) {
+    refreshProbChart();
+    setInterval(refreshProbChart, 15000);
+  }
+})();  // end IIFE
+
+// Close trade button handler (unchanged)
+async function closeTrade(evt, tradeId) {
+  evt.preventDefault();
+  const btn = evt.currentTarget;
+  const row = document.getElementById(`trade-row-${tradeId}`);
+  const origText = btn.textContent;
+
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Closing…';
+
+    const res = await fetch(`/api/paper/close-trade/${tradeId}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const msg = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    if (row) row.remove();
+    if (typeof window.refreshForBot === 'function') window.refreshForBot();
+  } catch (e) {
+    alert(`Close failed: ${e.message || e}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+</script>
+
+
+
+{% endblock %}

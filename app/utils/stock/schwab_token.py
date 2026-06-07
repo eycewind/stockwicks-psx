@@ -1,0 +1,129 @@
+# app/utils/stock/schwab_token.py
+"""
+Commercial Schwab market token helper.
+
+Used by:
+- market_price.py
+- data_fetch.py
+- schwab_price_history.py
+- paper_trade_engine.py
+
+For market data, always use:
+  /var/stockwicks/clients/ashakil/data/{SCHWAB_REFRESH_USER_ID}/schwab_market_token.json
+
+Trade order code should use schwab_trade_token.py separately.
+Never log raw tokens.
+"""
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Optional
+
+log = logging.getLogger("schwab_token")
+
+CLIENT_ROOT = os.getenv("CLIENT_ROOT", "/var/stockwicks/clients/ashakil")
+DATA_DIR = Path(os.getenv("DATA_DIR", f"{CLIENT_ROOT}/data"))
+SCHWAB_REFRESH_USER_ID = int(os.getenv("SCHWAB_REFRESH_USER_ID", "3"))
+
+MARKET_TOKEN_PATH = DATA_DIR / str(SCHWAB_REFRESH_USER_ID) / "schwab_market_token.json"
+
+
+def _load_market_token() -> Optional[dict]:
+    if not MARKET_TOKEN_PATH.exists():
+        log.warning("[SCHWAB TOKEN] Market token file missing: %s", MARKET_TOKEN_PATH)
+        return None
+
+    try:
+        with MARKET_TOKEN_PATH.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        log.exception("[SCHWAB TOKEN] Failed reading market token file: %s", MARKET_TOKEN_PATH)
+        return None
+
+
+def _token_is_expired(token_data: dict, safety_seconds: int = 120) -> bool:
+    """
+    Return True if token is missing/expired/near expiry.
+
+    Supports both:
+    - created_at_epoch + expires_in
+    - access_token_expires_at_epoch
+    """
+    now = int(time.time())
+
+    exp_at = token_data.get("access_token_expires_at_epoch")
+    if exp_at:
+        try:
+            return now >= int(exp_at) - safety_seconds
+        except Exception:
+            pass
+
+    created = token_data.get("created_at_epoch") or token_data.get("created_at")
+    expires_in = token_data.get("expires_in")
+
+    if created and expires_in:
+        try:
+            return now >= int(float(created)) + int(expires_in) - safety_seconds
+        except Exception:
+            pass
+
+    # If no expiry metadata, assume usable if access_token exists.
+    # The scheduled refresh task updates the file every 5 minutes.
+    return False
+
+
+def refresh_token() -> Optional[dict]:
+    """
+    Compatibility wrapper.
+
+    Refreshes the commercial market token using the existing market-token utility.
+    """
+    try:
+        from app.utils.stock.schwab_market_token import refresh_market_token
+
+        result = refresh_market_token()
+        return result if isinstance(result, dict) else _load_market_token()
+    except Exception:
+        log.exception("[SCHWAB TOKEN] Market refresh failed")
+        return None
+
+
+def get_valid_access_token() -> Optional[str]:
+    """
+    Return valid market-data access token from the commercial user token file.
+
+    If token appears expired, attempts one refresh using schwab_market_token.py.
+    """
+    token_data = _load_market_token()
+
+    if not token_data:
+        token_data = refresh_token()
+
+    if not token_data:
+        log.warning("[SCHWAB TOKEN] No market token available from %s", MARKET_TOKEN_PATH)
+        return None
+
+    if _token_is_expired(token_data):
+        log.info("[SCHWAB TOKEN] Market token near expiry, refreshing")
+        token_data = refresh_token()
+
+    if not token_data:
+        return None
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        log.warning("[SCHWAB TOKEN] Market token file has no access_token: %s", MARKET_TOKEN_PATH)
+        return None
+
+    return access_token
+
+
+def get_valid_user_access_token(user_id: int = SCHWAB_REFRESH_USER_ID) -> Optional[str]:
+    """
+    Backward-compatible alias for old callers.
+    For market data, user_id is ignored except for compatibility.
+    """
+    return get_valid_access_token()

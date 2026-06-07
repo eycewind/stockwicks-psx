@@ -1,0 +1,130 @@
+<!----forum.html-->
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - Customer Forum
+{% endblock %}
+
+{% block content %}
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #0d0d2b;
+    }
+
+    .post-card, .reply-card {
+        margin-bottom: 20px;
+        padding: 15px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        background-color: #2c3e50;
+    }
+
+    .form-container {
+        max-width: 500px;
+        margin: 30px auto;
+        padding: 20px;
+        border-radius: 10px;
+        background-color: #2c3e50;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .form-control, .btn {
+        border-radius: 5px;
+    }
+
+    label {
+        font-size: 14px;
+        font-weight: bold;
+        color: #f8f9fa;
+    }
+
+    .btn-primary {
+        background-color: #048322;
+        border-color: #048322;
+    }
+
+    h1, h2 {
+        color: white;
+    }
+
+    .post-details {
+        color: #f8f9fa;
+    }
+
+    .card-body {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+</style>
+
+    <!-- Banner Section -->
+    <div style="display: flex; justify-content: center; align-items: center; margin-top: 10px;">
+        <img src="{{ url_for('banner_image') }}" alt="Banner" class="banner">
+    </div>
+
+    <div class="container">
+        <h1>Customer Forum</h1>
+
+<!-- New Post Form -->
+<form method="POST" action="{{ url_for('forum') }}">
+    {{ form.hidden_tag() }}
+    <div class="form-group">
+        {{ form.title.label(class="form-control-label") }}
+        {{ form.title(class="form-control") }}
+    </div>
+    <div class="form-group">
+        {{ form.content.label(class="form-control-label") }}
+        {{ form.content(class="form-control") }}
+    </div>
+    <div class="form-group">
+        {{ form.submit(class="btn btn-primary") }}
+    </div>
+</form>
+<hr>
+
+<!-- Forum Posts and Replies -->
+<h2>Forum Posts</h2>
+{% for post in posts %}
+    <div class="post-card">
+        <div class="post-details">
+            <small class="text-muted">Posted by {{ post.user.username }} on {{ post.created_at }}</small>
+        </div>
+        <div class="card-body">
+            <h5 class="card-title">{{ post.title }}</h5>
+            <p class="card-text">{{ post.content }}</p>
+        </div>
+
+        <!-- Display Replies -->
+        <h6>Replies:</h6>
+        {% for reply in post.replies %}
+            <div class="reply-card">
+                <div class="reply-details">
+                    <small class="text-muted">Replied by {{ reply.user.username }} on {{ reply.created_at }}</small>
+                </div>
+                <p>{{ reply.content }}</p>
+            </div>
+        {% endfor %}
+
+<!-- Reply Form -->
+<!-- Reply Form -->
+<form method="POST" action="{{ url_for('reply_to_post', post_id=post.id) }}">
+    {{ reply_form.hidden_tag() }}
+    <input class="form-control" type="hidden" name="post_id" value="{{ post.id }}"> <!-- Hidden input for post_id -->
+    <div class="form-group">
+        {{ reply_form.content(class="form-control", placeholder="Write a reply...") }}
+    </div>
+    <div class="form-group">
+        {{ reply_form.submit(class="btn btn-primary btn-sm") }}
+    </div>
+</form>
+
+
+    </div>
+{% endfor %}
+
+{% endblock %}

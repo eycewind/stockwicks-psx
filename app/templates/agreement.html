@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}User Agreement - StockWicks{% endblock %}
+
+{% block content %}
+
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #0d0d2b;
+        color: white;
+    }
+
+    div {
+        color: white;
+        font-size: 1rem;
+        line-height: 1.6;
+    }
+
+    h1, h2 {
+        color: white;
+        font-size: 2.5rem;
+        font-weight: 600;
+        text-shadow: 2px 2px 6px rgba(255, 255, 255, 0.2);
+        margin-bottom: 20px;
+    }
+
+    .banner-heading {
+        display: inline-block;
+        background-color: #1e3a8a;
+        color: white;
+        padding: 15px 200px;
+        border-radius: 25px;
+        font-size: 2.5rem;
+        font-weight: bold;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+        margin-bottom: 20px;
+    }
+
+    .btn {
+        background-color: #00c6ff;
+        color: #000000;
+        padding: 12px 24px;
+        font-size: 1.1rem;
+        font-weight: bold;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        margin-top: 20px;
+        transition: all 0.3s ease;
+        display: inline-block;
+        text-transform: uppercase;
+    }
+
+    .btn:hover {
+        background-color: #009ac9;
+        transform: scale(1.05);
+    }
+</style>
+
+
+    <h2>StockWicks User Agreement</h2>
+    <p>Welcome to StockWicks. By registering, you agree to the following terms:</p>
+    <div style="border: 1px solid #ccc; padding: 10px; max-height: 400px; overflow-y: auto;">
+        <p>Welcome to the www.StockWicks.com website...</p>
+        www.StockWicks.com User Agreement
+Welcome to the www.StockWicks.com website (the "Website"). By accessing or using the Website, you agree to comply with and be bound by the terms and conditions set forth in this Agreement. If you disagree with any part of this Agreement, you may not access or use the Website.
+
+Services Offered
+The Website offers the following services:
+
+Stock price prediction (disclaimer included below)
+Sample trades for any stock symbol (disclaimer included below)
+Notifications when an algorithm enters a trade (disclaimer included below)
+Disclaimer of Liability
+The information and services provided on the Website, including stock price predictions, sample trades, and algorithmic trade notifications, are for informational purposes only and should not be considered as financial advice. You understand and agree that:
+
+The Website's predictions and sample trades are based on various factors and may not be accurate. Past performance is not necessarily indicative of future results.
+You are solely responsible for any investment decisions you make based on the information provided on the Website.
+www.StockWicks.com, its affiliates, and its employees are not responsible for any losses you may incur as a result of using the information on the Website.
+Limitation of Liability
+In no event shall www.StockWicks.com, its affiliates, and its employees be liable for any direct, indirect, incidental, special, consequential, or exemplary damages arising out of or in connection with your use of the Website. This includes, but is not limited to, damages for loss of profits, goodwill, use, data, or other intangible losses (even if www.StockWicks.com has been advised of the possibility of such damages).
+
+User Responsibilities
+Users are responsible for maintaining the confidentiality of their account information and for all activities that occur under their account. Users must immediately notify www.StockWicks.com of any unauthorized use of their account.
+
+Modifications to Service
+www.StockWicks.com reserves the right to modify or discontinue the service at any time without prior notice. www.StockWicks.com shall not be liable to users or any third party for any modification, suspension, or discontinuation of the service.
+
+Governing Law
+These Terms of Service shall be governed by and construed in accordance with the laws of the State of Texas, USA, without regard to its conflict of law principles.
+
+No Warranty
+www.StockWicks.com does not guarantee the accuracy, completeness, or reliability of the information provided. The service is provided "as is" and "as available" without any warranty of any kind.
+
+Indemnification
+Users agree to indemnify and hold harmless www.StockWicks.com, its affiliates, and its employees from any claim or demand, including reasonable attorneys' fees, made by any third party due to or arising out of the user's breach of these terms or their use of the service.
+
+Termination
+www.StockWicks.com reserves the right to terminate or suspend a user's account and access to the service without prior notice for conduct that www.StockWicks.com believes violates these terms or is harmful to other users of the service, www.StockWicks.com, or third parties, or for any other reason in www.StockWicks.com's sole discretion.
+
+Privacy Policy
+1. Information Collection and Use
+www.StockWicks.com collects personal information such as first name, last name, username, and email address to create user accounts, provide services, and communicate with users. We do not sell or share this information with third parties.
+
+2. Data Protection
+www.StockWicks.com employs industry-standard security measures to protect user data. However, we cannot guarantee absolute security. Users are responsible for maintaining the confidentiality of their account information.
+
+3. Use of Third-Party Payment Processors
+www.StockWicks.com may use third-party payment processors such as PayPal or Stripe to handle subscription payments. These processors are responsible for the processing, handling, and security of your payment information. www.StockWicks.com does not store any payment information.
+
+4. Cookies and Tracking Technologies
+www.StockWicks.com may use cookies and similar tracking technologies to enhance the user experience. Users can control the use of cookies through their browser settings.
+
+5. User Rights
+Users have the right to access, correct, or delete their personal information stored by www.StockWicks.com. Requests can be made by contacting our support team.
+
+6. Changes to Privacy Policy
+www.StockWicks.com reserves the right to modify this Privacy Policy at any time. Changes will be posted on this page, and users are encouraged to review the policy periodically.
+
+7. Compliance with Laws
+www.StockWicks.com complies with applicable data protection and privacy laws. Users' personal information will not be shared with third parties without their consent, except as required by law.
+
+8. Contact Information
+For any questions about these Terms of Service or the Privacy Policy, please contact us at [Your Contact Information].
+
+9. Dispute Resolution
+Any disputes arising out of or in connection with these terms or the use of the service shall be resolved through binding arbitration in accordance with the rules of the American Arbitration Association in Texas, USA.
+    </div>
+    <a href="{{ url_for('register_page') }}" class="btn">I Accept</a>
+{% endblock %}

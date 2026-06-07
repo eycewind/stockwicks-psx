@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - Check Algo Performance
+{% endblock %}
+
+{% block content %}
+<style>
+  body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #0d0d2b;
+    color: white;
+    text-align: center;
+}
+
+.banner {
+    max-height: 120px;
+    width: auto;
+    margin-bottom: 20px;
+    border-radius: 5px;
+    box-shadow: 0 4px 6px rgba(255, 255, 255, 0.3);
+}
+
+.banner-heading {
+    display: inline-block;
+    background-color: #1e3a8a;
+    color: white;
+    padding: 15px 30px;
+    border-radius: 25px;
+    font-size: 2.5rem;
+    font-weight: bold;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+    margin-bottom: 20px;
+}
+
+.form-container {
+    background-color: #1b1b3a;
+    padding: 25px;
+    border-radius: 12px;
+    width: 60%;
+    margin: auto;
+    box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2);
+}
+
+.form-container h3 {
+    color: white;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+/* Fix spacing between input fields and button */
+.form-container form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px; /* Ensures proper spacing */
+}
+
+.form-container input,
+.form-container select {
+    width: 80%; /* Make dropdown same width as input */
+    padding: 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 1rem;
+    text-align: center;
+}
+
+.form-container button {
+    background-color: #00c6ff;
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    font-size: 1rem;
+    font-weight: bold;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.form-container button:hover {
+    background-color: #009ac9;
+    transform: scale(1.05);
+}
+
+.result-container {
+    margin-top: 20px;
+    background-color: #2c3e50;
+    color: white;
+    padding: 20px;
+    border-radius: 10px;
+}
+
+.summary-box {
+    width: 300px;
+    height: auto;
+    margin: 10px;
+    padding: 15px;
+    border-radius: 5px;
+    color: #fff;
+    box-shadow: 0px 0px 15px rgba(0, 0, 0, 0.2);
+}
+
+.summary-box.green {
+    background-color: #1a6b30;
+}
+
+.summary-box.red {
+    background-color: #4712b8;
+}
+
+.summary-container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+table {
+    width: 100%;
+    color: white;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+
+table th, table td {
+    border: 1px solid white;
+    text-align: center;
+    padding: 10px;
+}
+
+table th {
+    background-color: #007bff;
+    color: white;
+}
+
+.scroll-box {
+    max-height: 300px;
+    overflow-y: scroll;
+    border: 1px solid white;
+    padding: 10px;
+    background-color: #2c3e50;
+    margin-top: 10px;
+}
+
+/* Banner Styling */
+.banner {
+    max-height: 150px;
+    width: auto;
+    object-fit: contain;
+    margin-bottom: 20px;
+    border-radius: 5px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+</style>
+<div class="container text-center">
+  <h1 class="banner-heading">Paper Strategy Backtest</h1>
+  <p class="website-name">www.stockwicks.com</p>
+
+  <!-- Input Form Section -->
+  <div class="form-container">
+    <h3>Enter Stock Details</h3>
+    <form id="checkAlgoForm">
+      <input class="form-control" type="text" id="symbol" placeholder="Enter Stock Symbol" value="TSLA" required>
+
+<select class="form-control" id="interval">
+  <optgroup label="For Day Trading (positions closed same day)">
+    <option value="1min">Hyper Scalp (1-min)</option>
+    <option value="5min" selected>Standard Day Trade (5-min)</option>
+    <option value="10min">Momentum Day Trade (10-min)</option>
+    <option value="15min">Positional Day Trade (15-min)</option>
+    <option value="30min">Half-Day Trade (30-min)</option>
+  </optgroup>
+  <optgroup label="For Swing Trading (positions held overnight)">
+    <option value="1d">Swing Trade (Daily)</option>
+  </optgroup>
+</select>
+
+      <!-- Date range (ET) -->
+      <div class="form-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <div style="flex:1;min-width:180px;">
+          <label for="start_date" style="display:block;text-align:left;margin-bottom:4px;">Start date (ET)</label>
+          <input class="form-control" type="date" id="start_date" required>
+        </div>
+        <div style="flex:1;min-width:180px;">
+          <label for="end_date" style="display:block;text-align:left;margin-bottom:4px;">End date (ET)</label>
+          <input class="form-control" type="date" id="end_date" required>
+        </div>
+      </div>
+
+      <!-- Multi-algo selector -->
+      <fieldset style="text-align:left;margin-top:12px;">
+        <legend style="font-weight:600;margin-bottom:4px;">Select Algorithms</legend>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,1fr));gap:6px;">
+          <label><input type="checkbox" name="algos" value="algo1"> Algo1</label>
+          <label><input type="checkbox" name="algos" value="algo2"> Algo2</label>
+          <label><input type="checkbox" name="algos" value="algo3" checked> Algo3</label>
+          <!-- add more by copying the line above: algo4, algo5, ... -->
+        </div>
+      </fieldset>
+
+      <button class="btn" type="submit" style="margin-top:12px;">Run Backtest</button>
+    </form>
+  </div>
+
+  <!-- Results Section -->
+  <div id="resultContainer" class="result-container">
+    <h2>Results</h2>
+    <!-- dynamically updated -->
+  </div>
+</div>
+
+<script>
+  // ---- Auth / welcome (unchanged) ----
+  fetch('/auth/get-current-user', {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${getAuthToken()}` }
+  })
+  .then(r => r.json())
+  .then(userData => {
+    if (userData.username) {
+      const userWelcome = document.getElementById('user-welcome');
+      if (userWelcome) {
+        userWelcome.innerText = `Welcome, ${userData.username}`;
+        const warn = document.getElementById('auth-warning');
+        if (warn) warn.style.display = 'none';
+      }
+    }
+  })
+  .catch(err => console.error('❌ Error fetching user:', err));
+
+  // ---- Default date range: last 5 days ET ----
+  (function initDates() {
+    const end = new Date();                      // local browser date (we'll treat as ET calendar)
+    const start = new Date(end); start.setDate(end.getDate() - 5);
+    document.getElementById('start_date').value = toYYYYMMDD(start);
+    document.getElementById('end_date').value = toYYYYMMDD(end);
+  })();
+
+  function toYYYYMMDD(d) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  // ---- Form submit ----
+  document.getElementById('checkAlgoForm').addEventListener('submit', function(event) {
+    event.preventDefault();
+
+    const symbol = (document.getElementById('symbol').value || '').trim().toUpperCase();
+    const interval = document.getElementById('interval').value;
+
+    const start_date = document.getElementById('start_date').value; // YYYY-MM-DD (ET)
+    const end_date = document.getElementById('end_date').value;
+
+    // collect selected algos
+    const algoBoxes = Array.from(document.querySelectorAll('input[name="algos"]:checked'));
+    const algos = algoBoxes.map(cb => cb.value);
+
+    const resultContainer = document.getElementById('resultContainer');
+    resultContainer.innerHTML = '<p style="color: yellow;">Processing your request, please wait...</p>';
+
+    if (!symbol) {
+      resultContainer.innerHTML = '<p style="color:red;">Please enter a symbol.</p>';
+      return;
+    }
+    if (!algos.length) {
+      resultContainer.innerHTML = '<p style="color:red;">Please select at least one algorithm.</p>';
+      return;
+    }
+    if (!start_date || !end_date) {
+      resultContainer.innerHTML = '<p style="color:red;">Please select start and end dates.</p>';
+      return;
+    }
+
+    // Build x-www-form-urlencoded body with multiple algos
+    const body = new URLSearchParams();
+    body.set('symbol', symbol);
+    body.set('interval', interval);
+    body.set('start_date', start_date);
+    body.set('end_date', end_date);
+    algos.forEach(a => body.append('algos', a)); // multiple keys "algos"
+
+    fetch('/algo-backtest', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Bearer ${getAuthToken()}`
+      },
+      body
+    })
+    .then(response => {
+      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+      return response.json();
+    })
+    .then(data => {
+      console.log('✅ Response Data:', data);
+      resultContainer.innerHTML = '';
+
+      // Two supported shapes:
+      //  A) { results: { algo1: {summary, long_trades, short_trades, open_positions}, ... } }
+      //  B) { results: { summary, long_trades, short_trades, open_positions } }  (single algo)
+      if (!data || !data.results) {
+        resultContainer.innerHTML = '<p style="color: yellow;">No data found.</p>';
+        return;
+      }
+
+      const res = data.results;
+      const isMulti = !Array.isArray(res) && typeof res === 'object' && !('summary' in res);
+
+      if (isMulti) {
+        // Multi-algo: render per-algo sections
+        Object.keys(res).forEach(algoKey => {
+          const block = document.createElement('div');
+          block.className = 'algo-block';
+          block.style.marginTop = '16px';
+          block.innerHTML = `<h3 style="text-transform:uppercase;margin-bottom:8px;">${algoKey}</h3>`;
+          const { summary = [], long_trades = [], short_trades = [], open_positions = [] } = res[algoKey] || {};
+          if (summary.length) block.innerHTML += generateTable('Summary', summary);
+          if (long_trades.length) block.innerHTML += generateTable('Long Trades', long_trades);
+          if (short_trades.length) block.innerHTML += generateTable('Short Trades', short_trades);
+          if (open_positions.length) block.innerHTML += generateTable('Open Positions', open_positions);
+          if (!summary.length && !long_trades.length && !short_trades.length && !open_positions.length) {
+            block.innerHTML += '<p style="color: yellow;">No trades in this range.</p>';
+          }
+          resultContainer.appendChild(block);
+        });
+      } else {
+        // Single-algo: legacy rendering
+        const { summary = [], long_trades = [], short_trades = [], open_positions = [] } = res;
+        if (summary.length) resultContainer.innerHTML += generateTable('Summary', summary);
+        if (long_trades.length) resultContainer.innerHTML += generateTable('Long Trades', long_trades);
+        if (short_trades.length) resultContainer.innerHTML += generateTable('Short Trades', short_trades);
+        if (open_positions.length) resultContainer.innerHTML += generateTable('Open Positions', open_positions);
+      }
+    })
+    .catch(error => {
+      console.error('❌ Error:', error);
+      resultContainer.innerHTML = '<p style="color: red;">An error occurred. Please try again later.</p>';
+    });
+  });
+
+  // ---- Helpers ----
+  function generateTable(title, data) {
+    if (!data || !data.length) return '';
+    return `
+      <h3>${title}</h3>
+      <div class="scroll-box">
+        <table>
+          <thead>
+            <tr>${Object.keys(data[0]).map(key => `<th>${escapeHtml(key)}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${data.map(row => `
+              <tr>
+                ${Object.keys(data[0]).map(k => `<td>${escapeHtml(row[k])}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function escapeHtml(v) {
+    if (v === null || v === undefined) return '';
+    return String(v)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#39;');
+  }
+
+  function getAuthToken() {
+    return document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1] || '';
+  }
+</script>
+
+{% endblock %}

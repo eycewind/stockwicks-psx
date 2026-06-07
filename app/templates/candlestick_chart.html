@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}StockWicks - Candlestick Chart{% endblock %}
+
+{% block content %}
+<style>
+  body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #0d0d2b;
+    color: white;
+    text-align: center;
+  }
+
+  .banner-heading {
+    display: inline-block;
+    background-color: #1e3a8a;
+    color: white;
+    padding: 15px 30px;
+    border-radius: 25px;
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  #chart {
+    max-width: 1000px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 10px;
+    padding: 10px;
+  }
+
+  #summary-box {
+    max-width: 1000px;
+    margin: 20px auto;
+    padding: 20px;
+    background-color: #1f1f1f;
+    border-radius: 10px;
+    color: #fff;
+    text-align: left;
+    font-size: 1rem;
+    box-shadow: 0 0 10px rgba(0,255,0,0.3);
+  }
+
+  #trade-details {
+    background-color: #2c3e50;
+    border: 1px solid white;
+    border-radius: 10px;
+    width: 80%;
+    margin: 20px auto;
+    padding: 20px;
+  }
+
+  #loading-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+  }
+
+  .spinner {
+    border: 6px solid #f3f3f3;
+    border-top: 6px solid #00c6ff;
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+</style>
+
+<div class="form-container">
+  <h1 class="banner-heading">AI Chart Analysis</h1>
+  <form id="start-form">
+    <input type="text" id="symbol" name="symbol" placeholder="Enter Symbol (e.g., SPY)" required>
+    <button type="submit">Run Analysis</button>
+  </form>
+</div>
+
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p style="margin-top: 20px; color: white; font-size: 1.2rem;">⏳ Evaluating... please wait</p>
+</div>
+
+<div id="summary-box"></div>
+
+<label for="interval-select" style="color:white; font-size:1.2rem;">Choose interval:</label>
+<select id="interval-select" style="margin-bottom: 20px;">
+  <option value="60min" selected>60min</option>
+  <option value="1D">1D</option>
+</select>
+
+<div id="chart"></div>
+<div id="trade-details"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+<script>
+  const userId = "{{ user.id }}";
+  let chart, analysis = [], summary = {};
+  const summaryBox = document.getElementById("summary-box");
+  const chartContainer = document.getElementById("chart");
+  const tradeDetails = document.getElementById("trade-details");
+  const intervalSelect = document.getElementById("interval-select");
+
+  function getAuthToken() {
+    return document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1] || '';
+  }
+
+  document.getElementById('start-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+    if (!symbol) return alert("Please enter a valid symbol");
+
+    document.getElementById('loading-overlay').style.display = 'flex';
+    summaryBox.innerHTML = '';
+    chartContainer.innerHTML = '';
+    tradeDetails.innerHTML = '';
+
+    await fetch("/auth/start-analysis", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Bearer ${getAuthToken()}`
+      },
+      body: new URLSearchParams({ symbol })
+    });
+
+    let attempts = 0;
+    const maxAttempts = 120;
+
+    const poll = setInterval(async () => {
+      attempts++;
+      const status = await fetch(`/auth/check-analysis?symbol=${symbol}`, {
+        headers: { "Authorization": `Bearer ${getAuthToken()}` }
+      }).then(res => res.json());
+
+      if (status.ready) {
+        clearInterval(poll);
+        const final = await fetch(`/auth/get-analysis?symbol=${symbol}`, {
+          headers: { "Authorization": `Bearer ${getAuthToken()}` }
+        }).then(res => res.json());
+
+        document.getElementById('loading-overlay').style.display = 'none';
+        renderAll(final, symbol);
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(poll);
+        document.getElementById('loading-overlay').style.display = 'none';
+        summaryBox.innerHTML = "<p style='color:red;'>⏰ Timeout: Analysis took too long.</p>";
+      }
+    }, 5000);
+  });
+
+  function renderAll(data, symbol) {
+    analysis = data.analysis_data.details || [];
+    summary = data.analysis_data.summary || {};
+    renderSummary(summary, symbol);
+    loadChart(intervalSelect.value, symbol);
+  }
+
+  function renderSummary(summary, symbol) {
+    const s = summary.suggested_strategy || {};
+    const color = s.action === "Buy" ? "#00ff00" : s.action === "Sell" ? "#ff4444" : "#cccccc";
+    summaryBox.style.borderLeft = `5px solid ${color}`;
+    summaryBox.innerHTML = `
+      <h3>📌 Strategy for ${symbol}</h3>
+      <p><strong>Action:</strong> ${s.action} (${s.duration})</p>
+      <p><strong>Entry:</strong> $${s.entry_price} | Exit: $${s.exit_price}</p>
+      <p><strong>Stop Loss:</strong> $${s.stop_loss}</p>
+      <p><strong>Confidence:</strong> ${s.confidence_level}%</p>
+      <p><strong>Expected Gain:</strong> ${s.expected_gain}%</p>
+      <p><strong>Commentary:</strong> ${s.commentary}</p>
+       `;
+  }
+
+  function getRecentCandles(candles, interval) {
+    if (interval === "1D") return candles.slice(-30);
+    const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
+    const filtered = candles.filter(c => new Date(c.timestamp) > cutoff);
+    return filtered.length ? filtered : candles.slice(-30);
+  }
+
+  async function loadChart(interval, symbol) {
+    const selected = analysis.find(a => a.interval === interval);
+    if (!selected) {
+      tradeDetails.innerHTML = `<p style="color:orange;">No analysis for interval ${interval}</p>`;
+      return;
+    }
+
+    const res = await fetch(`/data/${userId}/${symbol}_${interval}.json`);
+    if (!res.ok) {
+      chartContainer.innerHTML = `<p style="color:red;">No data found</p>`;
+      return;
+    }
+
+    let candles = await res.json();
+    candles = getRecentCandles(candles, interval);
+
+    const chartData = candles.map(c => ({
+      x: new Date(c.timestamp),
+      y: [c.open, c.high, c.low, c.close]
+    }));
+
+    const annots = [];
+    const { buy_zone, sell_zone, support, resistance, strategy } = selected;
+    const { stop_loss, action } = strategy || {};
+
+    if (buy_zone) annots.push({
+      y: buy_zone,
+      borderColor: '#00C851',
+      strokeDashArray: 4,
+      label: { text: action === "Sell" ? 'Short Entry' : 'Buy Target', style: { background: '#00C851', color: 'white' } }
+    });
+    if (sell_zone) annots.push({
+      y: sell_zone,
+      borderColor: '#ff4444',
+      strokeDashArray: 4,
+      label: { text: action === "Sell" ? 'Cover Short' : 'Sell Target', style: { background: '#ff4444', color: 'white' } }
+    });
+    if (stop_loss) annots.push({
+      y: stop_loss,
+      borderColor: '#000000',
+      strokeDashArray: 6,
+      label: { text: 'Stop Loss', style: { background: '#000', color: 'white' } }
+    });
+    if (support) annots.push({
+      y: support,
+      borderColor: '#33b5e5',
+      strokeDashArray: 2,
+      label: { text: 'Support', style: { background: '#33b5e5', color: 'white' } }
+    });
+    if (resistance) annots.push({
+      y: resistance,
+      borderColor: '#ffbb33',
+      strokeDashArray: 2,
+      label: { text: 'Resistance', style: { background: '#ffbb33', color: 'white' } }
+    });
+
+    const options = {
+      chart: { type: 'candlestick', height: 500, background: '#ffffff', toolbar: { show: true } },
+      title: { text: `${symbol} - ${interval}`, align: 'left', style: { color: '#000' } },
+      xaxis: { type: 'datetime', labels: { style: { colors: '#000' } } },
+      yaxis: { tooltip: { enabled: true }, labels: { style: { colors: '#000' } } },
+      tooltip: {
+        theme: 'dark',
+        custom: function({ series, seriesIndex, dataPointIndex, w }) {
+          const ohlc = w.globals.initialSeries[seriesIndex].data[dataPointIndex].y;
+          const time = new Date(w.globals.initialSeries[seriesIndex].data[dataPointIndex].x).toLocaleString("en-US", { timeZone: "America/New_York" });
+          return `
+            <div style="padding: 10px; background: #2c3e50; color: #ffffff; font-family: Poppins, sans-serif; border-radius: 5px;">
+              <strong>Time:</strong> ${time}<br/>
+              <strong>Open:</strong> ${ohlc[0]}<br/>
+              <strong>High:</strong> ${ohlc[1]}<br/>
+              <strong>Low:</strong> ${ohlc[2]}<br/>
+              <strong>Close:</strong> ${ohlc[3]}
+            </div>`;
+        }
+      },
+      series: [{ data: chartData }],
+      annotations: { yaxis: annots }
+    };
+
+    if (chart) {
+      chart.updateOptions(options);
+    } else {
+      chart = new ApexCharts(chartContainer, options);
+      chart.render();
+    }
+
+    const latestTime = candles.length ? new Date(candles[candles.length - 1].timestamp).toLocaleString("en-US", { timeZone: "America/New_York" }) : "N/A";
+
+    tradeDetails.innerHTML = `
+      <h3>${symbol} - ${interval} <span style="font-size:0.9rem;color:#aaa;">(${latestTime} EST)</span></h3>
+      <p><strong>Trend:</strong> ${selected.trend}</p>
+      <p><strong>Buy Zone:</strong> $${buy_zone}</p>
+      <p><strong>Sell Zone:</strong> $${sell_zone}</p>
+      <p><strong>Support:</strong> $${support}</p>
+      <p><strong>Resistance:</strong> $${resistance}</p>
+      <p><strong>Stop Loss:</strong> $${stop_loss}</p>
+      <p><strong>Last Close:</strong> $${selected.last_close}</p>
+      <p><strong>Strategy:</strong> ${strategy?.action} - ${strategy?.duration}</p>
+    `;
+  }
+
+  intervalSelect.addEventListener("change", () => {
+    const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+    if (symbol) loadChart(intervalSelect.value, symbol);
+  });
+</script>
+{% endblock %}

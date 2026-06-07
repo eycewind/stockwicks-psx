@@ -1,0 +1,25 @@
+from datetime import datetime, timedelta
+from app.database import SessionLocal
+from app.models.trade_position import TradePosition
+
+def main():
+    user_id = 116
+    symbol = "TSLA"
+    date = datetime(2025, 9, 26)
+    start = date
+    end = date + timedelta(days=1)
+
+    session = SessionLocal()
+    trades = session.query(TradePosition).filter(
+        TradePosition.user_id == user_id,
+        TradePosition.symbol == symbol,
+        TradePosition.entry_date_time >= start,
+        TradePosition.entry_date_time <= end,
+    ).all()
+
+    print(f"Found {len(trades)} trades")
+    for t in trades:
+        print(t.id, t.trade_type, t.entry_price, t.exit_price, t.entry_date_time, t.exit_date_time)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - My Performance
+{% endblock %}
+
+{% block content %}
+    <style>
+        body {
+            background-color: #141432;
+            color: white;
+            font-family: "Arial", sans-serif;
+        }
+
+        h1 {
+            text-align: center;
+            margin-top: 20px;
+            font-weight: bold;
+            font-size: 2.5em;
+        }
+
+        .chart-container {
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 30px;
+            margin: 30px auto;
+            max-width: 95%;
+        }
+
+        .chart-box {
+            flex: 1;
+            min-width: 450px;
+            max-width: 600px;
+            padding: 20px;
+            border-radius: 12px;
+            background-color: #1e1e50;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.6);
+            text-align: center;
+        }
+
+        .scrollable-table {
+            max-height: 400px;
+            overflow-y: auto;
+            border-radius: 10px;
+            background-color: #1e1e50;
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+            width: 95%;
+            margin: 20px auto;
+            padding: 15px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            color: white;
+            font-size: 14px;
+        }
+
+        th, td {
+            border: 1px solid #2d2d64;
+            padding: 12px;
+            text-align: center;
+        }
+
+        th {
+            background-color: #141432;
+            color: white;
+            font-weight: bold;
+        }
+
+        td {
+            background-color: #202054;
+            border-bottom: 1px solid #2d2d64;
+        }
+
+        tr:nth-child(even) td {
+            background-color: #28286a;
+        }
+
+        .filters {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .filters select {
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 1rem;
+            background-color: #28286a;
+            color: white;
+            border: 1px solid #3d3d5c;
+        }
+
+        .filters select:focus {
+            outline: none;
+            border: 1px solid #00a8cc;
+        }
+
+        .disclaimer {
+            text-align: center;
+            font-size: 13px;
+            color: #ddd;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #1e1e50;
+            border-radius: 8px;
+            width: 90%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+    </style>
+
+
+
+    <div class="container text-center">
+        <h1>My Performance Overview</h1>
+    </div>
+
+    <!-- Charts Section -->
+    <div class="chart-container">
+        <div class="chart-box">
+            <h4>Success Rate (%)</h4>
+            <canvas id="successRateChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h4>Total Profit/Loss ($)</h4>
+            <canvas id="profitChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Filter Section -->
+    <div class="filters">
+        <select class="form-control" id="filterSymbol">
+            <option value="">Filter by Symbol</option>
+            {% for symbol in trades | map(attribute='Symbol') | unique %}
+                <option value="{{ symbol }}">{{ symbol }}</option>
+            {% endfor %}
+        </select>
+        <select class="form-control" id="filterInterval">
+            <option value="">Filter by Interval</option>
+            {% for interval in trades | map(attribute='Interval') | unique %}
+                <option value="{{ interval }}">{{ interval }}</option>
+            {% endfor %}
+        </select>
+        <select class="form-control" id="filterType">
+            <option value="">Filter by Type</option>
+            {% for trade_type in trades | map(attribute='Type') | unique %}
+                <option value="{{ trade_type }}">{{ trade_type }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <!-- Scrollable Table -->
+    <div class="scrollable-table">
+        <h2 style="text-align: center; color: white;">Trade Notifications Details</h2>
+        <table id="tradesTable">
+            <thead>
+                <tr>
+                    <th>Notification Sent</th>
+                    <th>Symbol</th>
+                    <th>Interval</th>
+                    <th>Type</th>
+                    <th>Entry Price</th>
+                    <th>Exit Price</th>
+                    <th>Profit</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for trade in trades %}
+                <tr>
+                    <td>{{ trade['Timestamp'] }}</td>
+                    <td>{{ trade['Symbol'] }}</td>
+                    <td>{{ trade['Interval'] }}</td>
+                    <td>{{ trade['Type'] }}</td>
+                    <td>${{ trade['Entry Price'] }}</td>
+                    <td>${{ trade['Exit Price'] }}</td>
+                    <td>${{ trade['Profit'] }}</td>
+                    <td>{{ trade['Status'] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Disclaimer -->
+    <div class="disclaimer">
+        Disclaimer: The information on this page is for informational purposes only.
+    </div>
+
+    <!-- Include Chart.js -->
+   
+<!-- Load Chart.js and Data Labels Plugin -->
+<!-- Load Chart.js and Data Labels Plugin -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const filterSymbol = document.getElementById('filterSymbol');
+        const filterInterval = document.getElementById('filterInterval');
+        const filterType = document.getElementById('filterType');
+        const tableRows = document.querySelectorAll('#tradesTable tbody tr');
+
+        function filterRows() {
+            const symbolValue = filterSymbol.value.toLowerCase();
+            const intervalValue = filterInterval.value.toLowerCase();
+            const typeValue = filterType.value.toLowerCase();
+
+            tableRows.forEach(row => {
+                const cells = row.children;
+                const symbol = cells[1].innerText.toLowerCase();
+                const interval = cells[2].innerText.toLowerCase();
+                const type = cells[3].innerText.toLowerCase();
+
+                // Apply filtering logic
+                const matchSymbol = !symbolValue || symbol.includes(symbolValue);
+                const matchInterval = !intervalValue || interval.includes(intervalValue);
+                const matchType = !typeValue || type.includes(typeValue);
+
+                // Show row only if all selected filters match
+                row.style.display = (matchSymbol && matchInterval && matchType) ? '' : 'none';
+            });
+        }
+
+        // Attach event listeners to dropdowns
+        filterSymbol.addEventListener('change', filterRows);
+        filterInterval.addEventListener('change', filterRows);
+        filterType.addEventListener('change', filterRows);
+        
+        var ctx1 = document.getElementById('successRateChart').getContext('2d');
+        var ctx2 = document.getElementById('profitChart').getContext('2d');
+
+        var summaryData = JSON.parse('{{ summary | tojson | safe }}');
+
+        if (!summaryData || summaryData.length === 0) {
+            console.warn("No data available for charts.");
+            return;
+        }
+
+        var labels = summaryData.map(item => item['Symbol-Interval']);
+        var successRates = summaryData.map(item => item['Success_Rate']);
+        var totalProfits = summaryData.map(item => item['Total_Profit']);
+
+        // Success Rate Chart
+        new Chart(ctx1, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Success Rate (%)',
+                    data: successRates,
+                    backgroundColor: 'rgba(75, 192, 192, 0.9)',
+                    borderColor: 'rgba(255, 255, 255, 0.5)',
+                    borderWidth: 2,
+                    barThickness: 50
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `Success Rate: ${context.raw.toFixed(2)}%`;
+                            }
+                        }
+                    },
+                    datalabels: {
+                        anchor: 'end',
+                        align: 'top',
+                        color: 'white',
+                        font: { weight: 'bold' },
+                        formatter: (value) => `${value.toFixed(2)}%`
+                    }
+                },
+                scales: {
+                    y: {
+                        ticks: { color: 'white' },
+                        grid: { color: 'rgba(255, 255, 255, 0.2)' }
+                    },
+                    x: {
+                        ticks: { color: 'white' },
+                        grid: { display: false }
+                    }
+                }
+            },
+            plugins: [ChartDataLabels]
+        });
+
+        // Total Profit Chart
+        new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Total Profit ($)',
+                    data: totalProfits,
+                    backgroundColor: totalProfits.map(val => val >= 0 ? 'rgba(34, 197, 94, 0.9)' : 'rgba(255, 99, 132, 0.9)'),
+                    borderColor: 'rgba(255, 255, 255, 0.5)',
+                    borderWidth: 2,
+                    barThickness: 50
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `Profit/Loss: $${context.raw.toFixed(2)}`;
+                            }
+                        }
+                    },
+                    datalabels: {
+                        anchor: 'end',
+                        align: 'top',
+                        color: 'white',
+                        font: { weight: 'bold' },
+                        formatter: (value) => `$${value.toFixed(2)}`
+                    }
+                },
+                scales: {
+                    y: {
+                        ticks: { color: 'white' },
+                        grid: { color: 'rgba(255, 255, 255, 0.2)' }
+                    },
+                    x: {
+                        ticks: { color: 'white' },
+                        grid: { display: false }
+                    }
+                }
+            },
+            plugins: [ChartDataLabels]
+        });
+    });
+</script>
+
+    
+{% endblock %}

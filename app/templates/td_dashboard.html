@@ -1,0 +1,189 @@
+<!---- dashbaord.html-->
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - Dashboard
+{% endblock %}
+
+{% block content %}
+<style>
+    h1 {
+        color: white;
+        font-size: 2.2rem;
+        font-weight: 600;
+        text-shadow: 2px 2px 6px rgba(255, 255, 255, 0.2);
+        margin-bottom: 20px;
+    }
+
+    .card {
+        background: #161b22;
+        border: 1px solid #2d3748;
+        border-radius: 12px;
+        color: #e5e7eb;
+        transition: transform 0.2s, box-shadow 0.2s;
+        margin-bottom: 20px;
+    }
+    .card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 16px rgba(34, 211, 238, 0.3);
+    }
+    .card h4 {
+        color: #22d3ee;
+        font-weight: 600;
+    }
+
+    .alert-success {
+        background-color: #198754;
+        color: white;
+        padding: 12px 15px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        font-weight: 500;
+    }
+
+    .news-item {
+        margin-bottom: 12px;
+    }
+    .news-item img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 6px;
+        margin-top: 5px;
+    }
+    .news-item small {
+        color: #9ca3af;
+        display: block;
+        margin-bottom: 4px;
+    }
+
+    /* ✅ Profit/Loss colors */
+    .pnl-positive {
+        color: #22c55e; /* green-500 */
+        font-weight: 600;
+    }
+    .pnl-negative {
+        color: #ef4444; /* red-500 */
+        font-weight: 600;
+    }
+</style>
+
+<div class="container mt-4">
+
+    <!-- Banner -->
+    <div class="mb-4 text-center">
+        <img src="{{ url_for('static', path='images/stockwick3_banner.png') }}" 
+             alt="StockWicks Banner" class="img-fluid rounded shadow" 
+             style="max-height:120px;">
+    </div>
+
+    <h1>Welcome back, {{ user.first_name }}!</h1>
+
+    {% if show_success %}
+    <div class="alert-success">
+        🎉 Your subscription was successfully updated to 
+        <span style="text-transform: capitalize;">{{ plan.replace('_', ' ') }}</span>.
+    </div>
+    {% endif %}
+
+    <!-- Stock Bot History -->
+    <div class="card shadow-sm p-3">
+        <h4>📊 Stock Bot History</h4>
+        {% if stock_bot_history and stock_bot_history|length > 0 %}
+            <table class="table table-dark table-striped table-bordered mt-3">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Entry</th>
+                        <th>Exit</th>
+                        <th>P/L</th>
+                        <th>Entry Time</th>
+                        <th>Exit Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in stock_bot_history[:5] %}
+                    <tr>
+                        <td>{{ row.symbol }}</td>
+                        <td>{{ row.side }}</td>
+                        <td>{{ row.qty }}</td>
+                        <td>{{ row.entry }}</td>
+                        <td>{{ row.exit }}</td>
+                        <td class="{% if row.pnl|float >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+                            {{ row.pnl }}
+                        </td>
+                        <td>{{ row.entry_time }}</td>
+                        <td>{{ row.exit_time }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No stock bot history found.</p>
+        {% endif %}
+    </div>
+
+    <!-- Option Bot History -->
+    <div class="card shadow-sm p-3">
+        <h4>🤖 Option Bot History</h4>
+        {% if option_bot_history and option_bot_history|length > 0 %}
+            <table class="table table-dark table-striped table-bordered mt-3">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Entry</th>
+                        <th>Exit</th>
+                        <th>P/L</th>
+                        <th>Entry Time</th>
+                        <th>Exit Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in option_bot_history[:5] %}
+                    <tr>
+                        <td>{{ row.symbol }}</td>
+                        <td>{{ row.side }}</td>
+                        <td>{{ row.qty }}</td>
+                        <td>{{ row.entry }}</td>
+                        <td>{{ row.exit }}</td>
+                        <td class="{% if row.pnl|float >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+                            {{ row.pnl }}
+                        </td>
+                        <td>{{ row.entry_time }}</td>
+                        <td>{{ row.exit_time }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No option bot history found.</p>
+        {% endif %}
+    </div>
+    <a class="btn" href="{{ url_for('trade_ui') }}">Open Trade Console</a>
+    <!-- Latest News -->
+    <div class="card shadow-sm p-3">
+        <h4>📰 Latest News</h4>
+        {% if news and news|length > 0 %}
+            <ul class="list-unstyled">
+            {% for item in news[:5] %}
+                <li class="news-item">
+                    <a href="{{ item.url }}" target="_blank"><strong>{{ item.headline }}</strong></a>
+                    <small>{{ item.source }} | {{ item.datetime }}</small>
+                    {% if item.image %}
+                        <img src="{{ item.image }}" alt="news image">
+                    {% endif %}
+                    <p>{{ item.summary }}</p>
+                </li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p>No market news available right now.</p>
+        {% endif %}
+    </div>
+
+</div>
+
+{% endblock %}

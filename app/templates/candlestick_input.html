@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #0d0d2b;
+    color: white;
+    text-align: center;
+  }
+
+  .banner-heading {
+    display: inline-block;
+    background-color: #1e3a8a;
+    color: white;
+    padding: 15px 30px;
+    border-radius: 25px;
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 20px;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+  }
+
+  .form-container {
+    background-color: #1b1b3a;
+    padding: 25px;
+    border-radius: 12px;
+    width: 60%;
+    margin: auto;
+    box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
+  }
+
+  .form-container input {
+    width: 80%;
+    padding: 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 1rem;
+    text-align: center;
+  }
+
+  .form-container button {
+    background-color: #00c6ff;
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    font-size: 1rem;
+    font-weight: bold;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .form-container button:hover {
+    background-color: #009ac9;
+    transform: scale(1.05);
+  }
+
+  #loading-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background-color: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+  }
+
+  .spinner {
+    border: 6px solid #f3f3f3;
+    border-top: 6px solid #00c6ff;
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  .result-container {
+    margin-top: 20px;
+    background-color: #2c3e50;
+    padding: 20px;
+    border-radius: 10px;
+    color: white;
+    max-width: 80%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .summary-box.scroll-box {
+    max-height: 400px;
+    overflow-y: auto;
+    text-align: left;
+    padding: 10px;
+    background-color: #1f2937;
+    border-radius: 8px;
+  }
+</style>
+
+<!-- Form -->
+<div class="form-container">
+  <h1 class="banner-heading">Candlestick Chart Analysis</h1>
+  <form id="chartForm">
+    <input type="text" id="symbol" placeholder="Enter Symbol (e.g., SPY)" required />
+    <button type="submit">Run Analysis</button>
+  </form>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p style="margin-top: 20px; color: white; font-size: 1.2rem;">
+    ⏳ Evaluating... this may take up to 2 minutes
+  </p>
+</div>
+
+<!-- Results -->
+<div id="resultContainer" class="result-container" style="display: none;">
+  <h2>Results</h2>
+  <div id="resultBox" class="summary-box scroll-box"></div>
+</div>
+
+<script>
+function getAuthToken() {
+  return document.cookie.split('; ').find(row => row.startsWith('access_token='))?.split('=')[1] || '';
+}
+
+document.getElementById('chartForm').addEventListener('submit', async function (event) {
+  event.preventDefault();
+
+  const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+  if (!symbol) return alert("Please enter a symbol");
+
+  const overlay = document.getElementById('loading-overlay');
+  const resultBox = document.getElementById('resultBox');
+  const resultContainer = document.getElementById('resultContainer');
+
+  overlay.style.display = 'flex';
+  resultContainer.style.display = 'block';
+  resultBox.innerHTML = "⏳ Starting analysis...";
+
+  // Start analysis
+  await fetch("/auth/start-analysis", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Authorization": `Bearer ${getAuthToken()}`
+    },
+    body: new URLSearchParams({ symbol })
+  });
+
+  // Polling logic
+  let attempts = 0;
+  const maxAttempts = 60;
+
+  const poll = setInterval(async () => {
+    attempts++;
+    const status = await fetch(`/auth/check-analysis?symbol=${symbol}`, {
+      headers: { "Authorization": `Bearer ${getAuthToken()}` }
+    }).then(res => res.json());
+
+    if (status.ready) {
+      clearInterval(poll);
+      const final = await fetch(`/auth/get-analysis?symbol=${symbol}`, {
+        headers: { "Authorization": `Bearer ${getAuthToken()}` }
+      }).then(res => res.json());
+
+      overlay.style.display = 'none';
+      resultBox.innerHTML = `<pre>${JSON.stringify(final, null, 2)}</pre>`;
+    }
+
+    if (attempts >= maxAttempts) {
+      clearInterval(poll);
+      overlay.style.display = 'none';
+      resultBox.innerHTML = "<p style='color:red;'>⏰ Timeout: Analysis took too long.</p>";
+    }
+  }, 2000);
+});
+</script>
+{% endblock %}

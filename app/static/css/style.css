@@ -1,0 +1,48 @@
+:root {
+    --primary-color: #007bff;
+    --background-color: #ffffff;
+    --text-color: #333;
+    --navbar-bg: #f8f9fa;
+    --navbar-text: #007bff;
+}
+
+body {
+    background-color: var(--background-color);
+    color: var(--text-color);
+    font-family: Arial, sans-serif;
+}
+
+.navbar {
+    background-color: var(--navbar-bg);
+    padding: 10px;
+}
+
+.navbar a {
+    color: var(--navbar-text);
+    text-decoration: none;
+    padding: 10px 15px;
+}
+
+.container {
+    width: 90%;
+    max-width: 1200px;
+    margin: auto;
+    padding: 20px;
+}
+
+.footer {
+    text-align: center;
+    padding: 10px;
+    background-color: var(--navbar-bg);
+    margin-top: 20px;
+}
+
+.btn {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: var(--primary-color);
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    margin-top: 20px;
+}

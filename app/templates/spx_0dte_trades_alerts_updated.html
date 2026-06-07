@@ -1,0 +1,415 @@
+{# /var/www/stockwicks/app/templates/spx_0dte_bot.html #}
+{% extends "base.html" %}
+
+{% block title %}StockWicks - SPX 0DTE Bot{% endblock %}
+
+{% block content %}
+<style>
+  body { background:#0d0d2b; font-family:'Poppins',sans-serif; color:#fff; }
+  .container { width: 90%; max-width: 1400px; margin: auto; text-align: center; }
+  h1 { font-size: 2.2rem; margin-top: 30px; color: #4fd1c5; text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
+  .subtitle { color:#a7a7c7; margin-top: 6px; margin-bottom: 18px; }
+
+  .balance-box {
+    margin: 16px auto 8px;
+    background:#1b1b3a;
+    padding: 18px;
+    border-radius:12px;
+    box-shadow:0 4px 10px rgba(0,0,0,.4);
+    width: min(720px, 92%);
+    font-size:1.2rem;
+    font-weight:700;
+    color:#e5e7eb;
+    line-height: 1.35;
+  }
+
+  .section-title { margin-top: 26px; color:#4fd1c5; font-size:1.55rem; font-weight:800; }
+
+  table.trade-table {
+    width: 100%;
+    margin: 14px auto;
+    border-collapse: collapse;
+    background:#1b1b3a;
+    color:#fff;
+    border-radius:8px;
+    overflow:hidden;
+  }
+  table.trade-table th { background:#2d2d5c; padding:12px; font-size: 13px; }
+  table.trade-table td { padding:10px; border-bottom:1px solid #333; vertical-align:top; font-size: 13px; }
+  .no-trades { color:#aaa; padding:18px; text-align:center; }
+
+  .pill {
+    display:inline-block;
+    padding:4px 10px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:800;
+    letter-spacing: 0.2px;
+  }
+  .pill-green { background: rgba(111,242,46,0.15); border:1px solid rgba(111,242,46,0.35); color:#6ff22e; }
+  .pill-red   { background: rgba(255,102,102,0.12); border:1px solid rgba(255,102,102,0.35); color:#ff6666; }
+  .pill-cyan  { background: rgba(79,209,197,0.12); border:1px solid rgba(79,209,197,0.35); color:#4fd1c5; }
+  .pill-gray  { background: rgba(167,167,199,0.10); border:1px solid rgba(167,167,199,0.25); color:#cfcfe6; }
+
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+  .summary-card {
+    width: 100%;
+    margin: 10px auto 0;
+    background:#151533;
+    border:1px solid #2a2a55;
+    border-radius:12px;
+    padding:18px;
+    box-shadow:0 4px 12px rgba(0,0,0,.35);
+    text-align:left;
+  }
+  .summary-header { display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:12px; }
+  .summary-header h3 { color:#4fd1c5; margin:0; font-size: 1.15rem; }
+  .summary-grid { display:grid; grid-template-columns: repeat(6, 1fr); gap:12px; margin-top:6px; }
+  .metric { background:#1b1b3a; border-radius:10px; padding:12px; }
+  .metric .label { color:#a7a7c7; font-size:12px; margin-bottom:6px; }
+  .metric .value { font-size:18px; font-weight:800; }
+  .value.positive { color: #6ff22e; }
+  .value.negative { color: #ff6666; }
+  @media (max-width: 1100px){ .summary-grid { grid-template-columns: repeat(2, 1fr); } }
+
+  .right-note { color:#a7a7c7; font-size: 12px; opacity: 0.9; }
+
+  /* P/L cells */
+  .pl-cell { font-weight: 900; }
+  .pl-pos { color:#6ff22e; }
+  .pl-neg { color:#ff6666; }
+
+  /* Manual close button */
+  .btn-close-trade {
+    background:#ef4444;
+    border: 1px solid rgba(255,255,255,0.10);
+    color:#fff;
+    padding: 6px 10px;
+    border-radius: 10px;
+    font-weight: 900;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn-close-trade:hover { filter: brightness(1.05); }
+
+  .alert-card {
+    margin: 16px auto 8px;
+    background:#151533;
+    border:1px solid #2a2a55;
+    padding: 18px;
+    border-radius:12px;
+    box-shadow:0 4px 12px rgba(0,0,0,.35);
+    width: min(900px, 100%);
+    text-align:left;
+  }
+  .alert-actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; }
+  .btn-alert-subscribe,
+  .btn-alert-unsubscribe {
+    border: 1px solid rgba(255,255,255,0.12);
+    color:#fff;
+    padding: 8px 14px;
+    border-radius: 10px;
+    font-weight: 900;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn-alert-subscribe { background:#0f9d58; }
+  .btn-alert-unsubscribe { background:#6b7280; }
+  .alert-msg {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .alert-msg.ok { background: rgba(111,242,46,0.12); border:1px solid rgba(111,242,46,0.35); color:#6ff22e; }
+  .alert-msg.warn { background: rgba(255,193,7,0.12); border:1px solid rgba(255,193,7,0.35); color:#ffd166; }
+  .alert-msg.err { background: rgba(255,102,102,0.12); border:1px solid rgba(255,102,102,0.35); color:#ff6666; }
+
+</style>
+
+<div class="container">
+  <h1>🧠 SPX 0DTE BOT</h1>
+  <div class="subtitle">
+    Runs automatically every <b>5 minutes</b> • Trades <b>1 contract</b> • Exits by TP/SL/TIME/EOD
+  </div>
+
+  <!-- Top Status -->
+  <div class="balance-box">
+    <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; justify-content:space-between;">
+      <div>
+        <div style="font-size:14px; color:#a7a7c7; font-weight:700;">Bot Status</div>
+        <div style="font-size:18px; font-weight:900;">
+          <span class="pill pill-cyan">AUTO RUNNING</span>
+          <span class="pill pill-gray" style="margin-left:8px;">SPX • 0DTE</span>
+        </div>
+      </div>
+      <div class="right-note">Page auto-refreshes every 60s.</div>
+    </div>
+  </div>
+
+
+  <!-- Email Alerts -->
+  <div class="alert-card">
+    <div class="alert-actions">
+      <div>
+        <div style="font-size:16px; font-weight:900; color:#4fd1c5;">📧 SPX 0DTE Email Alerts</div>
+        <div style="font-size:13px; color:#a7a7c7; margin-top:4px;">
+          Get an email when the shared SPX 0DTE bot opens or closes a trade.
+          {% if spx_alert_email %}<span style="margin-left:6px;">Email: <b>{{ spx_alert_email }}</b></span>{% endif %}
+        </div>
+      </div>
+      <div>
+        {% if spx_alert_subscribed %}
+          <form method="POST" action="{{ url_for('spx_0dte_alerts_unsubscribe') }}" style="display:inline;">
+            <button class="btn-alert-unsubscribe" type="submit">Unsubscribe</button>
+          </form>
+        {% else %}
+          <form method="POST" action="{{ url_for('spx_0dte_alerts_subscribe') }}" style="display:inline;">
+            <button class="btn-alert-subscribe" type="submit">Subscribe</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if spx_alert_message == 'SUBSCRIBED' %}
+      <div class="alert-msg ok">Subscribed successfully. You will now receive SPX 0DTE open and close emails.</div>
+    {% elif spx_alert_message == 'UNSUBSCRIBED' %}
+      <div class="alert-msg ok">Unsubscribed successfully. SPX 0DTE emails are now off.</div>
+    {% elif spx_alert_message == 'NO_EMAIL' %}
+      <div class="alert-msg warn">No email found on your account. Add an email address to subscribe.</div>
+    {% elif spx_alert_message == 'ERROR' %}
+      <div class="alert-msg err">Something went wrong while updating your SPX 0DTE alert subscription.</div>
+    {% endif %}
+  </div>
+
+
+  <!-- Performance Summary -->
+  <div class="summary-card" aria-live="polite">
+    <div class="summary-header">
+      <h3>📊 Performance Summary</h3>
+      <div class="right-note">History rows shown: {{ history|length }}</div>
+    </div>
+
+    {% set net = summary.net if summary and summary.net is not none else 0.0 %}
+    {% set wr  = summary.win_rate if summary and summary.win_rate is not none else 0.0 %}
+    {% set wins = summary.wins if summary and summary.wins is not none else 0 %}
+    {% set losses = summary.losses if summary and summary.losses is not none else 0 %}
+    {% set total = summary.total if summary and summary.total is not none else 0 %}
+
+    <div class="summary-grid">
+      <div class="metric">
+        <div class="label">Open Trades</div>
+        <div class="value">{{ open_trades|length }}</div>
+      </div>
+
+      <div class="metric">
+        <div class="label">Trades</div>
+        <div class="value">{{ total }}</div>
+      </div>
+
+      <div class="metric">
+        <div class="label">Wins</div>
+        <div class="value positive">{{ wins }}</div>
+      </div>
+
+      <div class="metric">
+        <div class="label">Losses</div>
+        <div class="value negative">{{ losses }}</div>
+      </div>
+
+      <div class="metric">
+        <div class="label">Win Rate</div>
+        <div class="value">{{ '%.1f'|format(wr) }}%</div>
+      </div>
+
+      <div class="metric">
+        <div class="label">Net P/L</div>
+        <div class="value {% if net >= 0 %}positive{% else %}negative{% endif %}">
+          {% if net >= 0 %}+{% endif %}${{ '%.2f'|format(net) }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Open Trades -->
+  <h2 class="section-title">📌 Open SPX Trades</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>OCC</th>
+        <th>Side</th>
+        <th>Strike</th>
+        <th>Exp</th>
+        <th>Qty</th>
+        <th>Entry</th>
+        <th>Mark</th>
+        <th>TP1</th>
+        <th>SL</th>
+        <th>Opened (ET)</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if open_trades %}
+        {% for t in open_trades %}
+          <tr>
+            <td class="mono">{{ t.occ_symbol }}</td>
+            <td>
+              {% if (t.position_side or '')|upper == 'SELL' %}
+                <span class="pill pill-red">SELL</span>
+              {% else %}
+                <span class="pill pill-green">BUY</span>
+              {% endif %}
+              <span style="margin-left:6px; font-weight:800;">{{ (t.put_call or '')|upper }}</span>
+            </td>
+            <td>${{ '%.2f'|format(t.strike or 0.0) }}</td>
+            <td>{{ t.expiration }}</td>
+            <td>{{ t.quantity }}</td>
+            <td>${{ '%.2f'|format(t.entry_price or 0.0) }}</td>
+            <td>
+              {% if t.current_mark_price is not none %}
+                ${{ '%.2f'|format(t.current_mark_price) }}
+              {% else %}
+                <span style="color:#a7a7c7;">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if t.planned_take_profit_1 is not none %}
+                ${{ '%.2f'|format(t.planned_take_profit_1) }}
+              {% else %}
+                <span style="color:#a7a7c7;">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if t.planned_stop_loss is not none %}
+                ${{ '%.2f'|format(t.planned_stop_loss) }}
+              {% else %}
+                <span style="color:#a7a7c7;">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {{ t.opened_at_et if t.opened_at_et else '—' }}
+            </td>
+            <td>
+              <form method="POST" action="{{ url_for('spx0dte_close_trade') }}" style="display:inline;"
+                    onsubmit="return confirm('Close this trade now?');">
+                <input type="hidden" name="trade_id" value="{{ t.id }}">
+                <button class="btn-close-trade" type="submit">Close</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="11" class="no-trades">No open SPX trades.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <!-- Recent Picks -->
+  <h2 class="section-title">🧠 Recent Picks (Read-only)</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Run Date</th>
+        <th>Mode</th>
+        <th>Side</th>
+        <th>Strike</th>
+        <th>Exp</th>
+        <th>Entry</th>
+        <th>TP1</th>
+        <th>SL</th>
+        <th>Confidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if picks %}
+        {% for p in picks %}
+          <tr>
+            <td>{{ p.run_date }}</td>
+            <td><span class="pill pill-gray">{{ (p.mode or 'both')|upper }}</span></td>
+            <td>
+              {% if (p.position_side or '')|upper == 'SELL' %}
+                <span class="pill pill-red">SELL</span>
+              {% else %}
+                <span class="pill pill-green">BUY</span>
+              {% endif %}
+              <span style="margin-left:6px; font-weight:800;">{{ (p.put_call or '')|upper }}</span>
+            </td>
+            <td>${{ '%.2f'|format(p.strike or 0.0) }}</td>
+            <td>{{ p.expiration }}</td>
+            <td>${{ '%.2f'|format(p.entry_price or 0.0) }}</td>
+            <td>
+              {% if p.target1 is not none %}${{ '%.2f'|format(p.target1) }}{% else %}<span style="color:#a7a7c7;">—</span>{% endif %}
+            </td>
+            <td>
+              {% if p.stop is not none %}${{ '%.2f'|format(p.stop) }}{% else %}<span style="color:#a7a7c7;">—</span>{% endif %}
+            </td>
+            <td>
+              {% if p.confidence_level %}<span class="pill pill-cyan">{{ p.confidence_level }}</span>{% endif %}
+              {% if p.confidence is not none %}
+                <span style="margin-left:6px; color:#cfcfe6;">({{ '%.0f'|format(p.confidence) }}/100)</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="9" class="no-trades">No picks yet.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <!-- Trade History -->
+  <h2 class="section-title">📜 SPX Trade History</h2>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Entry (ET)</th>
+        <th>Exit (ET)</th>
+        <th>Side</th>
+        <th>Strike</th>
+        <th>Exp</th>
+        <th>Entry</th>
+        <th>Exit</th>
+        <th>Reason</th>
+        <th>P/L ($)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if history %}
+        {% for h in history %}
+          {% set pl = (h.pnl_usd if h.pnl_usd is not none else 0.0) %}
+          {% set pl_class = "pl-pos" if pl >= 0 else "pl-neg" %}
+          <tr>
+            <td>{{ h.opened_at_et if h.opened_at_et else '—' }}</td>
+            <td>{{ h.closed_at_et if h.closed_at_et else '—' }}</td>
+            <td>
+              {% if (h.position_side or '')|upper == 'SELL' %}
+                <span class="pill pill-red">SELL</span>
+              {% else %}
+                <span class="pill pill-green">BUY</span>
+              {% endif %}
+              <span style="margin-left:6px; font-weight:800;">{{ (h.put_call or '')|upper }}</span>
+            </td>
+            <td>${{ '%.2f'|format(h.strike or 0.0) }}</td>
+            <td>{{ h.expiration }}</td>
+            <td>${{ '%.2f'|format(h.entry_price or 0.0) }}</td>
+            <td>${{ '%.2f'|format(h.exit_price or 0.0) }}</td>
+            <td><span class="pill pill-gray">{{ h.close_reason or '—' }}</span></td>
+            <td class="pl-cell {{ pl_class }}">
+              {% if pl >= 0 %}+{% endif %}${{ '%.2f'|format(pl) }}
+            </td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="8" class="no-trades">No history yet.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  setTimeout(() => { window.location.reload(); }, 60000);
+</script>
+{% endblock %}

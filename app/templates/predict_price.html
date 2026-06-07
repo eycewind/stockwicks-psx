@@ -1,0 +1,683 @@
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - Predict Price
+{% endblock %}
+
+{% block content %}
+<style>
+  body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #0d0d2b;
+    color: white;
+    text-align: center;
+  }
+
+  .banner-heading {
+    display: inline-block;
+    background-color: #1e3a8a;
+    color: white;
+    padding: 12px 22px;
+    border-radius: 14px;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+
+  .form-container {
+    background-color: #1b1b3a;
+    padding: 18px;
+    border-radius: 12px;
+    width: min(720px, 96%);
+    margin: 0 auto 10px auto;
+    box-shadow: 0 4px 10px rgba(224, 222, 222, 0.12);
+    text-align: left;
+  }
+  .form-container label { font-weight: 600; }
+  .form-container .form-control {
+    height: 46px;
+    font-size: 1.05rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    text-align: center;
+  }
+  .form-container .btn {
+    height: 46px;
+    font-weight: 700;
+  }
+
+  /* Summary verdict */
+  .summary-card {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #ccc;
+    border-radius: 12px;
+  }
+
+  /* Signal badges */
+  .signal-buy {
+    background: linear-gradient(135deg, #10b981, #34d399);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+  .signal-short {
+    background: linear-gradient(135deg, #ef4444, #f87171);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+  .signal-avoid {
+    background: linear-gradient(135deg, #6b7280, #9ca3af);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+  /* Trading levels */
+  .trading-levels {
+    background: #1e293b;
+    border-radius: 10px;
+    padding: 15px;
+    margin: 10px 0;
+  }
+
+  .level-buy { border-left: 4px solid #10b981; }
+  .level-short { border-left: 4px solid #ef4444; }
+  .level-avoid { border-left: 4px solid #6b7280; }
+
+  /* Action cards */
+  .action-card {
+    background:#dfe0e3;
+    border:1px solid #2b2f65;
+    border-radius:14px;
+  }
+  .action-card .card-body { text-align:left; }
+  .action-card .badge { font-weight:600; }
+  .action-card .progress { height: 8px; }
+
+  /* Trading recommendation card */
+  .trading-recommendation {
+    border-radius: 12px;
+    margin: 20px 0;
+  }
+
+  .recommendation-buy {
+    border: 2px solid #10b981;
+    background: linear-gradient(135deg, #064e3b, #065f46);
+  }
+
+  .recommendation-short {
+    border: 2px solid #ef4444;
+    background: linear-gradient(135deg, #7f1d1d, #991b1b);
+  }
+
+  .recommendation-avoid {
+    border: 2px solid #6b7280;
+    background: linear-gradient(135deg, #374151, #4b5563);
+  }
+
+  .trading-price {
+    font-size: 1.3rem;
+    font-weight: bold;
+    margin: 5px 0;
+  }
+
+  .price-buy { color: #10b981; }
+  .price-short { color: #ef4444; }
+  .price-avoid { color: #6b7280; }
+
+  /* Advanced table */
+  .table-dark thead th { background:#1e3a8a; border-color:#2b2f65; }
+  .table-dark td, .table-dark th { border-color:#2b2f65; }
+  .table-dark tbody tr:nth-child(even) { background-color:#1a1f48; }
+  .table-dark tbody tr:hover { background-color:#222a62; }
+
+  .legend { color:#aab2ff; }
+
+  @media (max-width: 576px){
+    .banner-heading { font-size: 1.45rem; }
+    .summary-card .fs-5 { font-size: 1.05rem !important; }
+    .trading-price { font-size: 1.1rem; }
+  }
+</style>
+
+<div class="container text-center">
+  <h1 class="banner-heading">Predict Stock Price</h1>
+  <div class="text-muted mb-3">www.stockwicks.com</div>
+
+  <!-- Search -->
+  <div class="form-container">
+    <form id="predictForm" class="row g-2 align-items-end">
+      <div class="col-12 col-md-8">
+        <label class="form-label">Enter Stock Symbol</label>
+        <input class="form-control" type="text" id="symbol" placeholder="COIN or /ESH26" required>
+      </div>
+      <div class="col-12 col-md-4">
+        <button class="btn btn-primary w-100" type="submit">Predict</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Results -->
+  <div id="resultContainer" class="mt-3">
+    <p>Enter a symbol to see predictions.</p>
+  </div>
+</div>
+
+<script>
+  // ---------- Helpers ----------
+  const INTERVALS = ['5min', '15min', '30min', '1d'];
+
+  function labelForInterval(i){
+    const k = (i || '').toLowerCase();
+    if (k === '5min' ) return 'Scalp (minutes)';
+    if (k === '15min') return 'Day Trade (same day)';
+    if (k === '30min') return 'Swing (1–2 days)';
+    if (k === '1d'   ) return 'Swing (1–4 weeks)';
+    return i || 'Unknown';
+  }
+
+  function timeframeHint(i){
+    const k = (i || '').toLowerCase();
+    if (k === '5min' ) return 'Fastest signals; minutes to hours.';
+    if (k === '15min') return 'Intraday focus; hours.';
+    if (k === '30min') return 'Short swing; 1–2 days possible.';
+    if (k === '1d'   ) return 'Swing outlook; days to a few weeks.';
+    return 'Model signal for this timeframe.';
+  }
+
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+  function toNum(v){
+    if (v == null || v === '' || v === 'N/A') return null;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  function fmt2(v){
+    if (v == null || v === 'N/A') return 'N/A';
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n.toFixed(2) : 'N/A';
+  }
+
+  // Regex extractor
+  function extractValue(text, regex) {
+    if (!text) return "N/A";
+    const match = text.match(regex);
+    return match && match[1] ? match[1].trim() : "N/A";
+  }
+
+  // ---------- Risk/Reward computation ----------
+  function computeRiskReward(row) {
+    const entry = toNum(row.entry);
+    const target = toNum(row.target);
+    const stop = toNum(row.stopLoss);
+    if (entry == null || target == null || stop == null) return null;
+
+    const act = (row.action || '').toUpperCase();
+    let rr = null;
+
+    if (act === 'BUY') {
+      if (target > entry && stop < entry) {
+        const reward = target - entry;
+        const risk = entry - stop;
+        if (risk > 0) rr = reward / risk;
+      }
+    } else if (act === 'SELL' || act === 'SHORT') {
+      if (target < entry && stop > entry) {
+        const reward = entry - target;
+        const risk = stop - entry;
+        if (risk > 0) rr = reward / risk;
+      }
+    }
+
+    if (rr == null) return null;
+    return `${rr.toFixed(2)}:1`;
+  }
+
+  // ---------- Enhanced Parsing ----------
+  function parseEnhancedPrediction(interval, text){
+    if (!text || /^pending\.{0,3}$/i.test(text.trim())) return null;
+
+    const obj = {
+      interval,
+      symbol: extractValue(text, /Symbol:\s*([^\n]+)/i),
+      action: extractValue(text, /Action:\s*([^\n]+)/i) || 'UNKNOWN',
+      confidence: parseInt(extractValue(text, /Confidence:\s*([\d]+)%/i)) || 0,
+      score: toNum(extractValue(text, /Score:\s*([-+]?\d+(?:\.\d+)?)/i)),
+      currentPrice: toNum(extractValue(text, /Current Price:\s*([-\d.]+)/i)),
+      predictedHigh: toNum(extractValue(text, /Predicted High:\s*([-\d.]+)/i)),
+      predictedLow: toNum(extractValue(text, /Predicted Low:\s*([-\d.]+)/i)),
+      predictedClose: toNum(extractValue(text, /Predicted Close:\s*([-\d.]+)/i)),
+      support: toNum(extractValue(text, /Support:\s*([-\d.]+)/i)),
+      resistance: toNum(extractValue(text, /Resistance:\s*([-\d.]+)/i)),
+      momentumScore: toNum(extractValue(text, /Momentum Score:\s*([-+]?\d+(?:\.\d+)?)/i)),
+      volatilityRegime: toNum(extractValue(text, /Volatility Regime:\s*([-+]?\d+(?:\.\d+)?)/i)),
+      trendStrength: toNum(extractValue(text, /Trend Strength:\s*([-+]?\d+(?:\.\d+)?)/i)),
+      commentary: extractValue(text, /Market Commentary:\s*(.+)/i) || 'No commentary available'
+    };
+
+    const act = (obj.action || '').toUpperCase();
+    const isTradeAction = (act === 'BUY' || act === 'SELL' || act === 'SHORT');
+
+    if (isTradeAction) {
+      obj.entry = toNum(extractValue(text, /Entry Price:\s*([-\d.]+)/i))
+               ?? toNum(extractValue(text, /Entry:\s*([-\d.]+)/i));
+      obj.target = toNum(extractValue(text, /Target Price:\s*([-\d.]+)/i))
+                ?? toNum(extractValue(text, /Target:\s*([-\d.]+)/i));
+      obj.stopLoss = toNum(extractValue(text, /Stop Loss:\s*([-\d.]+)/i))
+                  ?? toNum(extractValue(text, /Stop:\s*([-\d.]+)/i));
+      obj.riskReward = extractValue(text, /Risk\/Reward:\s*([\d.]+:1)/i);
+      obj.timeframe = extractValue(text, /Timeframe:\s*([^\n]+)/i);
+
+      if (obj.entry == null) obj.entry = obj.currentPrice;
+
+      if (obj.target == null) {
+        if (obj.predictedClose != null) obj.target = obj.predictedClose;
+        else if (act === 'BUY') obj.target = obj.resistance ?? obj.currentPrice;
+        else obj.target = obj.support ?? obj.currentPrice;
+      }
+
+      if (obj.stopLoss == null) {
+        if (act === 'BUY') {
+          if (obj.support != null && obj.support < obj.entry) obj.stopLoss = obj.support;
+          else obj.stopLoss = obj.entry != null ? obj.entry * 0.985 : null;
+        } else {
+          if (obj.resistance != null && obj.resistance > obj.entry) obj.stopLoss = obj.resistance;
+          else obj.stopLoss = obj.entry != null ? obj.entry * 1.015 : null;
+        }
+      }
+
+      if (!obj.riskReward || obj.riskReward === 'N/A') {
+        const rr = computeRiskReward(obj);
+        if (rr) obj.riskReward = rr;
+      }
+
+    } else {
+      obj.reason = extractValue(text, /Reason:\s*([^\n]+)/i);
+      obj.suggestion = extractValue(text, /Suggestion:\s*([^\n]+)/i);
+      obj.nextCheck = extractValue(text, /Next Check:\s*([^\n]+)/i);
+    }
+
+    if (act === 'BUY') {
+      obj.badgeClass = 'signal-buy';
+      obj.weight = 1.5;
+      obj.icon = '📈';
+    } else if (act === 'SELL' || act === 'SHORT') {
+      obj.badgeClass = 'signal-short';
+      obj.weight = -1.5;
+      obj.icon = '📉';
+    } else {
+      obj.badgeClass = 'signal-avoid';
+      obj.weight = 0;
+      obj.icon = '⏸️';
+    }
+
+    return obj;
+  }
+
+  function computeOverall(rows){
+    if (!rows.length) return { verdict:'AVOID', confidence:50, updated:null };
+
+    const sum = rows.reduce((a,r) => a + (r.weight || 0), 0);
+    let verdict = 'AVOID';
+
+    if (sum >= 2) verdict = 'BUY';
+    else if (sum <= -2) verdict = 'SHORT';
+
+    const avgConf = rows.reduce((a,r) => a + (r.confidence || 0), 0) / rows.length;
+    const confidence = Math.round(avgConf);
+
+    return { verdict, confidence, updated: new Date().toLocaleString() };
+  }
+
+  function pickPrimaryRow(overall, rows) {
+    const act = (overall.verdict || '').toUpperCase();
+
+    let candidates = rows.filter(r => {
+      const a = (r.action || '').toUpperCase();
+      if (act === 'BUY') return a === 'BUY';
+      if (act === 'SHORT') return a === 'SHORT' || a === 'SELL';
+      return true;
+    });
+    if (!candidates.length) candidates = rows.slice();
+
+    const preferredOrder = ['30min', '15min', '5min', '1d'];
+    const idx = iv => {
+      const k = (iv || '').toLowerCase();
+      const i = preferredOrder.indexOf(k);
+      return i === -1 ? 999 : i;
+    };
+
+    candidates.sort((a,b) => {
+      const ia = idx(a.interval);
+      const ib = idx(b.interval);
+      if (ia !== ib) return ia - ib;
+      return (b.confidence || 0) - (a.confidence || 0);
+    });
+
+    return candidates[0] || rows[0];
+  }
+
+  function buildTradingRecommendation(symbol, overall, rows, currentPriceFallback) {
+    const primary = pickPrimaryRow(overall, rows);
+
+    const signalClass = overall.verdict === 'BUY' ? 'recommendation-buy' :
+                      overall.verdict === 'SHORT' ? 'recommendation-short' : 'recommendation-avoid';
+
+    const icon = overall.verdict === 'BUY' ? '📈' :
+                overall.verdict === 'SHORT' ? '📉' : '⏸️';
+
+    const title = overall.verdict === 'BUY' ? 'BUY RECOMMENDATION' :
+                  overall.verdict === 'SHORT' ? 'SHORT RECOMMENDATION' : 'AVOID TRADING';
+
+    const sameDirectionCount = rows.filter(r => {
+      const a = (r.action || '').toUpperCase();
+      if (overall.verdict === 'BUY') return a === 'BUY';
+      if (overall.verdict === 'SHORT') return a === 'SHORT' || a === 'SELL';
+      return true;
+    }).length;
+
+    const topPrice = (primary?.currentPrice != null) ? primary.currentPrice : currentPriceFallback;
+
+    return `
+      <div class="card trading-recommendation ${signalClass}">
+        <div class="card-body text-white">
+          <div class="row align-items-center">
+            <div class="col-md-2 text-center">
+              <div class="display-4">${icon}</div>
+              <h3 class="mt-2">${overall.verdict}</h3>
+            </div>
+            <div class="col-md-10">
+              <h4 class="card-title mb-1">${title}</h4>
+              <div class="small text-light mb-2">Symbol: <b>${(symbol || '').toUpperCase()}</b></div>
+
+              <div class="row mt-3">
+                <div class="col-md-3">
+                  <div class="small text-light">Confidence</div>
+                  <div class="progress mt-1" style="height: 8px;">
+                    <div class="progress-bar bg-warning" style="width: ${overall.confidence}%"></div>
+                  </div>
+                  <div class="small">${overall.confidence}%</div>
+                </div>
+                <div class="col-md-3">
+                  <div class="small text-light">Timeframes</div>
+                  <div class="fw-bold">${sameDirectionCount}/${rows.length}</div>
+                </div>
+                <div class="col-md-3">
+                  <div class="small text-light">Current Price</div>
+                  <div class="fw-bold">$${fmt2(topPrice)}</div>
+                </div>
+                <div class="col-md-3">
+                  <div class="small text-light">Signal Strength</div>
+                  <div class="fw-bold">${Math.abs(rows.reduce((a,r) => a + (r.weight || 0), 0)).toFixed(1)}</div>
+                </div>
+              </div>
+
+              ${overall.verdict !== 'AVOID' ? `
+              <div class="row mt-3 trading-levels ${overall.verdict === 'BUY' ? 'level-buy' : 'level-short'}">
+                <div class="col-md-3">
+                  <div class="small">Entry Price</div>
+                  <div class="trading-price ${overall.verdict === 'BUY' ? 'price-buy' : 'price-short'}">$${fmt2(primary?.entry)}</div>
+                </div>
+                <div class="col-md-3">
+                  <div class="small">Target Price</div>
+                  <div class="trading-price ${overall.verdict === 'BUY' ? 'price-buy' : 'price-short'}">$${fmt2(primary?.target)}</div>
+                </div>
+                <div class="col-md-3">
+                  <div class="small">Stop Loss</div>
+                  <div class="trading-price text-danger">$${fmt2(primary?.stopLoss)}</div>
+                </div>
+                <div class="col-md-3">
+                  <div class="small">Risk/Reward</div>
+                  <div class="trading-price">${primary?.riskReward || 'N/A'}</div>
+                </div>
+              </div>
+              ` : `
+              <div class="row mt-3 trading-levels level-avoid">
+                <div class="col-12">
+                  <div class="small">Recommendation</div>
+                  <div class="fw-bold">${primary?.reason || 'Market conditions not favorable for trading'}</div>
+                  <div class="small mt-1">${primary?.suggestion || 'Wait for clearer signals'}</div>
+                  <div class="small text-muted mt-1">Next check: ${primary?.nextCheck || '4-6 hours'}</div>
+                </div>
+              </div>
+              `}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildActionCards(rows){
+    if (!rows.length) return '';
+
+    const cols = rows.map(r => `
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="card action-card h-100">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <span class="badge bg-dark" title="${timeframeHint(r.interval)}">
+                ${labelForInterval(r.interval)}
+              </span>
+              <span class="${r.badgeClass}">${r.icon} ${r.action}</span>
+            </div>
+
+            <div class="small text-muted mb-1">Confidence</div>
+            <div class="progress mb-1">
+              <div class="progress-bar" style="width:${r.confidence}%"></div>
+            </div>
+            <div class="text-end small mb-3">${r.confidence}%</div>
+
+            ${r.action !== 'AVOID' ? `
+            <div class="d-grid gap-2">
+              <div class="d-flex justify-content-between">
+                <span class="text-muted">Entry</span>
+                <span class="fw-semibold">$${fmt2(r.entry)}</span>
+              </div>
+              <div class="d-flex justify-content-between">
+                <span class="text-muted">Target</span>
+                <span class="fw-semibold">$${fmt2(r.target)}</span>
+              </div>
+              <div class="d-flex justify-content-between">
+                <span class="text-muted">Stop Loss</span>
+                <span class="fw-semibold">$${fmt2(r.stopLoss)}</span>
+              </div>
+              <div class="d-flex justify-content-between">
+                <span class="text-muted">R:R Ratio</span>
+                <span class="fw-semibold">${r.riskReward || 'N/A'}</span>
+              </div>
+            </div>
+            ` : `
+            <div class="alert alert-warning small">
+              <strong>Reason:</strong> ${r.reason || 'Unclear signals'}<br>
+              <strong>Suggest:</strong> ${r.suggestion || 'Wait for setup'}
+            </div>
+            `}
+
+            <details class="mt-3">
+              <summary class="small">Analysis Details</summary>
+              <div class="mt-2 small">
+                Current: <b>$${fmt2(r.currentPrice)}</b><br>
+                Target: <b>$${fmt2(r.predictedClose)}</b> (Range: $${fmt2(r.predictedLow)} – $${fmt2(r.predictedHigh)})<br>
+                Levels: Support <b>$${fmt2(r.support)}</b> • Resistance <b>$${fmt2(r.resistance)}</b><br>
+                Momentum: <b>${r.momentumScore != null ? fmt2(r.momentumScore) : 'N/A'}</b><br>
+                Volatility Regime: <b>${r.volatilityRegime != null ? fmt2(r.volatilityRegime) : 'N/A'}</b><br>
+                Trend Strength: <b>${r.trendStrength != null ? fmt2(r.trendStrength) : 'N/A'}</b><br>
+                ${r.commentary && r.commentary !== 'N/A' ? `<div class="text-muted mt-1"><small>${r.commentary}</small></div>` : ''}
+              </div>
+            </details>
+          </div>
+        </div>
+      </div>
+    `).join('');
+
+    return `<div class="row g-3">${cols}</div>`;
+  }
+
+  function buildAdvancedTable(rows){
+    const body = rows.map(r => `
+      <tr>
+        <td>${r.interval}</td>
+        <td><span class="${r.badgeClass} px-2 py-1 rounded">${r.action}</span></td>
+        <td>${r.score ?? 'N/A'}</td>
+        <td>$${fmt2(r.entry)}</td>
+        <td>$${fmt2(r.target)}</td>
+        <td>$${fmt2(r.stopLoss)}</td>
+        <td>$${fmt2(r.predictedLow)}</td>
+        <td>$${fmt2(r.predictedClose)}</td>
+        <td>$${fmt2(r.predictedHigh)}</td>
+        <td>$${fmt2(r.support)}</td>
+        <td>$${fmt2(r.resistance)}</td>
+        <td>${r.momentumScore != null ? fmt2(r.momentumScore) : 'N/A'}</td>
+        <td>${r.volatilityRegime != null ? fmt2(r.volatilityRegime) : 'N/A'}</td>
+        <td>${r.trendStrength != null ? fmt2(r.trendStrength) : 'N/A'}</td>
+        <td>${r.confidence}%</td>
+      </tr>
+    `).join('');
+
+    return `
+      <div class="mt-4 text-start">
+        <button class="btn btn-outline-light" type="button" data-bs-toggle="collapse" data-bs-target="#advTable">
+          Advanced Details
+        </button>
+        <div class="collapse mt-2" id="advTable">
+          <div class="table-responsive">
+            <table class="table table-dark table-striped align-middle">
+              <thead class="small text-uppercase">
+                <tr>
+                  <th>Interval</th>
+                  <th>Action</th>
+                  <th>Score</th>
+                  <th>Entry</th>
+                  <th>Target</th>
+                  <th>Stop</th>
+                  <th>Pred Low</th>
+                  <th>Pred Close</th>
+                  <th>Pred High</th>
+                  <th>Support</th>
+                  <th>Resistance</th>
+                  <th>Momentum</th>
+                  <th>Volatility</th>
+                  <th>Trend</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody>${body}</tbody>
+            </table>
+          </div>
+        </div>
+        <p class="legend small mt-3">
+          Signals: BUY (Expected to go up), SELL/SHORT (Expected to go down), AVOID (No clear direction).
+          Confidence indicates signal strength. Not financial advice.
+        </p>
+      </div>
+    `;
+  }
+
+  // ---------- Event handlers & data flow ----------
+  document.getElementById('predictForm').addEventListener('submit', function(event) {
+    event.preventDefault();
+
+    const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+    const resultContainer = document.getElementById('resultContainer');
+
+    if (!symbol) {
+      resultContainer.innerHTML = '<p style="color: #ff8888;">Please enter a valid stock symbol.</p>';
+      return;
+    }
+
+    fetch('/auth/get-current-user')
+      .then(r => r.json())
+      .then(userData => {
+        const userId = userData.user_id;
+        if (!userId) {
+          resultContainer.innerHTML = '<p style="color: #ff8888;">User not authenticated.</p>';
+          return;
+        }
+        resultContainer.innerHTML = '<p>Processing your request, please wait...</p>';
+        return fetch('/predict-price', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol })
+        }).then(r => r.json())
+          .then(data => {
+            if (data.status === "processing") {
+              checkPredictionStatus(symbol, userId);
+            } else {
+              resultContainer.innerHTML = '<p style="color: #ff8888;">Error starting prediction.</p>';
+            }
+          }).catch(err => {
+            console.error(err);
+            resultContainer.innerHTML = '<p style="color: #ff8888;">An error occurred. Please try again.</p>';
+          });
+      });
+  });
+
+  function checkPredictionStatus(symbol, userId) {
+    const interval = setInterval(() => {
+      fetch(`/status?symbol=${encodeURIComponent(symbol)}&user_id=${userId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === "ready") {
+            clearInterval(interval);
+            loadResults(symbol, userId);
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          clearInterval(interval);
+        });
+    }, 3000);
+  }
+
+  function loadResults(symbol, userId) {
+    // ✅ FIX: Use query params to avoid futures slashes breaking the route
+    fetch(`/fetch-results?symbol=${encodeURIComponent(symbol)}&user_id=${userId}`)
+      .then(r => r.json())
+      .then(data => {
+        const resultContainer = document.getElementById('resultContainer');
+        resultContainer.innerHTML = '';
+
+        if (!data.results) {
+          resultContainer.innerHTML = '<p>No predictions found.</p>';
+          return;
+        }
+
+        const rows = [];
+        INTERVALS.forEach(iv => {
+          let raw = data.results[iv];
+          if (typeof raw === 'string') raw = raw.trim();
+          const parsed = parseEnhancedPrediction(iv, raw);
+          if (parsed) rows.push(parsed);
+        });
+
+        if (!rows.length) {
+          resultContainer.innerHTML = '<p>No completed predictions yet. Please wait...</p>';
+          return;
+        }
+
+        const overall = computeOverall(rows);
+        const recommendationHtml = buildTradingRecommendation(symbol, overall, rows, data.current_price);
+        const cardsHtml = buildActionCards(rows);
+        const tableHtml = buildAdvancedTable(rows);
+
+        resultContainer.innerHTML = recommendationHtml + cardsHtml + tableHtml;
+      })
+      .catch(error => {
+        console.error('Error loading results:', error);
+        const resultContainer = document.getElementById('resultContainer');
+        resultContainer.innerHTML = '<p style="color: #ff8888;">Error loading predictions. Please try again.</p>';
+      });
+  }
+</script>
+
+{% endblock %}

@@ -1,0 +1,348 @@
+{# /var/www/stockwicks/app/templates/spx_0dte.html #}
+{% extends "base.html" %}
+
+{% block title %}SPX 0DTE Guru{% endblock %}
+
+{% block content %}
+<style>
+  body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #0d0d2b;
+    color: white;
+    text-align: center;
+  }
+
+  .banner-heading {
+    display: inline-block;
+    background-color: #1e3a8a;
+    color: white;
+    padding: 12px 22px;
+    border-radius: 14px;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+
+  .form-container {
+    background-color: #1b1b3a;
+    padding: 18px;
+    border-radius: 12px;
+    width: min(720px, 96%);
+    margin: 0 auto 10px auto;
+    box-shadow: 0 4px 10px rgba(224, 222, 222, 0.12);
+    text-align: left;
+  }
+  .form-container label { font-weight: 600; }
+  .form-container .form-control {
+    height: 46px;
+    font-size: 1.05rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    text-align: center;
+  }
+  .form-container .btn {
+    height: 46px;
+    font-weight: 700;
+  }
+
+  /* Summary verdict */
+  .summary-card {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #ccc;
+    border-radius: 12px;
+  }
+
+  /* Signal badges */
+  .signal-buy {
+    background: linear-gradient(135deg, #10b981, #34d399);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+  .signal-short {
+    background: linear-gradient(135deg, #ef4444, #f87171);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+  .signal-avoid {
+    background: linear-gradient(135deg, #e5e7eb, #e5e7eb);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 1.1rem;
+  }
+
+/* Make all result labels white instead of grey */
+.card [style*="color:#9ca3af"],
+.card [style*="color:#6b7280"] {
+    color: #e5e7eb !important;   /* almost white */
+}
+
+/* Or even more aggressive: */
+.card div:not([style*="color:#22d3ee"]):not([style*="color:#e5e7eb"]):not(b) {
+    color: #f1f5f9 !important;
+}
+  /* Trading levels */
+  .trading-levels {
+    background: #1e293b;
+    border-radius: 10px;
+    padding: 15px;
+    margin: 10px 0;
+  }
+
+  .level-buy {
+    border-left: 4px solid #10b981;
+  }
+
+  .level-short {
+    border-left: 4px solid #ef4444;
+  }
+
+  .level-avoid {
+    border-left: 4px solid #e5e7eb;
+  }
+
+  /* Action cards */
+  .action-card {
+    background:#dfe0e3;
+    border:1px solid #2b2f65;
+    border-radius:14px;
+  }
+  .action-card .card-body { text-align:left; }
+  .action-card .badge { font-weight:600; }
+  .action-card .progress { height: 8px; }
+
+  /* Trading recommendation card */
+  .trading-recommendation {
+    border-radius: 12px;
+    margin: 20px 0;
+  }
+
+  .recommendation-buy {
+    border: 2px solid #10b981;
+    background: linear-gradient(135deg, #064e3b, #065f46);
+  }
+
+  .recommendation-short {
+    border: 2px solid #ef4444;
+    background: linear-gradient(135deg, #7f1d1d, #991b1b);
+  }
+
+  .recommendation-avoid {
+    border: 2px solid #e5e7eb;
+    background: linear-gradient(135deg, #374151, #4b5563);
+  }
+
+  .trading-price {
+    font-size: 1.3rem;
+    font-weight: bold;
+    margin: 5px 0;
+  }
+
+  .price-buy { color: #10b981; }
+  .price-short { color: #ef4444; }
+  .price-avoid { color: #e5e7eb; }
+
+  /* Advanced table */
+  .table-dark thead th { background:#1e3a8a; border-color:#2b2f65; }
+  .table-dark td, .table-dark th { border-color:#2b2f65; }
+  .table-dark tbody tr:nth-child(even) { background-color:#1a1f48; }
+  .table-dark tbody tr:hover { background-color:#222a62; }
+
+  .legend { color:#aab2ff; }
+
+  @media (max-width: 576px){
+    .banner-heading { font-size: 1.45rem; }
+    .summary-card .fs-5 { font-size: 1.05rem !important; }
+    .trading-price { font-size: 1.1rem; }
+  }
+</style>
+
+<div class="container" style="max-width: 1100px;">
+
+  <h1 style="color:#22d3ee; font-weight:700; margin-bottom: 6px;">SPX 0DTE Guru</h1>
+  <p style="color:#e5e7eb; margin-bottom: 18px;">
+    Pick <b>CREDIT (SELL)</b>, <b>DEBIT (BUY)</b>, or <b>BOTH</b> for SPXW 0DTE. Exits by end of day.
+  </p>
+
+ <div class="card" style="background:#161b22; border:1px solid #2d3748; border-radius:14px; padding:20px;">
+  <form method="POST" action="{{ url_for('spx_0dte_run') }}" id="spx0dteForm">
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;">
+
+      <!-- Date -->
+      <div style="flex: 1.4; min-width: 220px;">
+        <label class="form-label" style="color:#e5e7eb;">Date</label>
+        <input type="date" name="date_input" class="form-control" 
+               value="{{ default_date if default_date else '' }}" id="dateInput"/>
+        <div style="margin-top:8px;">
+          <button type="button" class="btn btn-sm btn-primary me-1" onclick="setToday()">Use Today</button>
+          <button type="button" class="btn btn-sm btn-primary" onclick="setTomorrow()">Use Tomorrow</button>
+        </div>
+        <div style="color:#9ca3af; font-size:0.85rem; margin-top:6px;">
+          Or type: today / tomorrow (optional). Blank = today.
+        </div>
+      </div>
+
+      <!-- Mode -->
+      <div style="flex: 1; min-width: 180px;">
+        <label class="form-label" style="color:#e5e7eb;">Mode</label>
+        <select class="form-select" name="mode">
+          <option value="both"   {% if default_mode=='both' %}selected{% endif %}>Both (Credit + Debit)</option>
+          <option value="credit" {% if default_mode=='credit' %}selected{% endif %}>Credit (SELL)</option>
+          <option value="debit"  {% if default_mode=='debit' %}selected{% endif %}>Debit (BUY)</option>
+        </select>
+      </div>
+
+      <!-- Max Risk -->
+      <div style="flex: 1; min-width: 160px;">
+        <label class="form-label" style="color:#e5e7eb;">Max Risk ($)</label>
+        <input type="number" step="1" min="1" name="max_risk" class="form-control" 
+               value="{{ default_max_risk or 100 }}"/>
+      </div>
+
+      <!-- Contracts -->
+      <div style="flex: 1; min-width: 140px;">
+        <label class="form-label" style="color:#e5e7eb;">Contracts</label>
+        <input type="number" step="1" min="1" name="contracts" class="form-control" 
+               value="{{ default_contracts }}"/>
+      </div>
+
+    </div>
+
+    <div style="margin-top: 24px; text-align: center;">
+      <button class="btn btn-primary" type="submit" style="font-weight:700; min-width: 220px;">
+        Run SPX 0DTE Guru
+      </button>
+    </div>
+
+  </form>
+</div>
+
+  {% if error %}
+    <div class="alert alert-danger mt-3" role="alert">
+      <b>Run failed:</b><br/>
+      <pre style="white-space: pre-wrap; margin:0;">{{ error }}</pre>
+    </div>
+  {% endif %}
+
+  {% if result %}
+    <div class="card mt-3" style="background:#0d1117; border:1px solid #2d3748; border-radius:14px; padding:18px;">
+      <h3 style="margin:0 0 10px 0;">Recommendation</h3>
+
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div style="color:#e5e7eb;">Symbol</div>
+          <div style="font-size:1.2rem; font-weight:700;">{{ result.symbol }}</div>
+        </div>
+        <div class="col-md-4">
+          <div style="color:#e5e7eb;">Expiration</div>
+          <div style="font-size:1.2rem; font-weight:700;">{{ result.expiration }}</div>
+        </div>
+        <div class="col-md-4">
+          <div style="color:#e5e7eb;">Underlying</div>
+          <div style="font-size:1.2rem; font-weight:700;">
+            {% if result.underlying is not none %}${{ "%.2f"|format(result.underlying) }}{% else %}N/A{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <hr style="border-color:#2d3748;">
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <h5 style="margin-bottom:8px;">Momentum</h5>
+          <div style="color:#e5e7eb;">Trend: <b style="color:#e5e7eb;">{{ result.momentum.trend }}</b></div>
+          <div style="color:#e5e7eb;">Score: <b style="color:#e5e7eb;">{{ result.momentum.score }}/100</b></div>
+          <div style="color:#e5e7eb;">Volatility: <b style="color:#e5e7eb;">{{ result.momentum.volatility }}</b></div>
+        </div>
+        <div class="col-md-6">
+          <h5 style="margin-bottom:8px;">OI Pin</h5>
+          <div style="color:#e5e7eb;">Pin: <b style="color:#e5e7eb;">{{ result.pin.pin }}</b></div>
+          <div style="color:#e5e7eb;">Bias: <b style="color:#e5e7eb;">{{ result.pin.bias }}</b></div>
+          <div style="color:#e5e7eb;">Pin Confidence: <b style="color:#e5e7eb;">{{ result.pin.pin_confidence }}</b></div>
+        </div>
+      </div>
+
+      <hr style="border-color:#2d3748;">
+
+      <div class="row g-3">
+
+        {% set picks = result.picks %}
+
+        {% for key, label in [
+          ("credit_put","Credit Put (SELL)"),
+          ("credit_call","Credit Call (SELL)"),
+          ("debit_call","Debit Call (BUY)"),
+          ("debit_put","Debit Put (BUY)")
+        ] %}
+          {% if picks.get(key) %}
+            <div class="col-md-6">
+              <div class="card" style="background:#161b22; border:1px solid #2d3748; border-radius:14px; padding:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div style="font-weight:800;">{{ label }}</div>
+                  <div style="color:#e5e7eb;">{{ picks[key].confidence_level }} ({{ picks[key].confidence }}/100)</div>
+                </div>
+
+                <div style="margin-top:10px; color:#e5e7eb;">
+                  <div><b>{{ picks[key].symbol }}</b> — Strike <b>{{ "%.2f"|format(picks[key].strike) }}</b> — Exp <b>{{ picks[key].expiration }}</b></div>
+                  <div style="margin-top:6px;"><b>{{ picks[key].action }}</b> @ <b>{{ "%.2f"|format(picks[key].entry) }}</b></div>
+                </div>
+
+                <div class="row mt-2 g-2">
+                  <div class="col-6"><div style="color:#e5e7eb;">Target 1</div><div><b>{{ "%.2f"|format(picks[key].target1) }}</b></div></div>
+                  <div class="col-6"><div style="color:#e5e7eb;">Target 2</div><div><b>{{ "%.2f"|format(picks[key].target2) }}</b></div></div>
+                  <div class="col-6"><div style="color:#e5e7eb;">Stop</div><div><b>{{ "%.2f"|format(picks[key].stop) }}</b></div></div>
+                  <div class="col-6"><div style="color:#e5e7eb;">Contracts</div><div><b>{{ picks[key].contracts }}</b></div></div>
+                </div>
+
+                <div class="row mt-2 g-2">
+                  <div class="col-6"><div style="color:#e5e7eb;">Est Risk</div><div><b>${{ "%.2f"|format(picks[key].est_risk_usd) }}</b></div></div>
+                  <div class="col-6"><div style="color:#e5e7eb;">Est R1</div><div><b>${{ "%.2f"|format(picks[key].est_reward1_usd) }}</b></div></div>
+                  <div class="col-6"><div style="color:#e5e7eb;">Est R2</div><div><b>${{ "%.2f"|format(picks[key].est_reward2_usd) }}</b></div></div>
+                  <div class="col-6"><div style="color:#e5e7eb;">Score</div><div><b>{{ picks[key].score }}</b></div></div>
+                </div>
+
+                <div style="margin-top:10px; color:#e5e7eb; font-size:0.95rem;">
+                  {{ picks[key].notes }}
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        {% endfor %}
+
+      </div>
+
+    </div>
+  {% endif %}
+
+</div>
+
+<script>
+  function pad2(n){ return (n<10?'0':'') + n; }
+  function toISO(d){
+    return d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
+  }
+  function setToday(){
+    const el = document.getElementById('dateInput');
+    const d = new Date();
+    el.value = toISO(d);
+  }
+  function setTomorrow(){
+    const el = document.getElementById('dateInput');
+    const d = new Date();
+    d.setDate(d.getDate()+1);
+    el.value = toISO(d);
+  }
+</script>
+
+{% endblock %}

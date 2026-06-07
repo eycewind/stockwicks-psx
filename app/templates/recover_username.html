@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Recover Username - StockWicks{% endblock %}
+
+{% block content %}
+<style>
+     body {
+        font-family: 'Poppins', sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #0d0d2b;
+    }
+
+    .recover-container {
+        max-width: 400px;
+        margin: 50px auto;
+        padding: 30px;
+        background-color: #1a1a40;
+        border-radius: 10px;
+        box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2);
+        text-align: center;
+    }
+
+    .recover-container h2 {
+        color: white;
+        margin-bottom: 20px;
+    }
+
+    .recover-container input {
+        width: 100%;
+        padding: 10px;
+        border-radius: 5px;
+        border: none;
+        background-color: #23235b;
+        color: white;
+        margin-bottom: 15px;
+    }
+
+    .recover-container input::placeholder {
+        color: rgba(255, 255, 255, 0.7);
+    }
+
+    .recover-container button {
+        background-color: #f16d0f;
+        color: white;
+        border: none;
+        padding: 12px;
+        font-size: 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: bold;
+        width: 100%;
+    }
+
+    .recover-container button:hover {
+        background-color: #ff784e;
+        transform: scale(1.05);
+    }
+
+    .recover-container a {
+        display: block;
+        color: #f16d0f;
+        text-decoration: none;
+        margin-top: 10px;
+        font-size: 14px;
+    }
+
+    .recover-container a:hover {
+        text-decoration: underline;
+    }
+
+    /* Error & Success Message Styles */
+    .alert {
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 5px;
+    }
+
+    .alert-danger {
+        background-color: #ff4d4d;
+        color: white;
+    }
+
+    .alert-success {
+        background-color: #28a745;
+        color: white;
+    }
+</style>
+
+<div class="container">
+    <div class="recover-container">
+        <h2>Recover Username</h2>
+
+        {% if error %}
+            <div class="alert alert-danger">{{ error }}</div>
+        {% endif %}
+
+        {% if success %}
+            <div class="alert alert-success">{{ success }}</div>
+        {% endif %}
+
+        <form action="{{ request.url_for('recover_username') }}" method="post">
+            <input class="form-control" type="email" id="email" name="email" placeholder="Enter your email" required>
+            <button class="btn" type="submit">Recover Username</button>
+            <a href="{{ request.url_for('login_page') }}">Back to Login</a>  <!-- Fixed from 'login' to 'login_page' -->
+        </form>
+    </div>
+</div>
+
+{% endblock %}

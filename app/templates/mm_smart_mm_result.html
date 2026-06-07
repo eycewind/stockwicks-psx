@@ -1,0 +1,146 @@
+{# /var/www/stockwicks/app/templates/mm_smart_mm_result.html #}
+{% extends "base.html" %}
+
+{% block title %}StockWicks - Smart MM Intent{% endblock %}
+
+{% block content %}
+<style>
+  body { background:#0d0d2b; font-family:'Poppins',sans-serif; color:#fff; }
+  .mm-container { max-width: 900px; margin: 30px auto; }
+  .mm-card {
+    background:#1b1b3a;
+    border-radius:16px;
+    padding:24px 28px;
+    box-shadow:0 8px 20px rgba(0,0,0,.45);
+  }
+  .mm-headline {
+    font-size:1.4rem;
+    font-weight:700;
+    color:#6ff22e;
+    margin-bottom:10px;
+  }
+  .mm-subtitle {
+    font-size:0.95rem;
+    color:#a0aec0;
+    margin-bottom:20px;
+  }
+  .mm-section-title {
+    font-size:1rem;
+    font-weight:600;
+    color:#63b3ed;
+    margin-top:18px;
+    margin-bottom:6px;
+  }
+  .mm-grid {
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px,1fr));
+    gap:10px 20px;
+    font-size:0.9rem;
+  }
+  .mm-pill {
+    display:inline-block;
+    padding:4px 9px;
+    border-radius:999px;
+    font-size:0.8rem;
+    font-weight:600;
+  }
+  .pill-bias { background:#2d3748; color:#f6e05e; }
+  .pill-conf { background:#2f855a; color:#f0fff4; }
+  .pill-date { background:#2b6cb0; color:#ebf8ff; }
+  ul.mm-list { padding-left:18px; margin:6px 0 0 0; font-size:0.9rem; }
+  code { background:#2d3748; padding:1px 4px; border-radius:4px; }
+</style>
+
+<div class="mm-container">
+  <div class="mm-card">
+    {% if not result or result.error %}
+      <div class="mm-headline" style="color:#feb2b2;">
+        {{ result.headline if result and result.headline else "Unable to compute MM intent." }}
+      </div>
+      {% if result and result.explanation_points %}
+        <ul class="mm-list">
+          {% for p in result.explanation_points %}
+            <li>{{ p }}</li>
+          {% endfor %}
+        </ul>
+      {% elif result and result.error %}
+        <p>{{ result.error }}</p>
+      {% endif %}
+    {% else %}
+      {% set stats = result.analysis %}
+      {% set mm = result.mm_intent %}
+
+      {# === FINAL CONCLUSION ON TOP === #}
+      <div class="mm-headline">
+        {{ result.headline }}
+      </div>
+      <div class="mm-subtitle">
+        {{ result.recommendation }}
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <span class="mm-pill pill-bias">Bias: {{ mm.bias }}</span>
+        <span class="mm-pill pill-conf">Confidence: {{ mm.confidence }}%</span>
+        <span class="mm-pill pill-date">Expiry: {{ result.expiry }}</span>
+      </div>
+
+      {# === SNAPSHOT === #}
+      <div class="mm-section-title">Snapshot</div>
+      <div class="mm-grid">
+        <div>Symbol: <strong>{{ result.symbol }}</strong></div>
+        <div>Underlying Price: <strong>${{ '%.2f'|format(result.current_price) }}</strong></div>
+        <div>Contracts Analyzed: <strong>{{ stats.contracts_analyzed }}</strong></div>
+        <div>Primary Target: <strong>${{ '%.2f'|format(mm.primary_target) }}</strong></div>
+        <div>Expected Pattern:
+          <strong>
+            {{ mm.morning_sequence if mm.morning_sequence else 'No strong pattern detected' }}
+          </strong>
+        </div>
+      </div>
+
+      {# === OPEN INTEREST PROFILE === #}
+      <div class="mm-section-title">Open Interest Profile</div>
+      <div class="mm-grid">
+        <div>Highest CALL OI:
+          <strong>${{ '%.2f'|format(stats.highest_call_strike) }}</strong>
+          (OI: {{ stats.highest_call_oi }})
+        </div>
+        <div>Highest PUT OI:
+          <strong>${{ '%.2f'|format(stats.highest_put_strike) }}</strong>
+          (OI: {{ stats.highest_put_oi }})
+        </div>
+        <div>Total CALL OI: <strong>{{ stats.total_call_oi }}</strong></div>
+        <div>Total PUT OI: <strong>{{ stats.total_put_oi }}</strong></div>
+<div>Near PUT/CALL Ratio:
+  <strong>
+    {# If it's insanely large, treat it as "∞"; otherwise print normally #}
+    {% if stats.near_put_call_ratio is not none and stats.near_put_call_ratio > 1e6 %}
+      ∞
+    {% else %}
+      {{ '%.2f'|format(stats.near_put_call_ratio or 0.0) }}
+    {% endif %}
+  </strong>
+</div>
+
+      </div>
+
+      {# === EXPLANATION IN HUMAN LANGUAGE === #}
+      <div class="mm-section-title">What this means in plain English</div>
+      <ul class="mm-list">
+        {% for p in result.explanation_points %}
+          <li>{{ p }}</li>
+        {% endfor %}
+      </ul>
+
+      {% if result.logic_points %}
+      <div class="mm-section-title">Why we think this is the MM plan</div>
+      <ul class="mm-list">
+        {% for p in result.logic_points %}
+          <li>{{ p }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

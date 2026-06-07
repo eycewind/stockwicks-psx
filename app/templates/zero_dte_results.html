@@ -1,0 +1,181 @@
+<!-- /var/www/stockwicks/app/templates/zero_dte_results.html-->
+{% extends "base.html" %}
+
+{% block content %}
+<head>
+    <style>
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-color: #0d0d2b;
+            color: rgb(19, 19, 19);
+            text-align: center;
+            margin: 20px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: auto;
+        }
+
+        .banner-heading {
+            display: inline-block;
+            background-color: #1e3a8a;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+            margin-bottom: 20px;
+        }
+
+        .section-banner {
+            display: inline-block;
+            background-color: #1e3a8a;
+            color: white;
+            padding: 10px 25px;
+            border-radius: 20px;
+            font-size: 2rem;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+
+        /* VERTICAL TABLES */
+        .pick-title {
+            color: #39a9f3;
+            margin-top: 35px;
+            margin-bottom: 5px;
+            font-size: 1.3rem;
+            font-weight: bold;
+        }
+        .vertical-table {
+            width: 60%;
+            margin: 0 auto 35px auto;
+            border-collapse: collapse;
+            background-color: #1b1b3a;
+            color: white;
+            font-size: 1.02rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+        }
+        .vertical-table th, .vertical-table td {
+            border: 1px solid #333;
+            padding: 12px;
+            text-align: left;
+        }
+        .vertical-table th {
+            background-color: #00c6ff;
+            color: black;
+            width: 200px;
+        }
+        .vertical-table tr:nth-child(even) {
+            background-color: #23235b;
+        }
+
+        .no-data {
+            text-align: center;
+            color: #ffffff;
+            margin-top: 15px;
+        }
+
+        .btn {
+            background-color: #00c6ff;
+            color: black;
+            padding: 14px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            margin-top: 20px;
+        }
+        .btn:hover {
+            background-color: #00c98d;
+            transform: scale(1.05);
+        }
+        .website-name {
+            margin-top: 5px;
+            font-size: 0.9rem;
+            color: #888;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container text-center">
+        <!-- PAGE MAIN TITLE -->
+        <div>
+            <h1 class="banner-heading">Zero Days To Expire Picks</h1>
+            <p class="website-name">www.stockwicks.com</p>
+        </div>
+
+        <!-- BACK BUTTON -->
+        <form method="get" action="/auth/zero-dte-pick">
+            <button type="submit" class="btn">Back to Symbol Selection</button>
+        </form>
+
+        <!-- Predicted Picks Section -->
+        <div class="container text-center">
+            <div class="section-banner">Predicted Picks</div>
+        </div>
+
+        {% if predictions %}
+            {% for pick in predictions %}
+                <div class="pick-title">Pick {{ loop.index }}</div>
+                <table class="vertical-table">
+                    <tbody>
+                        {% for key, value in pick.items() %}
+                        <tr>
+                            <th>{{ key|replace("_", " ")|title }}</th>
+                            <td>{{ value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endfor %}
+        {% else %}
+            <div class="no-data">No prediction data available.</div>
+        {% endif %}
+
+        <!-- Prediction Accuracy Section (leave as horizontal for summary) -->
+        <div class="container text-center">
+            <div class="section-banner">Prediction Accuracy (Previous Interval)</div>
+        </div>
+
+        {% if analysis %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>optionSymbol</th>
+                    <th>strike</th>
+                    <th>Prediction</th>
+                    <th>Exit Price</th>
+                    <th>Latest Price</th>
+                    <th>Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in analysis %}
+                <tr>
+                    <td>{{ item.date }}</td>
+                    <td>{{ item.time }}</td>
+                    <td>{{ item.optionSymbol }}</td>
+                    <td>{{ item.strike }}</td>
+                    <td>{{ item.prediction }}</td>
+                    <td>{{ item.exit_price }}</td>
+                    <td>{{ item.latest_price }}</td>
+                    <td>{{ item.result }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <div class="no-data">No analysis available.</div>
+        {% endif %}
+</body>
+{% endblock %}

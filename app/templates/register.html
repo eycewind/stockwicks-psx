@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}Register - StockWicks{% endblock %}
+
+{% block content %}
+<div class="register-container">
+  <h2>Register</h2>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="" id="registerForm">
+    <label for="first_name">First Name:</label>
+    <input class="form-control" type="text" id="first_name" name="first_name" required>
+
+    <label for="last_name">Last Name:</label>
+    <input class="form-control" type="text" id="last_name" name="last_name" required>
+
+    <label for="email">Email:</label>
+    <input class="form-control" type="email" id="email" name="email" required>
+
+    <label for="username">Preferred Username:</label>
+    <input class="form-control" type="text" id="username" name="username" required>
+
+    <label for="password">Password:</label>
+    <input class="form-control" type="password" id="password" name="password" required>
+
+    <small>
+      Password must be at least 8 characters long and include at least one uppercase letter,
+      one lowercase letter, one digit, and one special character.
+    </small>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="show_password">
+      Show Password
+    </label>
+
+    <label for="confirm_password">Confirm Password:</label>
+    <input class="form-control" type="password" id="confirm_password" name="confirm_password" required>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="show_confirm_password">
+      Show Confirm Password
+    </label>
+
+    <label class="checkbox-row">
+      <input
+        type="checkbox"
+        id="accept_agreement"
+        name="accept_agreement"
+        value="true"
+        required
+      >
+      I agree to the <a href="/user-agreement" target="_blank">User Agreement</a>
+    </label>
+
+    <p class="notice">
+      By registering, you must accept the User Agreement and verify your account.
+      Please check your Junk/Spam folder for the verification email.
+    </p>
+
+    <button type="submit">Register</button>
+
+    <p class="login-link">
+      Already have an account? <a href="login">Login</a>
+    </p>
+  </form>
+
+  <p id="registerMessage"></p>
+</div>
+
+<style>
+  .register-container {
+    max-width: 420px;
+    margin: 50px auto;
+    padding: 20px;
+    border: 1px solid #101010;
+    border-radius: 10px;
+    background: rgb(33, 32, 32);
+    box-shadow: 0 0 10px rgba(0,0,0,0.08);
+    text-align: left;
+  }
+
+  .register-container * {
+    box-sizing: border-box;
+  }
+
+  .register-container h2 {
+    text-align: center;
+    margin-bottom: 16px;
+  }
+
+  .register-container label {
+    font-weight: 600;
+    display: block;
+    margin-top: 10px;
+  }
+
+  .register-container .form-control {
+    width: 100%;
+    padding: 10px;
+    margin-top: 6px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+
+  .register-container small {
+    display: block;
+    font-size: 12px;
+    color: #aaa;
+    margin-top: 6px;
+    line-height: 1.35;
+  }
+
+  .checkbox-row {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-weight: 600;
+  }
+
+  .checkbox-row input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+  }
+
+  .checkbox-row a {
+    font-weight: 700;
+    text-decoration: underline;
+  }
+
+  .notice {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #ff6b6b;
+    line-height: 1.35;
+  }
+
+  .register-container button {
+    width: 100%;
+    padding: 12px;
+    margin-top: 16px;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  .register-container button:hover {
+    background: #218838;
+  }
+
+  .login-link {
+    margin-top: 14px;
+    text-align: center;
+    font-size: 14px;
+  }
+
+  .login-link a {
+    font-weight: 700;
+    text-decoration: underline;
+  }
+
+  #registerMessage {
+    margin-top: 12px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ff6b6b;
+  }
+</style>
+
+<script>
+  const passwordEl = document.getElementById("password");
+  const confirmEl = document.getElementById("confirm_password");
+  const registerForm = document.getElementById("registerForm");
+  const messageEl = document.getElementById("registerMessage");
+
+  document.getElementById("show_password").addEventListener("change", function () {
+    passwordEl.type = this.checked ? "text" : "password";
+  });
+
+  document.getElementById("show_confirm_password").addEventListener("change", function () {
+    confirmEl.type = this.checked ? "text" : "password";
+  });
+
+  registerForm.addEventListener("submit", function (event) {
+    messageEl.innerText = "";
+
+    if (passwordEl.value !== confirmEl.value) {
+      event.preventDefault();
+      messageEl.innerText = "Passwords do not match!";
+      return false;
+    }
+  });
+</script>
+{% endblock %}

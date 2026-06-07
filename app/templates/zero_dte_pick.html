@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %} StockWicks - Zero DTE Pick {% endblock %}
+
+{% block content %}
+<style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background-color: #0d0d2b;
+      color: white;
+      text-align: center;
+    }
+
+    .banner-heading {
+      display: inline-block;
+      background-color: #1e3a8a;
+      color: white;
+      padding: 15px 30px;
+      border-radius: 25px;
+      font-size: 2.5rem;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+      margin-bottom: 20px;
+    }
+
+    .form-container {
+      background-color: #1b1b3a;
+      padding: 25px;
+      border-radius: 12px;
+      width: 60%;
+      margin: auto;
+      box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2);
+    }
+
+    .form-container h3 {
+      color: white;
+      font-size: 1.5rem;
+      font-weight: bold;
+      margin-bottom: 20px;
+    }
+
+    .form-container form {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .form-container select,
+    .form-container input {
+      width: 80%;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      text-align: center;
+    }
+
+    .form-container button {
+      background-color: #00c6ff;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      font-size: 1rem;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+    }
+
+    .form-container button:hover {
+      background-color: #009ac9;
+      transform: scale(1.05);
+    }
+</style>
+
+<div class="container text-center">
+    <div>
+        <h1 class="banner-heading">Zero Days To Expire </h1>
+        <p class="website-name">www.stockwicks.com</p>
+    </div>
+
+    <!-- Form Section -->
+    <div class="form-container">
+        <h3>Select Your Symbol</h3>
+        <form method="POST" action="/auth/zero-dte-pick">
+            <select name="symbol" id="symbol" class="input" required>
+                <option value="SPY">SPY</option>
+                <option value="QQQ">QQQ</option>
+            </select>
+
+            <button type="submit">Fetch Picks</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

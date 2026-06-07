@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+
+{% block title %}Trade Bot - StockWicks{% endblock %}
+
+{% block content %}
+{% set prefix = url_prefix if url_prefix is defined else request.headers.get("x-forwarded-prefix", "") %}
+
+<div class="container" style="max-width: 1250px; margin: 0 auto;">
+  <h1 style="font-size: 34px; margin-bottom: 8px;">Trade Bot</h1>
+  <p style="font-size: 18px; margin-bottom: 28px;">
+    Create, monitor, and manage client trading bots.
+  </p>
+
+  <div style="background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25); margin-bottom:24px;">
+    <h2 style="margin-top:0;">Create Trade Bot</h2>
+
+    <form method="post" action="{{ prefix }}/auth/papertradebot/create" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:16px; align-items:end;">
+      <div>
+        <label>Symbol</label>
+        <input class="form-control" name="symbol" value="SPY" required>
+      </div>
+
+      <div>
+        <label>Interval</label>
+        <select class="form-control" name="interval">
+          <option value="1m">1m</option>
+          <option value="5m" selected>5m</option>
+          <option value="15m">15m</option>
+          <option value="1d">1d</option>
+        </select>
+      </div>
+
+      <div>
+        <label>Algo</label>
+        <select class="form-control" name="algo_name">
+          <option value="mvp_demo" selected>MVP Demo</option>
+          <option value="spx_0dte">SPX 0DTE</option>
+        </select>
+      </div>
+
+      <div>
+        <button class="btn btn-primary" type="submit">Create Bot</button>
+      </div>
+    </form>
+  </div>
+
+  <div style="background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25); margin-bottom:24px;">
+    <h2 style="margin-top:0;">Bot Monitor</h2>
+
+    {% if bots %}
+      <table style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:10px; border-bottom:1px solid #334155;">ID</th>
+            <th style="text-align:left; padding:10px; border-bottom:1px solid #334155;">Symbol</th>
+            <th style="text-align:left; padding:10px; border-bottom:1px solid #334155;">Interval</th>
+            <th style="text-align:left; padding:10px; border-bottom:1px solid #334155;">Algo</th>
+            <th style="text-align:left; padding:10px; border-bottom:1px solid #334155;">Status</th>
+            <th style="text-align:left; padding:10px; border-bottom:1px solid #334155;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for bot in bots %}
+            <tr>
+              <td style="padding:10px; border-bottom:1px solid #1f2937;">{{ bot.id }}</td>
+              <td style="padding:10px; border-bottom:1px solid #1f2937;">{{ bot.symbol }}</td>
+              <td style="padding:10px; border-bottom:1px solid #1f2937;">{{ bot.interval }}</td>
+              <td style="padding:10px; border-bottom:1px solid #1f2937;">{{ bot.algo_name }}</td>
+              <td style="padding:10px; border-bottom:1px solid #1f2937;">
+                <span class="status-pill status-{{ bot.status }}">{{ bot.status }}</span>
+              </td>
+              <td style="padding:10px; border-bottom:1px solid #1f2937;">
+                <form method="post" action="{{ prefix }}/auth/papertradebot/{{ bot.id }}/start" style="display:inline;">
+                  <button class="btn-small btn-start" type="submit">Start</button>
+                </form>
+
+                <form method="post" action="{{ prefix }}/auth/papertradebot/{{ bot.id }}/stop" style="display:inline;">
+                  <button class="btn-small btn-stop" type="submit">Stop</button>
+                </form>
+
+                <button class="btn-small" type="button" onclick="loadBotChart({{ bot.id }})">
+                  View
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No trade bots yet.</p>
+    {% endif %}
+  </div>
+
+  <div id="bot-detail-card" style="display:none; background:#15153a; padding:24px; border-radius:14px; box-shadow:0 0 18px rgba(0,0,0,.25);">
+    <h2 style="margin-top:0;">Bot Detail</h2>
+
+    <div class="bot-stats">
+      <div>
+        <span class="stat-label">Candles</span>
+        <span class="stat-value" id="stat-candles">0</span>
+      </div>
+      <div>
+        <span class="stat-label">Decisions</span>
+        <span class="stat-value" id="stat-decisions">0</span>
+      </div>
+      <div>
+        <span class="stat-label">Events</span>
+        <span class="stat-value" id="stat-events">0</span>
+      </div>
+    </div>
+
+    <h3>Bot Metadata</h3>
+    <pre id="bot-meta" class="json-box">Select a bot.</pre>
+
+    <h3>Log Files</h3>
+    <pre id="bot-paths" class="json-box">Select a bot.</pre>
+
+    <h3>Last Candle</h3>
+    <pre id="last-candle" class="json-box">No candle data yet.</pre>
+
+    <h3>Last Decisions</h3>
+    <div id="decision-list" class="mini-table-wrap">No decisions yet.</div>
+
+    <h3>Recent Events</h3>
+    <div id="event-list" class="mini-table-wrap">No events yet.</div>
+  </div>
+
+  <p style="margin-top:26px;">
+    <a class="btn btn-secondary" href="{{ prefix }}/auth/dashboard">Back to Dashboard</a>
+  </p>
+</div>
+
+<style>
+  .btn-small {
+    padding: 7px 12px;
+    border: 0;
+    border-radius: 7px;
+    background: #334155;
+    color: #fff;
+    cursor: pointer;
+    font-weight: 700;
+    margin-right: 6px;
+  }
+
+  .btn-start {
+    background: #15803d;
+  }
+
+  .btn-stop {
+    background: #b91c1c;
+  }
+
+  .status-pill {
+    display:inline-block;
+    padding:5px 10px;
+    border-radius:999px;
+    background:#334155;
+    color:#fff;
+    font-size:13px;
+    font-weight:800;
+  }
+
+  .status-running {
+    background:#15803d;
+  }
+
+  .status-stopped {
+    background:#475569;
+  }
+
+  .bot-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+    gap: 16px;
+    margin: 18px 0;
+  }
+
+  .bot-stats > div {
+    background: rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 14px;
+  }
+
+  .stat-label {
+    display: block;
+    font-size: 13px;
+    opacity: 0.75;
+  }
+
+  .stat-value {
+    display: block;
+    font-size: 24px;
+    font-weight: 800;
+    margin-top: 4px;
+  }
+
+  .json-box {
+    background: #020617;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 14px;
+    overflow-x: auto;
+    color: #dbeafe;
+  }
+
+  .mini-table-wrap {
+    background: #020617;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 12px;
+    overflow-x: auto;
+  }
+
+  .mini-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .mini-table th,
+  .mini-table td {
+    padding: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    text-align: left;
+  }
+</style>
+
+<script>
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderDecisionTable(decisions) {
+    if (!decisions || decisions.length === 0) {
+      return "No decisions yet.";
+    }
+
+    const last = decisions.slice(-20).reverse();
+
+    return `
+      <table class="mini-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Action</th>
+            <th>Reason</th>
+            <th>Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${last.map(row => `
+            <tr>
+              <td>${escapeHtml(row.ts_et || row.bar_time || "")}</td>
+              <td>${escapeHtml(row.action || "")}</td>
+              <td>${escapeHtml(row.reason || "")}</td>
+              <td>${escapeHtml(row.price_used?.decision_price || row.price_used || row.price || "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderEventTable(events) {
+    if (!events || events.length === 0) {
+      return "No events yet.";
+    }
+
+    const last = events.slice(-20).reverse();
+
+    return `
+      <table class="mini-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Reason</th>
+            <th>Price</th>
+            <th>P/L</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${last.map(row => `
+            <tr>
+              <td>${escapeHtml(row.ts_et || row.bar_time || "")}</td>
+              <td>${escapeHtml(row.event || "")}</td>
+              <td>${escapeHtml(row.reason || "")}</td>
+              <td>${escapeHtml(row.price || row.exit_price || "")}</td>
+              <td>${escapeHtml(row.realized_pnl ?? "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  async function loadBotChart(botId) {
+    const detailCard = document.getElementById("bot-detail-card");
+    detailCard.style.display = "block";
+
+    document.getElementById("bot-meta").textContent = "Loading...";
+    document.getElementById("bot-paths").textContent = "Loading...";
+    document.getElementById("last-candle").textContent = "Loading...";
+
+    const response = await fetch(`{{ prefix }}/auth/papertradebot/${botId}/chart-data`);
+
+    if (!response.ok) {
+      document.getElementById("bot-meta").textContent = `Failed to load bot ${botId} data.`;
+      document.getElementById("bot-paths").textContent = "";
+      document.getElementById("last-candle").textContent = "";
+      return;
+    }
+
+    const data = await response.json();
+
+    document.getElementById("stat-candles").textContent = data.candles?.length || 0;
+    document.getElementById("stat-decisions").textContent = data.decisions?.length || 0;
+    document.getElementById("stat-events").textContent = data.events?.length || 0;
+
+    document.getElementById("bot-meta").textContent = JSON.stringify(data.bot || {}, null, 2);
+    document.getElementById("bot-paths").textContent = JSON.stringify(data.paths || {}, null, 2);
+
+    const lastCandle = data.candles && data.candles.length
+      ? data.candles[data.candles.length - 1]
+      : null;
+
+    document.getElementById("last-candle").textContent = lastCandle
+      ? JSON.stringify(lastCandle, null, 2)
+      : "No candle data yet.";
+
+    document.getElementById("decision-list").innerHTML = renderDecisionTable(data.decisions);
+    document.getElementById("event-list").innerHTML = renderEventTable(data.events);
+  }
+</script>
+{% endblock %}

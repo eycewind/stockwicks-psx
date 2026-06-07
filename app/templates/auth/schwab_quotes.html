@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Schwab Real-Time Quote{% endblock %}
+
+{% block content %}
+<style>
+    .schwab-quote-card {
+        margin: 30px auto 0;
+        padding: 30px 25px 20px 25px;
+        background: #1a2657;
+        border-radius: 14px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+        color: #fff;
+        max-width: 550px;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+    }
+    .schwab-quote-card input[type=text] {
+        flex: 1 1 auto;
+        padding: 9px 12px;
+        border: none;
+        border-radius: 7px;
+        font-size: 18px;
+        color: #1a2657;        /* Dark font */
+        background: #f8fafc;   /* Light background */
+        font-weight: 500;
+        box-shadow: 0 1px 2px #0f172a17;
+    }
+    .schwab-quote-card button {
+        padding: 9px 24px;
+        background: #0aab40;
+        color: #fff;
+        border: none;
+        border-radius: 7px;
+        font-weight: bold;
+        font-size: 18px;
+        transition: 0.15s;
+        margin-left: 8px;
+        box-shadow: 0 2px 4px #0001;
+    }
+    .schwab-quote-card button:hover { background: #15dd74; }
+    .schwab-quote-error {
+        margin: 18px auto 0 auto;
+        background: #ffe6e6;
+        color: #c00;
+        padding: 12px 18px;
+        border-radius: 8px;
+        font-weight: 600;
+        word-break: break-all;
+        max-width: 550px;
+        font-size: 17px;
+        box-shadow: 0 2px 8px #0002;
+    }
+    .schwab-quote-result {
+        margin: 28px auto 0 auto;
+        padding: 15px 16px;
+        background: #06102a;
+        border-radius: 7px;
+        color: #bff;
+        font-family: 'Fira Mono', 'Consolas', 'Menlo', monospace;
+        font-size: 15px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-width: 600px;
+        box-shadow: 0 2px 8px #0002;
+    }
+    h2 {
+        color: #1a2657;
+        text-align: center;
+        margin-bottom: 24px;
+        margin-top: 40px;
+        font-weight: 700;
+        letter-spacing: .5px;
+    }
+</style>
+<div class="container" style="max-width: 620px; margin: 0 auto;">
+    <h2>Schwab Quote Lookup</h2>
+    <form method="post" class="schwab-quote-card">
+        <input type="text" name="symbol" placeholder="Enter symbol (e.g. AAPL)" required value="{{ symbol if symbol else '' }}">
+        <button type="submit">Get Quote</button>
+    </form>
+    {% if error %}
+        <div class="schwab-quote-error">{{ error }}</div>
+    {% endif %}
+    {% if quote %}
+        <h4 style="color:#bbf7d0;margin-top:28px;">Response from Schwab:</h4>
+        <pre class="schwab-quote-result">{{ quote }}</pre>
+    {% endif %}
+</div>
+{% endblock %}

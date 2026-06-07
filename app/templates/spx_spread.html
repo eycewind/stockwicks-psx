@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}SPX Spread Strategy{% endblock %}
+
+{% block content %}
+<style>
+    .banner-heading {
+        background-color: #1e3a8a;
+        color: white;
+        padding: 15px 60px;
+        border-radius: 20px;
+        font-size: 28px;
+        font-weight: bold;
+        text-align: center;
+        margin: 20px auto;
+        display: inline-block;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+    }
+    body {
+        font-family: 'Poppins', sans-serif;
+        background-color: #0d0d2b;
+        color: white;
+        text-align: center;
+    }
+
+    .form-card {
+        background-color: #1a1a3d;
+        padding: 30px;
+        border-radius: 12px;
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5);
+        max-width: 600px;
+        margin: 0 auto 30px auto;
+        text-align: center;
+    }
+
+    .form-card h3 {
+        color: #ffffff;
+        margin-bottom: 20px;
+    }
+
+    .form-card input {
+        padding: 12px;
+        font-size: 16px;
+        border-radius: 8px;
+        border: none;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+
+    .btn-styled {
+        background-color: #6ff22e;
+        color: #000;
+        border: none;
+        padding: 12px 24px;
+        font-size: 16px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+    }
+
+    .btn-styled:hover {
+        background-color: #85f65a;
+    }
+
+    .error-message {
+        color: #ff6b6b;
+        background-color: #2a2a5c;
+        padding: 12px;
+        margin: 20px auto;
+        border-radius: 8px;
+        max-width: 600px;
+        text-align: center;
+    }
+
+    .result-table {
+        background-color: #1a1a3d;
+        color: white;
+        border-radius: 12px;
+        margin: 30px auto 10px auto;
+        max-width: 850px;
+        width: 100%;
+        border-collapse: collapse;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+    }
+    .result-table th, .result-table td {
+        border: 1px solid #333;
+        padding: 12px;
+        text-align: center;
+    }
+    .result-table th {
+        background-color: #00c6ff;
+        color: black;
+    }
+    .no-data {
+        text-align: center;
+        color: #ffffff;
+        margin-top: 15px;
+    }
+</style>
+
+<div class="container text-center">
+    <h1 class="banner-heading">SPX Spread Strategy</h1>
+    <p class="website-name">www.stockwicks.com</p>
+
+    {% if error %}
+        <div class="error-message">{{ error }}</div>
+    {% endif %}
+
+    <div class="form-card">
+        <h3>Input Details</h3>
+        <form method="POST" action="/auth/spx-spread">
+            <input type="date" name="expiry" required value="{{ expiry or '' }}">
+            <input type="text" name="spx_price" placeholder="Current SPX Price" required value="{{ spx_price or '' }}">
+            <button type="submit" class="btn-styled">Get Spread Picks</button>
+        </form>
+    </div>
+
+    {% if recommendations %}
+        <table class="result-table">
+            <thead>
+                <tr>
+                    {% for key in recommendations[0].keys() %}
+                        <th>{{ key|replace("_", " ")|title }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for rec in recommendations %}
+                    <tr>
+                        {% for value in rec.values() %}
+                            <td>{{ value }}</td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% elif recommendations is not none %}
+        <div class="no-data">No spread results found.</div>
+    {% endif %}
+</div>
+{% endblock %}

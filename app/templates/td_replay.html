@@ -1,0 +1,897 @@
+{% extends "base.html" %}
+
+{% block title %}StockWicks - Replay Simulator{% endblock %}
+
+{% block content %}
+<style>
+  body { background:#0d0d2b; font-family:'Poppins',sans-serif; color:#fff; }
+  .wrap { width: 95%; max-width: 1600px; margin: 0 auto; padding-bottom: 60px; }
+  h1 { font-size: 2rem; margin-top: 20px; color:#4fd1c5; text-align:center;
+       text-shadow: 1px 1px 3px rgba(0,0,0,.5); }
+  h2 { color:#4fd1c5; font-size:1.3rem; margin:20px 0 12px; }
+
+  .muted { color:#a7a7c7; }
+  .card { background:#1b1b3a; border-radius:12px; padding:18px; margin:16px 0;
+          box-shadow:0 4px 10px rgba(0,0,0,.35); }
+
+  /* Form */
+  .form-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+               gap:12px; align-items:end; }
+  .form-grid label { display:block; font-size:0.85rem; margin-bottom:4px; color:#a7a7c7; }
+  .form-grid input, .form-grid select {
+    width:100%; padding:9px 10px; background:#27274c; border:1px solid #2a2a55;
+    color:#fff; border-radius:6px; font-size:0.95rem; box-sizing: border-box;
+  }
+  .form-grid input:disabled { opacity:0.65; }
+  .form-checks {
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap:12px; margin-top:12px; align-items:center;
+  }
+  .form-checks label {
+    display:flex; align-items:center; gap:8px; color:#a7a7c7; font-size:0.9rem;
+  }
+  .form-checks input[type="checkbox"] { width:auto; }
+  .field-help { color:#a7a7c7; font-size:0.75rem; margin-top:4px; line-height:1.25; }
+
+  /* Buttons */
+  .btn { padding:10px 18px; border:none; border-radius:6px; cursor:pointer;
+         font-weight:700; font-size:0.9rem; }
+  .btn:disabled { opacity:0.5; cursor:not-allowed; }
+  .btn-start { background:#4fd1c5; color:#000; }
+  .btn-start:hover:not(:disabled) { background:#38b2ac; }
+  .btn-stop  { background:#ff4d4d; color:#fff; padding:6px 12px; font-size:0.85rem; }
+  .btn-stop:hover  { background:#cc0000; }
+  .btn-delete { background:#a94bff; color:#fff; padding:6px 12px; font-size:0.85rem; }
+  .btn-view { background:#6ff22e; color:#000; padding:6px 12px; font-size:0.85rem; }
+
+  /* Status chip */
+  .chip { display:inline-block; padding:3px 10px; border-radius:10px;
+          font-size:0.75rem; font-weight:700; letter-spacing:0.5px; }
+  .chip.PENDING   { background:#555; color:#fff; }
+  .chip.RUNNING   { background:#4fd1c5; color:#000; animation: pulse 1.5s infinite; }
+  .chip.COMPLETED { background:#6ff22e; color:#000; }
+  .chip.STOPPED   { background:#ffd24d; color:#000; }
+  .chip.ERROR     { background:#ff4d4d; color:#fff; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.55; } }
+
+  /* Progress bar */
+  .progress-wrap { height:8px; background:#27274c; border-radius:4px; overflow:hidden; margin:6px 0; }
+  .progress-bar  { height:100%; background:linear-gradient(90deg, #4fd1c5, #6ff22e); transition:width 0.3s; }
+
+  /* Chart area */
+  #chart { width:100%; height:480px; background:#0a0a1f; border-radius:8px;
+           border:1px solid #2a2a55; position:relative; }
+  #chartPlaceholder { position:absolute; inset:0; display:flex; align-items:center;
+                      justify-content:center; color:#a7a7c7; }
+
+  /* Tables */
+  table.tbl { width:100%; border-collapse:collapse; font-size:0.88rem; color:#e5e7eb; }
+  table.tbl th {
+    background:#2d2d5c;
+    color:#4fd1c5;
+    padding:10px 8px;
+    text-align:left;
+    font-weight:700;
+    text-transform:uppercase;
+    font-size:0.78rem;
+    letter-spacing:0.5px;
+    border-bottom:2px solid #3a3a6a;
+  }
+  table.tbl td {
+    padding:10px 8px;
+    border-bottom:1px solid #2a2a55;
+    color:#e5e7eb;   /* hard override so it shows on dark theme */
+  }
+  table.tbl tbody tr:nth-child(odd)  td { background:#1b1b3a; }
+  table.tbl tbody tr:nth-child(even) td { background:#21214a; }
+  table.tbl tbody tr:hover td       { background:#2a2a5a; }
+  .pnl-pos { color:#6ff22e !important; font-weight:700; }
+  .pnl-neg { color:#ff6b6b !important; font-weight:700; }
+  .no-data { padding:20px; text-align:center; color:#a7a7c7 !important; }
+
+  /* Stats bar above Trade History */
+  .stats-bar {
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap:8px; margin-bottom:14px; padding:12px; background:#151533;
+    border:1px solid #2a2a55; border-radius:8px;
+  }
+  .stats-bar .stat { text-align:center; min-width:0; }
+  .stats-bar .stat-label {
+    font-size:0.7rem; color:#a7a7c7; text-transform:uppercase;
+    letter-spacing:0.5px; margin-bottom:4px;
+  }
+  .stats-bar .stat-value { font-size:1.05rem; font-weight:700; color:#e5e7eb; }
+
+  /* Session list */
+  .session-row { display:flex; gap:10px; align-items:center; padding:10px;
+                 background:#151533; border-radius:8px; margin-bottom:6px; }
+  .session-row .sym { font-weight:700; min-width:80px; }
+  .session-row .mid { flex:1; font-size:0.85rem; color:#a7a7c7; }
+  .session-row .session-params { margin-top:5px; color:#d6d6ff; line-height:1.35; }
+  .session-row .actions { display:flex; gap:6px; }
+
+  .two-col { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+  @media (max-width: 1000px) { .two-col { grid-template-columns: 1fr; } }
+
+  .error-banner { background:#4a1f1f; border:1px solid #ff4d4d; color:#ffb3b3;
+                  padding:10px 14px; border-radius:6px; margin:10px 0; }
+</style>
+
+<div class="wrap">
+  <h1>📊 Replay Simulator</h1>
+  <p class="muted" style="text-align:center">
+    Walk historical market data through a trading algorithm, candle by candle.
+    All trades are simulated — nothing hits a broker.
+  </p>
+
+  <!-- Errors -->
+  <div id="errorBanner" style="display:none;" class="error-banner"></div>
+
+  <!-- Hidden bootstrap data (read by JS; keeps Jinja out of <script>) -->
+
+  <div id="replayBootstrap"
+       data-has-running="{% if has_running %}1{% else %}0{% endif %}"
+       data-running-session-id="{% if running_session %}{{ running_session.id }}{% else %}0{% endif %}"
+       style="display:none;"></div>
+
+  <!-- =================================================================== -->
+  <!-- Start Form                                                           -->
+  <!-- =================================================================== -->
+  <div class="card" id="formCard">
+    <h2>New Replay</h2>
+    <form id="startForm" autocomplete="off">
+      <div class="form-grid">
+        <div>
+          <label>Symbol</label>
+          <input name="symbol" id="f_symbol" required placeholder="AAPL" value="AAPL">
+        </div>
+        <div>
+          <label>Start Date</label>
+          <input type="date" name="start_date" id="f_start" required>
+        </div>
+        <div>
+          <label>End Date</label>
+          <input type="date" name="end_date" id="f_end" required>
+        </div>
+        <div>
+          <label>Interval</label>
+          <select name="interval" id="f_interval">
+            <option value="1min">1 min</option>
+            <option value="5min" selected>5 min</option>
+            <option value="10min">10 min</option>
+            <option value="15min">15 min</option>
+            <option value="30min">30 min</option>
+            <option value="1d">1 day</option>
+          </select>
+        </div>
+        <div>
+          <label>Algo</label>
+          <select name="algo_name" id="f_algo">
+            <option value="Algo1_MM" selected>Algo1_MM — FeatureSet_1 (Original 12)</option>
+            <option value="Algo2_MM">Algo2_MM — FeatureSet_2 (OBV/VWAP 26)</option>
+            <option value="Algo3_MM">Algo3_MM — FeatureSet_3 (SMI only)</option>
+            <option value="Algo4_MM">Algo4_MM — FeatureSet_4 (Production Legacy)</option>
+            <option value="Algo5_MM">Algo5_MM — FeatureSet_5 (MACD only)</option>
+          </select>
+        </div>
+        <div>
+          <label>Speed</label>
+          <select name="speed" id="f_speed">
+            <option value="1">1x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="20" selected>20x</option>
+          </select>
+        </div>
+        <div>
+          <label>Trade Size</label>
+          <input type="number" step="1" min="1" name="trade_size" id="f_qty" value="100" required>
+        </div>
+        <div>
+          <label>Hard Stop ($)</label>
+          <input type="number" step="1" min="0" name="hard_stop_usd" id="f_hard_stop" value="300">
+          <div class="field-help">Same as production. Exit if open P/L reaches this loss.</div>
+        </div>
+        <div>
+          <label>Per-Share Stop Pct</label>
+          <input type="number" step="0.001" min="0" max="1" name="per_share_stop_pct" id="f_per_share_stop_pct" value="0.01">
+          <div class="field-help">Algo4 guardrail. 0.01 = 1% per share; 0 disables.</div>
+        </div>
+        <div>
+          <label>Trail Activation Profit ($)</label>
+          <input type="number" step="1" min="0" name="trailing_stop_activation" id="f_trail_activation" value="75">
+          <div class="field-help">Same as production. Profit trail starts after this open profit.</div>
+        </div>
+        <div>
+          <label>Trail Giveback Distance ($)</label>
+          <input type="number" step="1" min="0" name="trailing_stop_distance" id="f_trail_distance" value="35">
+          <div class="field-help">Same as production. Exit after this giveback from peak profit.</div>
+        </div>
+        <div>
+          <label>Long Entry Avg Prob</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            name="long_entry_prob"
+            id="f_long_entry_prob"
+            value="0.60"
+          >
+          <div class="field-help">Enter long when smoothed prob crosses above this.</div>
+        </div>
+        <div>
+          <label>Short Entry Avg Prob</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            name="short_entry_prob"
+            id="f_short_entry_prob"
+            value="0.40"
+          >
+          <div class="field-help">Enter short when smoothed prob crosses below this.</div>
+        </div>
+        <div>
+          <label>Probability Exit Mode</label>
+          <select name="prob_exit_mode" id="f_prob_exit_mode" class="js-prob-exit-mode">
+            <option value="trailing" selected>Trailing drop</option>
+            <option value="fixed">Fixed threshold</option>
+          </select>
+          <div class="field-help">Choose peak giveback or fixed conviction floor.</div>
+        </div>
+        <div>
+          <label>Probability Trail Drop</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            name="prob_trail_drop"
+            id="f_prob_trail_drop"
+            class="js-prob-trail-drop"
+            value="0.05"
+          >
+          <div class="field-help">
+            Used in trailing mode. Exit when probability conviction drops this much from its peak.
+            Example: 0.05 = exit after 5% probability reversal.
+          </div>
+        </div>
+        <div>
+          <label>Long Fixed Exit Prob</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            name="long_fixed_exit_prob"
+            id="f_long_fixed_exit_prob"
+            class="js-prob-fixed-exit"
+            value="0.55"
+          >
+          <div class="field-help">Used in fixed mode for long positions.</div>
+        </div>
+        <div>
+          <label>Short Fixed Exit Prob</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max="1"
+            name="short_fixed_exit_prob"
+            id="f_short_fixed_exit_prob"
+            class="js-prob-fixed-exit"
+            value="0.55"
+          >
+          <div class="field-help">Used in fixed mode for short positions.</div>
+        </div>
+        <div>
+          <label>Replay Train Min Rows</label>
+          <input type="number" step="1" min="1" name="replay_train_min_rows" id="f_min_rows" value="30">
+          <div class="field-help">Replay-only warmup guard. Does not change entry/exit logic.</div>
+        </div>
+        <div>
+          <button type="submit" class="btn btn-start" id="startBtn">▶ Start Replay</button>
+        </div>
+      </div>
+      <div class="form-checks">
+        <label><input type="checkbox" name="allow_short_selling" value="on" checked> Allow Short</label>
+        <label><input type="checkbox" name="eod_auto_close" value="on" checked> Close EOD</label>
+      </div>
+      <p class="muted" style="font-size:0.8rem; margin-top:10px;">
+        Replay now supports Algo1_MM / Algo2_MM / Algo3_MM / Algo5_MM model-only logic and Algo4_MM legacy production-compatible logic.
+        Dates must be within the last 30 days. If you've never ingested data for this symbol, we'll auto-download on Submit.
+      </p>
+    </form>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- Active / Recent Sessions                                             -->
+  <!-- =================================================================== -->
+  <div class="card">
+    <h2>My Sessions</h2>
+    <div id="sessionList" class="muted">Loading…</div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- Live Chart + Tables (only shown when a session is selected)          -->
+  <!-- =================================================================== -->
+  <div id="liveView" style="display:none;">
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h2 style="margin:0;">Replay: <span id="liveTitle">—</span></h2>
+        <div>
+          <span class="chip" id="liveStatus">—</span>
+          <span class="muted" id="liveMeta" style="margin-left:10px;"></span>
+        </div>
+      </div>
+      <div class="progress-wrap" style="margin-top:14px;">
+        <div class="progress-bar" id="liveProgress" style="width:0%;"></div>
+      </div>
+      <div id="chart">
+        <div id="chartPlaceholder">Loading chart…</div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <h2>Open Positions</h2>
+        <table class="tbl" id="openTbl">
+          <thead>
+            <tr>
+              <th>Side</th><th>Qty</th><th>Entry</th><th>Entry Time</th>
+            </tr>
+          </thead>
+          <tbody><tr><td colspan="4" class="no-data">None</td></tr></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Trade History</h2>
+        <div class="stats-bar">
+          <div class="stat">
+            <div class="stat-label">Realized P&amp;L</div>
+            <div class="stat-value" id="realizedPnl">$0.00</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Trades</div>
+            <div class="stat-value" id="tradeCount">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value" id="winRate">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Wins / Losses</div>
+            <div class="stat-value"><span id="winCount" class="pnl-pos">0</span> / <span id="lossCount" class="pnl-neg">0</span></div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Best</div>
+            <div class="stat-value pnl-pos" id="bestTrade">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Worst</div>
+            <div class="stat-value pnl-neg" id="worstTrade">—</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Avg Win / Loss</div>
+            <div class="stat-value" style="font-size:0.95rem;"><span id="avgWin" class="pnl-pos">—</span> / <span id="avgLoss" class="pnl-neg">—</span></div>
+          </div>
+        </div>
+        <table class="tbl" id="histTbl">
+          <thead>
+            <tr>
+              <th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Reason</th>
+            </tr>
+          </thead>
+          <tbody><tr><td colspan="6" class="no-data">None</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TradingView Lightweight Charts -->
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+  document.querySelectorAll(".js-prob-exit-mode").forEach((modeSelect) => {
+    const form = modeSelect.closest("form");
+    if (!form) return;
+    const trailInput = form.querySelector(".js-prob-trail-drop");
+    const fixedInputs = form.querySelectorAll(".js-prob-fixed-exit");
+
+    function syncProbabilityExitFields() {
+      const fixed = modeSelect.value === "fixed";
+      if (trailInput) trailInput.parentElement.style.opacity = fixed ? "0.55" : "1";
+      fixedInputs.forEach((input) => {
+        input.parentElement.style.opacity = fixed ? "1" : "0.55";
+      });
+    }
+
+    modeSelect.addEventListener("change", syncProbabilityExitFields);
+    syncProbabilityExitFields();
+  });
+});
+
+// =============================================================================
+// State
+// =============================================================================
+let currentSessionId = null;
+let chart = null;
+let candleSeries = null;
+let markerList = [];
+let statePollInterval = null;
+let sessionListInterval = null;
+let lastBarCount = 0;
+
+// =============================================================================
+// Init form defaults (30-day window within last 30 days)
+// =============================================================================
+(function initDates() {
+  const today = new Date();
+  const end = new Date(today);
+  end.setDate(end.getDate() - 1);
+  const start = new Date(today);
+  start.setDate(start.getDate() - 15);
+  const fmt = d => d.toISOString().slice(0, 10);
+
+  const min = new Date(today);
+  min.setDate(min.getDate() - 30);
+
+  const startEl = document.getElementById("f_start");
+  const endEl = document.getElementById("f_end");
+  startEl.value = fmt(start);
+  endEl.value = fmt(end);
+  startEl.min = fmt(min);
+  startEl.max = fmt(today);
+  endEl.min = fmt(min);
+  endEl.max = fmt(today);
+})();
+
+// =============================================================================
+// Errors
+// =============================================================================
+function showError(msg) {
+  const banner = document.getElementById("errorBanner");
+  banner.textContent = msg;
+  banner.style.display = "block";
+  setTimeout(() => { banner.style.display = "none"; }, 8000);
+}
+
+// =============================================================================
+// Start form
+// =============================================================================
+
+var REPLAY_BASE = "{{ url_prefix }}/replay-simulator";
+
+document.getElementById("startForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById("startBtn");
+  btn.disabled = true;
+  btn.textContent = "Starting (fetching data if needed)…";
+
+  const fd = new FormData(e.target);
+  try {
+    const res = await fetch(`${REPLAY_BASE}/start`, { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) {
+      showError(data.detail || "Failed to start replay");
+    } else {
+      currentSessionId = data.session_id;
+      await refreshSessionList();
+      openLiveView(currentSessionId);
+    }
+  } catch (err) {
+    showError("Network error: " + err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ Start Replay";
+  }
+});
+
+// =============================================================================
+// Session list
+// =============================================================================
+async function refreshSessionList() {
+  try {
+    const res = await fetch(`${REPLAY_BASE}/api/sessions`);
+    const data = await res.json();
+    renderSessionList(data.sessions || []);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderSessionList(sessions) {
+  const el = document.getElementById("sessionList");
+  if (!sessions.length) {
+    el.innerHTML = '<div class="muted">No replays yet. Start one above.</div>';
+    return;
+  }
+  const runningCount = sessions.filter(s => s.status === "RUNNING").length;
+  const maxRunning = 10;
+  document.getElementById("startBtn").disabled = runningCount >= maxRunning;
+
+  const fmtMoney = v => {
+    const n = Number(v);
+    return Number.isFinite(n) ? `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "-";
+  };
+  const fmtProb = v => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(2) : "-";
+  };
+  const fmtInt = v => {
+    const n = Number(v);
+    return Number.isFinite(n) ? String(Math.trunc(n)) : "-";
+  };
+
+  el.innerHTML = sessions.map(s => {
+    const progress = s.total_bars
+      ? `${s.current_bar_idx}/${s.total_bars}`
+      : `0/0`;
+    const cfg = s.config || {};
+    const params = [
+      `Hard Stop: ${fmtMoney(cfg.hard_stop_usd)}`,
+      `Per-Share Stop: ${fmtProb(cfg.per_share_stop_pct)}`,
+      `Trail Activation: ${fmtMoney(cfg.trailing_stop_activation)}`,
+      `Trail Giveback: ${fmtMoney(cfg.trailing_stop_distance)}`,
+      `Long Avg Prob: ${fmtProb(cfg.long_entry_prob)}`,
+      `Short Avg Prob: ${fmtProb(cfg.short_entry_prob)}`,
+      `Prob Exit: ${cfg.prob_exit_mode === "fixed" ? "Fixed" : "Trailing"}`,
+      cfg.prob_exit_mode === "fixed"
+        ? `Long/Short Fixed Exit: ${fmtProb(cfg.long_fixed_exit_prob)}/${fmtProb(cfg.short_fixed_exit_prob)}`
+        : `Prob Trail Drop: ${fmtProb(cfg.prob_trail_drop)}`,
+      `Train Min Rows: ${fmtInt(cfg.replay_train_min_rows)}`,
+      `Interval: ${s.interval}`,
+      `Algo: ${s.algo_name}`
+    ].join(" | ");
+    const actions = [];
+    if (s.status === "RUNNING") {
+      actions.push(`<button class="btn btn-stop" onclick="stopSession(${s.id})">Stop</button>`);
+    } else {
+      actions.push(`<button class="btn btn-start" onclick="runAsLiveBot(${s.id})">Run as Live Bot</button>`);
+      actions.push(`<button class="btn btn-delete" onclick="deleteSession(${s.id})">Delete</button>`);
+    }
+    actions.push(`<button class="btn btn-view" onclick="openLiveView(${s.id})">View</button>`);
+    return `
+      <div class="session-row">
+        <div class="sym">${s.symbol}</div>
+        <div class="mid">
+          ${s.interval} · ${s.start_date} → ${s.end_date}
+          · ${s.speed}x · ${s.algo_name}
+          · bars ${progress}
+          <div class="session-params">${params}</div>
+        </div>
+        <div><span class="chip ${s.status}">${s.status}</span></div>
+        <div class="actions">${actions.join("")}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function stopSession(id) {
+  if (!confirm("Stop this replay?")) return;
+  try {
+    const res = await fetch(`${REPLAY_BASE}/stop/${id}`, { method: "POST" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showError(d.detail || "Stop failed");
+      return;
+    }
+    await refreshSessionList();
+  } catch (e) { showError("Network error: " + e); }
+}
+
+async function deleteSession(id) {
+  if (!confirm("Delete this replay and its trade history?")) return;
+  try {
+    const res = await fetch(`${REPLAY_BASE}/delete/${id}`, { method: "POST" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      showError(d.detail || "Delete failed");
+      return;
+    }
+    if (currentSessionId === id) closeLiveView();
+    await refreshSessionList();
+  } catch (e) { showError("Network error: " + e); }
+}
+
+async function runAsLiveBot(id) {
+  if (!confirm("Create a live paper bot from this replay's parameters?")) return;
+  const mirrorLive = confirm("Mirror this live bot to Schwab real orders?\n\nOK = mirror to Schwab\nCancel = paper-only");
+  const fd = new FormData();
+  if (mirrorLive) fd.append("mirror_live", "on");
+  try {
+    const res = await fetch(`${REPLAY_BASE}/run-live/${id}`, { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showError(data.detail || "Run as Live Bot failed");
+      return;
+    }
+    showError(`Live bot #${data.bot_id} started from replay ${id}${mirrorLive ? " with Schwab mirror ON" : " as paper-only"}`);
+    await refreshSessionList();
+  } catch (e) { showError("Network error: " + e); }
+}
+
+// =============================================================================
+// Live view
+// =============================================================================
+function openLiveView(sessionId) {
+  currentSessionId = sessionId;
+  document.getElementById("liveView").style.display = "block";
+  document.getElementById("chartPlaceholder").textContent = "Loading chart…";
+  lastBarCount = 0;
+  markerList = [];
+  initChart();
+  pollState();
+  if (statePollInterval) clearInterval(statePollInterval);
+  statePollInterval = setInterval(pollState, 1000);
+  document.getElementById("liveView").scrollIntoView({ behavior: "smooth" });
+}
+
+function closeLiveView() {
+  currentSessionId = null;
+  document.getElementById("liveView").style.display = "none";
+  if (statePollInterval) { clearInterval(statePollInterval); statePollInterval = null; }
+  if (chart) { chart.remove(); chart = null; candleSeries = null; }
+}
+
+function initChart() {
+  if (chart) chart.remove();
+  const container = document.getElementById("chart");
+  const placeholder = document.getElementById("chartPlaceholder");
+
+  chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 480,
+    layout: { background: { color: "#0a0a1f" }, textColor: "#d1d4dc" },
+    grid: {
+      vertLines: { color: "#1a1a3a" },
+      horzLines: { color: "#1a1a3a" },
+    },
+    timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 5 },
+    crosshair: { mode: 0 },
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: "#6ff22e", borderUpColor: "#6ff22e", wickUpColor: "#6ff22e",
+    downColor: "#ff4d4d", borderDownColor: "#ff4d4d", wickDownColor: "#ff4d4d",
+  });
+  placeholder.style.display = "none";
+
+  window.addEventListener("resize", () => {
+    if (chart) chart.resize(container.clientWidth, 480);
+  });
+}
+
+async function pollState() {
+  if (!currentSessionId) return;
+  try {
+    const [stateRes, tradesRes, barsRes] = await Promise.all([
+      fetch(`${REPLAY_BASE}/api/state/${currentSessionId}`),
+      fetch(`${REPLAY_BASE}/api/trades/${currentSessionId}`),
+      fetch(`${REPLAY_BASE}/api/bars/${currentSessionId}`),
+    ]);
+    if (!stateRes.ok) return;
+    const state = await stateRes.json();
+    const trades = await tradesRes.json();
+    const bars = await barsRes.json();
+
+    renderState(state);
+    renderBars(bars);
+    renderTrades(trades);
+
+    // Stop polling when session ends
+    if (["COMPLETED", "STOPPED", "ERROR"].includes(state.session.status)) {
+      if (statePollInterval) { clearInterval(statePollInterval); statePollInterval = null; }
+      // One final session list refresh so the row updates
+      refreshSessionList();
+    }
+  } catch (e) {
+    console.error("poll error:", e);
+  }
+}
+
+function renderState(state) {
+  const s = state.session;
+  document.getElementById("liveTitle").textContent =
+    `${s.symbol} · ${s.interval} · ${s.start_date} → ${s.end_date}`;
+  const chip = document.getElementById("liveStatus");
+  chip.className = "chip " + s.status;
+  chip.textContent = s.status;
+
+  const pct = s.total_bars ? (s.current_bar_idx / s.total_bars) * 100 : 0;
+  document.getElementById("liveProgress").style.width = pct.toFixed(1) + "%";
+  document.getElementById("liveMeta").innerHTML =
+    `bar ${s.current_bar_idx}/${s.total_bars} · ` +
+    `realized <span class="${state.realized_pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">` +
+    `$${state.realized_pnl.toFixed(2)}</span>`;
+
+  if (s.error_message) showError(s.error_message);
+}
+
+function renderBars(data) {
+  if (!candleSeries) return;
+  const bars = data.bars || [];
+  // Only push new data when count grows (cheap for streaming)
+  if (bars.length === lastBarCount) return;
+  candleSeries.setData(bars);
+  lastBarCount = bars.length;
+  // Auto-fit first time only
+  if (bars.length && lastBarCount === bars.length && chart) {
+    // Only fit on initial load
+    if (lastBarCount > 0 && !candleSeries._fitDone) {
+      chart.timeScale().fitContent();
+      candleSeries._fitDone = true;
+    }
+  }
+}
+
+function renderTrades(data) {
+  // Helpers
+  const sidePill = (side) => {
+    const s = (side || "").toLowerCase();
+    const label = s.toUpperCase();
+    const cls = s === "long" ? "pnl-pos" : "pnl-neg";
+    return `<span class="${cls}"><b>${label}</b></span>`;
+  };
+  const fmtTime = (iso) => {
+    if (!iso) return "—";
+    // Our backend emits naive ET. "2026-04-10T13:40:00" → "04/10 13:40"
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    return m ? `${m[2]}/${m[3]} ${m[4]}:${m[5]}` : iso;
+  };
+  const money = (v, signed=false) =>
+    (signed && v >= 0 ? "+" : "") + "$" + (Math.abs(v) === Infinity ? "?" : v.toFixed(2));
+
+  // Open
+  const openTbody = document.querySelector("#openTbl tbody");
+  const opens = data.open_trades || [];
+  if (!opens.length) {
+    openTbody.innerHTML = '<tr><td colspan="4" class="no-data">None</td></tr>';
+  } else {
+    openTbody.innerHTML = opens.map(t => `
+      <tr>
+        <td>${sidePill(t.position_side)}</td>
+        <td>${t.quantity}</td>
+        <td>${money(t.entry_price)}</td>
+        <td>${fmtTime(t.entry_time)}</td>
+      </tr>
+    `).join("");
+  }
+
+  // History
+  const histTbody = document.querySelector("#histTbl tbody");
+  const hist = data.trade_history || [];
+
+  // ---- Compute statistics ----
+  const total   = hist.reduce((a, h) => a + (h.profit_loss || 0), 0);
+  const wins    = hist.filter(h => (h.profit_loss || 0) >  0);
+  const losses  = hist.filter(h => (h.profit_loss || 0) <  0);
+  const flats   = hist.filter(h => (h.profit_loss || 0) === 0);
+  const winRate = hist.length ? (wins.length / hist.length) * 100 : 0;
+  const best    = wins.length   ? Math.max(...wins.map(h => h.profit_loss))   : 0;
+  const worst   = losses.length ? Math.min(...losses.map(h => h.profit_loss)) : 0;
+  const avgWin  = wins.length   ? wins.reduce((a,h)=>a+h.profit_loss, 0)   / wins.length   : 0;
+  const avgLoss = losses.length ? losses.reduce((a,h)=>a+h.profit_loss, 0) / losses.length : 0;
+
+  // ---- Update stats bar ----
+  const pnlEl = document.getElementById("realizedPnl");
+  pnlEl.textContent = money(total);
+  pnlEl.className = "stat-value " + (total >= 0 ? "pnl-pos" : "pnl-neg");
+
+  document.getElementById("tradeCount").textContent = hist.length;
+
+  const wrEl = document.getElementById("winRate");
+  if (hist.length === 0) {
+    wrEl.textContent = "—";
+    wrEl.className = "stat-value";
+  } else {
+    wrEl.textContent = winRate.toFixed(1) + "%";
+    wrEl.className = "stat-value " + (winRate >= 50 ? "pnl-pos" : "pnl-neg");
+  }
+  document.getElementById("winCount").textContent = wins.length;
+  document.getElementById("lossCount").textContent = losses.length;
+
+  document.getElementById("bestTrade").textContent  = wins.length   ? money(best, true)   : "—";
+  document.getElementById("worstTrade").textContent = losses.length ? money(worst, true)  : "—";
+  document.getElementById("avgWin").textContent     = wins.length   ? money(avgWin, true) : "—";
+  document.getElementById("avgLoss").textContent    = losses.length ? money(avgLoss, true): "—";
+
+  // ---- Render table rows ----
+  if (!hist.length) {
+    histTbody.innerHTML = '<tr><td colspan="6" class="no-data">None</td></tr>';
+  } else {
+    histTbody.innerHTML = hist.map(h => {
+      const pnlClass = h.profit_loss >= 0 ? "pnl-pos" : "pnl-neg";
+      return `
+        <tr>
+          <td>${sidePill(h.position_side)}</td>
+          <td>${h.quantity}</td>
+          <td>${money(h.entry_price)}<br><span class="muted" style="font-size:0.75rem;">${fmtTime(h.entry_time)}</span></td>
+          <td>${money(h.exit_price)}<br><span class="muted" style="font-size:0.75rem;">${fmtTime(h.exit_time)}</span></td>
+          <td class="${pnlClass}">${money(h.profit_loss, true)}</td>
+          <td style="font-size:0.78rem; color:#a7a7c7;">${h.exit_reason || "—"}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  // Draw trade markers on chart.
+  //
+  // To prevent vertical stacking when trades are close in time, we:
+  //   1) Use tiny arrows/circles WITHOUT text for entries (Lightweight Charts
+  //      stacks labeled markers vertically when bars are near each other).
+  //   2) Put P&L text only on exits, and only as a small label.
+  //   3) Open-position entries get a distinct yellow ring instead of a label.
+  const markers = [];
+
+  hist.forEach(h => {
+    // Entry: small arrow, no text
+    if (h.entry_time) {
+      const t = Math.floor(new Date(h.entry_time).getTime() / 1000);
+      const isLong = h.position_side === "long";
+      markers.push({
+        time: t,
+        position: isLong ? "belowBar" : "aboveBar",
+        color: isLong ? "#6ff22e" : "#ff4d4d",
+        shape: isLong ? "arrowUp" : "arrowDown",
+        // no text — prevents stacking when bars are close
+      });
+    }
+    // Exit: circle + compact P&L label
+    if (h.exit_time) {
+      const t = Math.floor(new Date(h.exit_time).getTime() / 1000);
+      const isLong = h.position_side === "long";
+      const isWin = h.profit_loss >= 0;
+      const pnlTxt = (isWin ? "+" : "") + Math.round(h.profit_loss);
+      markers.push({
+        time: t,
+        position: isLong ? "aboveBar" : "belowBar",
+        color: isWin ? "#6ff22e" : "#ff4d4d",
+        shape: "circle",
+        text: pnlTxt,
+      });
+    }
+  });
+
+  opens.forEach(t => {
+    if (t.entry_time) {
+      const ts = Math.floor(new Date(t.entry_time).getTime() / 1000);
+      const isLong = t.position_side === "long";
+      markers.push({
+        time: ts,
+        position: isLong ? "belowBar" : "aboveBar",
+        color: "#ffd24d",
+        shape: isLong ? "arrowUp" : "arrowDown",
+        text: "●",
+      });
+    }
+  });
+
+  for (let i = markers.length - 1; i >= 0; i--) {
+    if (!markers[i].text || !/^[+-]/.test(markers[i].text)) markers.splice(i, 1);
+  }
+  markers.sort((a, b) => a.time - b.time);
+  if (candleSeries) candleSeries.setMarkers(markers);
+}
+
+// =============================================================================
+// Boot
+// =============================================================================
+refreshSessionList();
+sessionListInterval = setInterval(refreshSessionList, 5000);
+
+// If a session is currently running, auto-open it
+(function autoOpen() {
+  var boot = document.getElementById("replayBootstrap");
+  if (!boot) return;
+  var hasRunning = boot.getAttribute("data-has-running") === "1";
+  var runningId = parseInt(boot.getAttribute("data-running-session-id"), 10);
+  if (hasRunning && runningId > 0) {
+    openLiveView(runningId);
+  }
+})();
+</script>
+{% endblock %}

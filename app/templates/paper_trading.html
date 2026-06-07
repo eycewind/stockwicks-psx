@@ -1,0 +1,442 @@
+<!--- /var/www/stockwicks/app/templates/paper_trading.html-->
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - Paper Trading
+{% endblock %}
+
+{% block content %}
+<style>
+    body {
+        background-color: #0d0d2b; /* Dark blue StockWicks style */
+        font-family: 'Poppins', sans-serif;
+        color: #fff;
+    }
+
+    .container {
+        width: 80%;
+        margin: auto;
+        text-align: center;
+    }
+
+    h1 {
+        font-size: 2.2rem;
+        margin-top: 30px;
+        color: #4fd1c5; /* StockWicks teal accent */
+        text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+    }
+
+    .balance-box {
+        margin: 30px auto;
+        background: #1b1b3a;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0px 4px 10px rgba(0,0,0,0.4);
+        width: 50%;
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #6ff22e; /* green balance text */
+    }
+
+    .reset-btn {
+        margin-top: 15px;
+        background: #ff4d4d;
+        padding: 10px 20px;
+        border: none;
+        font-weight: bold;
+        color: white;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    .reset-btn:hover {
+        background: #cc0000;
+        transform: scale(1.05);
+    }
+
+    /* --- Trade Form --- */
+    .trade-form {
+        background: #1b1b3a;
+        padding: 20px;
+        width: 50%;
+        margin: 20px auto;
+        border-radius: 10px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        text-align: left;
+    }
+
+    .trade-form h2 {
+        color: #4fd1c5;
+        margin-bottom: 15px;
+        text-align: center;
+    }
+
+    .trade-form label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+
+    .trade-form input, 
+    .trade-form select {
+        width: 100%;
+        padding: 10px;
+        margin-bottom: 15px;
+        background: #27274c;
+        border: none;
+        color: white;
+        border-radius: 6px;
+    }
+
+    .trade-form button {
+        width: 100%;
+        background: #4fd1c5;
+        color: #000;
+        padding: 12px;
+        border: none;
+        font-weight: bold;
+        cursor: pointer;
+        border-radius: 6px;
+        transition: 0.3s;
+    }
+    .trade-form button:hover {
+        background: #38b2ac;
+    }
+
+    .section-title {
+        margin-top: 40px;
+        color: #4fd1c5;
+        font-size: 1.6rem;
+    }
+
+    table.trade-table {
+        width: 80%;
+        margin: 20px auto;
+        border-collapse: collapse;
+        background: #1b1b3a;
+        color: white;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    table.trade-table th {
+        background: #2d2d5c;
+        padding: 12px;
+    }
+    table.trade-table td {
+        padding: 10px;
+        border-bottom: 1px solid #333;
+    }
+    .no-trades {
+        color: #aaa;
+        padding: 20px;
+        text-align: center;
+    }
+
+    /* ✅ New: Styled price display box */
+    .price-box {
+        margin-top: 10px;
+        background: #222;
+        color: #00ff99;
+        padding: 8px;
+        border-radius: 6px;
+        text-align: center;
+        font-weight: bold;
+        display: none;
+    }
+</style>
+
+<div class="container">
+    <h1>📊 Paper Trading Dashboard</h1>
+
+    <!-- Balance Section -->
+    <div class="balance-box">
+        Current Paper Balance: <br>
+        ${{ "%.2f"|format(paper_account.current_balance) }}
+    </div>
+<!-- Place a New Trade -->
+<div class="trade-form">
+    <h2>➕ Place a New Trade</h2>
+    <!-- ✅ FIXED: Action now points to /auth/papertrading/place-trade -->
+    <form id="trade-form" method="post" action="/auth/papertrading/place-trade">
+        <label>Symbol (e.g. AAPL)</label>
+        <input type="text" id="symbol" name="symbol" placeholder="AAPL" required>
+
+        <!-- ✅ Get current price -->
+        <button type="button" onclick="fetchCurrentPriceAndFill()">📈 Get Current Price</button>
+        
+        <div id="price-display" class="price-box">
+            Current Price: <span id="current_price_value">--</span>
+        </div>
+
+        <label>Trade Type</label>
+        <select name="trade_type" required>
+            <option value="BUY">BUY</option>
+            <option value="SELL">SELL</option>
+        </select>
+
+        <label>Quantity</label>
+        <input type="number" name="quantity" step="1" min="1" placeholder="Enter quantity" required>
+
+        <label>Entry Price</label>
+        <input type="number" id="entry_price" name="entry_price" step="0.01" placeholder="Enter entry price" required>
+        <label>Profit Target (optional)</label>
+        <input type="number" step="0.01" name="profit_target" placeholder="Enter target price">
+
+        <label>Stop Loss (optional)</label>
+        <input type="number" step="0.01" name="stop_loss" placeholder="Enter stop loss price">
+        <button type="submit">✅ Place Trade</button>
+    </form>
+</div>
+<h2 class="section-title">📌 Pending Orders</h2>
+<table class="trade-table">
+    <thead>
+        <tr>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Limit Price</th>
+            <th>Qty</th>
+            <th>Profit Target</th>
+            <th>Stop Loss</th>
+            <th>Created At</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% if pending_orders and pending_orders|length > 0 %}
+            {% for order in pending_orders %}
+            <tr>
+                <td>{{ order.symbol }}</td>
+                <td>{{ order.side|upper }}</td>
+                <td>${{ "%.2f"|format(order.limit_price) }}</td>
+                <td>{{ order.quantity }}</td>
+                <td>
+                    {% if order.profit_target %}
+                        ${{ "%.2f"|format(order.profit_target) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </td>
+                <td>
+                    {% if order.stop_loss %}
+                        ${{ "%.2f"|format(order.stop_loss) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </td>
+                <td>{{ order.created_at.strftime("%Y-%m-%d %H:%M:%S") if order.created_at else "" }}</td>
+                <td>
+                    <!-- ✅ Cancel button -->
+                    <form method="post" action="/auth/papertrading/cancel-order/{{ order.id }}">
+                        <button type="submit" style="background: red; color: white; padding: 6px 10px; border: none; border-radius: 5px; cursor: pointer;">
+                            ❌ Cancel
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="8" class="no-trades">No pending orders</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+
+
+<!-- ✅ FIXED: Open Trades Section -->
+<h2 class="section-title">📌 Open Trades</h2>
+<table class="trade-table">
+    <thead>
+        <tr>
+            <th>Symbol</th>
+            <th>Type</th>
+            <th>Quantity</th>
+            <th>Entry Price</th>
+            <th>Profit Target</th>
+            <th>Stop Loss</th>
+            <th>Status</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% if open_trades and open_trades|length > 0 %}
+            {% for trade in open_trades %}
+            <tr>
+                <td>{{ trade.symbol }}</td>
+                <td>{{ trade.trade_type }}</td>
+                <td>{{ trade.quantity }}</td>
+                <td>${{ "%.2f"|format(trade.entry_price) }}</td>
+                
+                <!-- ✅ Show PT/SL or '--' -->
+                <td>
+                    {% if trade.profit_target %}
+                        ${{ "%.2f"|format(trade.profit_target) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </td>
+                <td>
+                    {% if trade.stop_loss %}
+                        ${{ "%.2f"|format(trade.stop_loss) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </td>
+
+                <td>{{ trade.status }}</td>
+                <td>
+                    <form method="post" action="/auth/papertrading/close-trade/{{ trade.id }}">
+                        <input type="number" step="0.01" name="price" placeholder="Exit Price" required>
+                        <button type="submit">Close</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="8" class="no-trades">No open trades yet</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+
+
+<div class="summary-box">
+    <h3>📊 Account Summary</h3>
+    <p>Initial Balance: <strong>${{ "%.2f"|format(paper_account.initial_balance) }}</strong></p>
+    <p>Current Balance: <strong>${{ "%.2f"|format(paper_account.current_balance) }}</strong></p>
+    
+    {% set total_pl = paper_account.current_balance - paper_account.initial_balance %}
+    {% set pl_percent = (total_pl / paper_account.initial_balance) * 100 if paper_account.initial_balance else 0 %}
+    
+    <p>
+        Total P/L: 
+        {% if total_pl >= 0 %}
+            <span style="color:limegreen;">+${{ "%.2f"|format(total_pl) }} (+{{ "%.2f"|format(pl_percent) }}%)</span>
+        {% else %}
+            <span style="color:red;">-${{ "%.2f"|format(total_pl | abs) }} ({{ "%.2f"|format(pl_percent) }}%)</span>
+        {% endif %}
+    </p>
+</div>
+<form method="post" action="/auth/papertrading/reset-balance" style="margin-top: 10px;">
+    <button type="submit" style="background: red; color: white; padding: 8px 12px; border: none; border-radius: 5px;">
+        🔄 Reset Paper Account
+    </button>
+</form>
+
+<h2 class="section-title">📜 Download Trade History</h2>
+<!-- ✅ Download CSV -->
+<form method="get" action="/auth/papertrading/download-csv">
+    <button type="submit">⬇ Download Full Trade History (CSV)</button>
+</form>
+
+<!-- ✅ FIXED: Trade History Section -->
+<h2 class="section-title">📜 Trade History</h2>
+<table class="trade-table">
+    <thead>
+        <tr>
+            <th>Symbol</th>
+            <th>Type</th>
+            <th>Quantity</th>
+            <th>Entry Price</th>
+            <th>Exit Price</th>
+            <th>Profit/Loss</th>
+            <th>Profit Target</th>
+            <th>Stop Loss</th>
+            <th>Entry Time</th>
+            <th>Exit Time</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% if closed_trades and closed_trades|length > 0 %}
+            {% for trade in closed_trades %}
+            <tr>
+                <td>{{ trade.symbol }}</td>
+                <td>{{ trade.trade_type }}</td>
+                <td>{{ trade.quantity }}</td>
+                <td>${{ "%.2f"|format(trade.entry_price) }}</td>
+                <td>${{ "%.2f"|format(trade.exit_price) }}</td>
+
+                <!-- ✅ Profit/Loss calculation -->
+                <td>
+                    {% set profit_loss = (trade.exit_price - trade.entry_price) * trade.quantity %}
+                    {% if trade.trade_type == "SELL" %}
+                        {% set profit_loss = (trade.entry_price - trade.exit_price) * trade.quantity %}
+                    {% endif %}
+                    {% if profit_loss >= 0 %}
+                        <span style="color:limegreen;">+${{ "%.2f"|format(profit_loss) }}</span>
+                    {% else %}
+                        <span style="color:red;">-${{ "%.2f"|format(profit_loss | abs) }}</span>
+                    {% endif %}
+                </td>
+
+                <!-- ✅ Show PT/SL -->
+                <td>
+                    {% if trade.profit_target %}
+                        ${{ "%.2f"|format(trade.profit_target) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </td>
+                <td>
+                    {% if trade.stop_loss %}
+                        ${{ "%.2f"|format(trade.stop_loss) }}
+                    {% else %}
+                        --
+                    {% endif %}
+                </td>
+
+                <td>{{ trade.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+                <td>{{ trade.closed_at.strftime("%Y-%m-%d %H:%M:%S") if trade.closed_at else "--" }}</td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr><td colspan="10" class="no-trades">No trade history yet</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+
+
+</div>
+
+<!-- ✅ JS: Fetch & auto-fill current price -->
+<script>
+async function fetchCurrentPriceAndFill() {
+    const symbolInput = document.getElementById("symbol");
+    const priceInput = document.getElementById("entry_price");
+    const priceBox = document.getElementById("price-display");
+    const priceValue = document.getElementById("current_price_value");
+
+    const symbol = symbolInput.value.trim().toUpperCase();
+    if (!symbol) {
+        alert("⚠️ Please enter a symbol first!");
+        return;
+    }
+
+    priceBox.style.display = "block";
+    priceValue.innerText = "⏳ Fetching...";
+
+    try {
+        const res = await fetch(`/auth/schwab/quote?symbol=${symbol}`);
+
+        if (res.status === 401) {
+            alert("Schwab token expired. Please re-authenticate.");
+            priceValue.innerText = "❌ Token expired";
+            return;
+        }
+
+        const data = await res.json();
+
+        // ✅ FIX: Access the nested quote structure
+        if (data[symbol] && data[symbol].quote && data[symbol].quote.lastPrice) {
+            const lastPrice = data[symbol].quote.lastPrice;
+            priceInput.value = lastPrice;
+            priceValue.innerText = `$${lastPrice}`;
+        } else {
+            priceValue.innerText = "❌ Failed to fetch price";
+        }
+    } catch (error) {
+        console.error("Error fetching price:", error);
+        priceValue.innerText = "❌ API error";
+    }
+}
+</script>
+
+{% endblock %}

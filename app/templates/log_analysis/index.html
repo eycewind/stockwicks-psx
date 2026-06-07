@@ -1,0 +1,363 @@
+{% extends "base.html" %}
+
+{% block title %}Bot Log Analysis | StockWicks{% endblock %}
+
+{% block head %}
+<style>
+  .analysis-wrap {
+    max-width: 1500px;
+    margin: 0 auto;
+  }
+
+  .analysis-header {
+    margin-bottom: 22px;
+  }
+
+  .analysis-header h2 {
+    color: #57e6c2;
+    font-size: 34px;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+
+  .analysis-muted {
+    color: #a8b3cf;
+  }
+
+  .analysis-panel {
+    background: #151637;
+    border: 1px solid #29304f;
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+  }
+
+  .analysis-control-row {
+    display: flex;
+    gap: 16px;
+    align-items: end;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+
+  .analysis-control {
+    min-width: 220px;
+  }
+
+  .analysis-control label {
+    display: block;
+    margin-bottom: 7px;
+    color: #cbd5e1;
+    font-weight: 700;
+  }
+
+  .analysis-control select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    background: #0f172a;
+    color: #ffffff;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+
+  .card {
+    background: #111936;
+    border: 1px solid #29304f;
+    color: #ffffff;
+    border-radius: 12px;
+  }
+
+  .card-body {
+    padding: 16px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .card h5 {
+    color: #57e6c2;
+    margin: 0 0 10px 0;
+  }
+
+  .card h2 {
+    margin: 0;
+    color: #68ff42;
+  }
+
+  .nav-tabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 1px solid #334155;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    flex-wrap: wrap;
+  }
+
+  .nav-item {
+    list-style: none;
+  }
+
+  .nav-link {
+    border: 1px solid #334155;
+    background: #0f172a;
+    color: #ffffff;
+    padding: 10px 14px;
+    border-radius: 10px 10px 0 0;
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  .nav-link.active {
+    background: #ff6a00;
+    border-color: #ff6a00;
+    color: #ffffff;
+  }
+
+  .tab-content {
+    border: 1px solid #334155;
+    border-top: 0;
+    padding: 18px;
+    background: #10132f;
+    border-radius: 0 0 14px 14px;
+  }
+
+  .tab-pane {
+    display: none;
+  }
+
+  .tab-pane.active {
+    display: block;
+  }
+
+  .table-responsive {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    color: #ffffff;
+  }
+
+  th {
+    background: #1f2a44;
+    color: #57e6c2;
+    text-align: left;
+    padding: 10px;
+    border-bottom: 1px solid #334155;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 10px;
+    border-bottom: 1px solid #25304a;
+    vertical-align: top;
+  }
+
+  tr:nth-child(even) {
+    background: #131b35;
+  }
+
+  .alert {
+    padding: 14px;
+    border-radius: 10px;
+    margin-top: 10px;
+  }
+
+  .alert-warning {
+    background: #3b2f12;
+    border: 1px solid #f59e0b;
+    color: #fde68a;
+  }
+
+  .text-muted {
+    color: #a8b3cf;
+  }
+
+  .btn.w-100 {
+    width: 100%;
+  }
+
+  #priceChart,
+  #featureChart {
+    width: 100%;
+  }
+
+  @media (max-width: 1100px) {
+    .summary-grid {
+      grid-template-columns: repeat(2, minmax(180px, 1fr));
+    }
+  }
+
+  @media (max-width: 650px) {
+    .summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .analysis-control {
+      min-width: 100%;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="analysis-wrap">
+    <div class="analysis-header">
+      <h2>📊 Bot Log Analysis</h2>
+      <p class="analysis-muted">
+        Analyze entries, exits, blocked signals, probabilities, features, and model/rule-layer problems.
+      </p>
+    </div>
+
+    <div class="analysis-panel">
+      <div class="analysis-control-row">
+        <div class="analysis-control">
+          <label for="symbolSelect">Symbol</label>
+          <select id="symbolSelect">
+            <option value="">All Symbols</option>
+            <option value="MU">MU</option>
+            <option value="TSLA">TSLA</option>
+            <option value="MSTR">MSTR</option>
+          </select>
+        </div>
+
+        <div class="analysis-control">
+          <button id="refreshBtn" class="btn btn-primary w-100" type="button">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div class="summary-grid" id="summaryCards"></div>
+
+      <ul class="nav nav-tabs" id="analysisTabs" role="tablist">
+        <li class="nav-item">
+          <button class="nav-link active" data-tab-target="chartTab" type="button">
+            Entry / Exit Chart
+          </button>
+        </li>
+        <li class="nav-item">
+          <button class="nav-link" data-tab-target="blockedTab" type="button">
+            Blocked Entries
+          </button>
+        </li>
+        <li class="nav-item">
+          <button class="nav-link" data-tab-target="featuresTab" type="button">
+            Feature Charts
+          </button>
+        </li>
+        <li class="nav-item">
+          <button class="nav-link" data-tab-target="diagnosticsTab" type="button">
+            Model Diagnostics
+          </button>
+        </li>
+      </ul>
+
+      <div class="tab-content">
+        <div class="tab-pane active" id="chartTab">
+          <div id="priceChart" style="height: 620px;"></div>
+        </div>
+
+        <div class="tab-pane" id="blockedTab">
+          <h3>Blocked Entries</h3>
+          <p class="analysis-muted">
+            These are rows where model probability was strong enough for entry, but the rule layer blocked the trade.
+          </p>
+
+          <div class="table-responsive">
+            <table id="blockedTable">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Wanted</th>
+                  <th>Prob Up</th>
+                  <th>Prob Down</th>
+                  <th>Blocked By</th>
+                  <th>Close</th>
+                  <th>Raw Reason</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-pane" id="featuresTab">
+          <h3>Feature Charts</h3>
+          <p class="analysis-muted">
+            Plot one feature over time to see whether the model/rules are reacting to real market structure.
+          </p>
+
+          <div class="analysis-control-row">
+            <div class="analysis-control">
+              <label for="featureSelect">Feature</label>
+              <select id="featureSelect"></select>
+            </div>
+          </div>
+
+          <div id="featureChart" style="height: 520px;"></div>
+        </div>
+
+        <div class="tab-pane" id="diagnosticsTab">
+          <h3>Diagnostics</h3>
+          <div id="diagnosticsBox" class="alert alert-warning">
+            Loading diagnostics...
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  window.STOCKWICKS_URL_PREFIX = "{{ url_prefix }}";
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const tabButtons = document.querySelectorAll("[data-tab-target]");
+    const tabPanes = document.querySelectorAll(".tab-pane");
+
+    tabButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        const targetId = button.getAttribute("data-tab-target");
+
+        tabButtons.forEach(function (btn) {
+          btn.classList.remove("active");
+        });
+
+        tabPanes.forEach(function (pane) {
+          pane.classList.remove("active");
+        });
+
+        button.classList.add("active");
+
+        const targetPane = document.getElementById(targetId);
+        if (targetPane) {
+          targetPane.classList.add("active");
+
+          if (window.Plotly) {
+            setTimeout(function () {
+              const charts = targetPane.querySelectorAll(".js-plotly-plot");
+              charts.forEach(function (chart) {
+                Plotly.Plots.resize(chart);
+              });
+            }, 100);
+          }
+        }
+      });
+    });
+  });
+</script>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="{{ url_prefix }}/static/js/log_analysis.js"></script>
+{% endblock %}

@@ -1,0 +1,136 @@
+<!-- /var/www/stockwicks/app/templates/auth/schwab_history.html -->
+<!-- /var/www/stockwicks/app/templates/auth/schwab_history.html -->
+{% extends "base.html" %}
+{% block title %}Schwab Price History{% endblock %}
+
+{% block content %}
+<style>
+    .schwab-history-card {
+        margin: 30px auto 0;
+        padding: 30px 25px 20px 25px;
+        background: #1a2657;
+        border-radius: 14px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+        color: #fff;
+        max-width: 550px;
+    }
+    .schwab-history-card label {
+        font-weight: bold;
+        color: #bbf7d0;
+    }
+    .schwab-history-card form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 12px;
+    }
+    .schwab-history-card input,
+    .schwab-history-card select {
+        padding: 8px 10px;
+        border: none;
+        border-radius: 7px;
+        font-size: 16px;
+        margin-right: 0;
+        margin-bottom: 0;
+        flex: 1 1 80px;
+        min-width: 80px;
+        max-width: 120px;
+    }
+    .schwab-history-card button {
+        padding: 8px 20px;
+        background: #0aab40;
+        color: #100707;
+        border: none;
+        border-radius: 7px;
+        font-weight: bold;
+        font-size: 16px;
+        transition: 0.15s;
+        min-width: 120px;
+        margin-top: 6px;
+    }
+    .schwab-history-card button:hover { background: #15dd74; }
+    .schwab-history-error {
+        margin: 18px 0 0 0;
+        background: #ffe6e6;
+        color: #c00;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        word-break: break-all;
+    }
+    .schwab-history-table-container {
+        margin-top: 25px;
+        background: #06102a;
+        border-radius: 7px;
+        color: #aaf7ff;
+        font-family: 'Fira Mono', 'Consolas', 'Menlo', monospace;
+        font-size: 14px;
+        padding: 16px;
+        overflow-x: auto;
+    }
+    table.schwab-history-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: transparent;
+    }
+    table.schwab-history-table th,
+    table.schwab-history-table td {
+        border: 1px solid #294082;
+        padding: 5px 8px;
+        text-align: left;
+        color: #def2fd;
+    }
+    table.schwab-history-table th {
+        background: #0e2a54;
+        color: #afffc0;
+    }
+    /* Responsive tweaks */
+    @media (max-width: 600px) {
+        .schwab-history-card {
+            padding: 16px 4px 8px 4px;
+            max-width: 98vw;
+        }
+        .schwab-history-card form {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .schwab-history-card input,
+        .schwab-history-card select,
+        .schwab-history-card button {
+            min-width: 0;
+            max-width: 100%;
+            width: 100%;
+            margin-bottom: 7px;
+        }
+    }
+</style>
+
+<div class="schwab-history-card">
+    <h2>Schwab Price History Lookup</h2>
+    <form method="post">
+        <label for="symbol">Symbol:</label>
+        <input type="text" name="symbol" required placeholder="AAPL, MSFT, SPY..." value="{{ symbol or '' }}">
+        <label for="interval">Interval:</label>
+        <select name="interval">
+            <option value="1d" {% if interval=='1d' %}selected{% endif %}>1 Day</option>
+            <option value="1h" {% if interval=='1h' %}selected{% endif %}>1 Hour</option>
+            <option value="15m" {% if interval=='15m' %}selected{% endif %}>15 Min</option>
+            <option value="5m" {% if interval=='5m' %}selected{% endif %}>5 Min</option>
+            <option value="1m" {% if interval=='1m' %}selected{% endif %}>1 Min</option>
+        </select>
+        <label for="num_days">Days:</label>
+        <input type="number" name="num_days" min="1" max="100" value="{{ num_days or 10 }}">
+        <button type="submit">Get History</button>
+    </form>
+
+    {% if error %}
+        <div class="schwab-history-error">{{ error }}</div>
+    {% endif %}
+
+    {% if table_html %}
+        <div class="schwab-history-table-container">
+            {{ table_html|safe }}
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,122 @@
+{% set url_prefix = request.headers.get("x-forwarded-prefix", "") if request is defined else "" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}StockWicks Commercial{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link rel="stylesheet" href="{{ url_prefix }}/static/css/style.css">
+
+    <style>
+        body {
+            margin: 0;
+            background: #0b0a2a;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+        }
+        .navbar {
+            background: #152033;
+            padding: 14px 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            color: #00d9ff;
+            font-size: 24px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .brand img {
+            height: 36px;
+        }
+        .commercial-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #ff6a00;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+        .client-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #334155;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+        }
+        .nav-links {
+            display: flex;
+            gap: 24px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: #ffffff;
+            text-decoration: none;
+            font-size: 18px;
+        }
+        .nav-links a:hover {
+            color: #00d9ff;
+        }
+        .container {
+            padding: 32px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 18px;
+            border-radius: 8px;
+            text-decoration: none;
+            border: 0;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background: #ff6a00;
+            color: white;
+        }
+        .btn-secondary {
+            background: #334155;
+            color: white;
+        }
+        .btn-outline-danger {
+            border: 1px solid #ef4444;
+            color: #ef4444;
+            background: transparent;
+        }
+    </style>
+
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <a class="brand" href="{{ url_prefix }}/">
+            <img src="{{ url_prefix }}/static/images/stockwick3_banner.png" alt="StockWicks Commercial">
+            <span>StockWicks</span>
+            <span class="commercial-badge">Commercial</span>
+            <span class="client-badge">ashakil</span>
+        </a>
+
+        <div class="nav-links">
+            <a href="{{ url_prefix }}/auth/dashboard">Dashboard</a>
+            <a href="{{ url_prefix }}/auth/papertradebot">Trade Bot</a>
+            <a href="{{ url_prefix }}/broker/setup">Broker Setup</a>
+            <a href="{{ url_prefix }}/replay-simulator">Replay</a>
+             <a href="{{ url_prefix }}/analysis/logs">Log Analysis</a>
+            <a href="{{ url_prefix }}/account">Account</a>
+            <a href="{{ url_prefix }}/auth/register">Register</a>
+            <a href="{{ url_prefix }}/auth/login">Login</a>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+</body>
+</html>

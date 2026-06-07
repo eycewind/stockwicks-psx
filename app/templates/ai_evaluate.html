@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - AI Strategy Evaluator
+{% endblock %}
+
+{% block content %}
+<style>
+    body { font-family: 'Poppins', sans-serif; background-color: #0d0d2b; color: white; text-align: center; }
+    .banner-heading { display: inline-block; background-color: #1e3a8a; color: white; padding: 15px 30px; border-radius: 25px; font-size: 2.5rem; font-weight: bold; margin-bottom: 20px; }
+    .form-container { background-color: #1b1b3a; padding: 25px; border-radius: 12px; max-width: 600px; margin: auto; box-shadow: 0 4px 10px rgba(255, 255, 255, 0.2); }
+    .form-container input { width: 80%; padding: 12px; border-radius: 8px; border: none; font-size: 1rem; text-align: center; margin-bottom: 10px; }
+    .form-container button { background-color: #00c6ff; color: white; border: none; padding: 12px 20px; font-size: 1rem; font-weight: bold; border-radius: 8px; cursor: pointer; }
+    .result-container { margin-top: 30px; }
+    .summary-box { background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%); border: 2px solid #00c6ff; padding: 25px; border-radius: 15px; max-width: 450px; margin: auto; margin-bottom: 40px; box-shadow: 0 0 25px rgba(46, 204, 255, 0.4); text-align: left; }
+    .summary-box h3 { margin-top: 0; color: #fff; text-align: center; border-bottom: 1px solid rgba(255, 255, 255, 0.2); padding-bottom: 10px; }
+    .summary-box p { font-size: 1.1rem; color: #d0d0d0; }
+    .summary-box p strong { color: #ffffff; font-weight: 600; display: inline-block; width: 120px; }
+    .full-report-container { max-width: 800px; margin: auto; }
+    .results-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    .results-table th, .results-table td { padding: 12px; border: 1px solid #4f5b66; }
+    .results-table th { background-color: #1e3a8a; }
+    .results-table tbody tr:nth-child(even) { background-color: #2c3e50; }
+    .profit { color: #2ecc71; font-weight: bold; }
+    .loss { color: #e74c3c; font-weight: bold; }
+</style>
+
+<div class="container text-center">
+    <h1 class="banner-heading">AI Strategy Evaluator</h1>
+<div class="form-container">
+    <h3>Enter Stock Symbol</h3>
+    <form id="aiEvaluationForm">
+        <input class="form-control" type="text" name="symbol" id="symbol" placeholder="e.g., AAPL" required>
+        
+        <div style="margin: 15px 0; font-size: 0.9rem;">
+            <input type="checkbox" id="eodCloseCheckbox" name="eod_close" checked>
+            <label for="eodCloseCheckbox">Force End-of-Day Close (Recommended for Intraday)</label>
+        </div>
+        <button class="btn" type="submit" id="evalButton">Run Evaluation</button>
+    </form>
+</div>
+    <div id="resultContainer" style="display: none;">
+        <div class="result-container">
+            <div id="summaryBox" class="summary-box">
+                <h3>🏆 Best Recommendation</h3>
+                <div id="summaryContent"></div>
+            </div>
+        </div>
+        <div class="result-container full-report-container">
+            <h2>Full Evaluation Report</h2>
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>Algorithm</th>
+                        <th>Interval</th>
+                        <th>Success Rate</th>
+                        <th>Profit</th>
+                    </tr>
+                </thead>
+                <tbody id="fullReportBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('aiEvaluationForm').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    const resultContainer = document.getElementById('resultContainer');
+    const summaryContent = document.getElementById('summaryContent');
+    const fullReportBody = document.getElementById('fullReportBody');
+    const evalButton = document.getElementById('evalButton');
+    const symbol = document.getElementById('symbol').value.trim().toUpperCase();
+
+    // --- NEW: Read the checkbox state ---
+    const eodClose = document.getElementById('eodCloseCheckbox').checked;
+   
+    if (!symbol) { alert("Please enter a stock symbol."); return; }
+
+    resultContainer.style.display = 'block';
+    summaryContent.innerHTML = "<p style='text-align: center;'>⏳ Evaluating... This may take a few minutes.</p>";
+    fullReportBody.innerHTML = '';
+    evalButton.disabled = true;
+    evalButton.innerText = "Running...";
+
+   try {
+    // --- MODIFIED: Send both symbol and eod_close state ---
+    await fetch('/auth/start-ai-evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: symbol, eod_close: eodClose }) // Pass as a JSON object
+    });
+        const pollInterval = setInterval(async () => {
+            try {
+                const statusRes = await fetch(`/auth/check-ai-status?symbol=${symbol}`);
+                if (!statusRes.ok) return;
+                const status = await statusRes.json();
+
+                if (status.exists) {
+                    clearInterval(pollInterval);
+                    const finalRes = await fetch(`/auth/get-ai-results?symbol=${symbol}`);
+                    if (!finalRes.ok) throw new Error('Failed to get final results.');
+                    const data = await finalRes.json();
+                    
+                    // --- JAVASCRIPT FIX ---
+                    // Correctly access the data using the keys from the Python script
+                    const summary = data.results.summary;
+                    const profitValue = parseFloat(summary.Total_Profit);
+                    const profitClass = profitValue >= 0 ? 'profit' : 'loss';
+
+                    summaryContent.innerHTML = `
+                        <p><strong>Algorithm:</strong> ${summary.Algorithm}</p>
+                        <p><strong>Interval:</strong> ${summary.Interval}</p>
+                        <p><strong>Success Rate:</strong> ${parseFloat(summary.Success_Rate).toFixed(2)}%</p>
+                        <p><strong>Profit:</strong> <span class="${profitClass}">$${profitValue.toFixed(2)}</span></p>
+                    `;
+
+                    const fullReport = data.results.full_report;
+                    let tableHtml = '';
+                    fullReport.forEach(row => {
+                        const profit = parseFloat(row.Total_Profit);
+                        const profitClass = profit >= 0 ? 'profit' : 'loss';
+                        tableHtml += `
+                            <tr>
+                                <td>${row.Algorithm}</td>
+                                <td>${row.Interval}</td>
+                                <td>${parseFloat(row.Success_Rate).toFixed(2)}%</td>
+                                <td class="${profitClass}">$${profit.toFixed(2)}</td>
+                            </tr>
+                        `;
+                    });
+                    fullReportBody.innerHTML = tableHtml;
+
+                    evalButton.disabled = false;
+                    evalButton.innerText = "Run Evaluation";
+                }
+            } catch (pollError) { clearInterval(pollInterval); throw pollError; }
+        }, 5000);
+    } catch (error) {
+        summaryContent.innerHTML = `<p style='color:red; text-align: center;'>⚠️ Error: ${error.message}</p>`;
+        evalButton.disabled = false;
+        evalButton.innerText = "Run Evaluation";
+    }
+});
+</script>
+{% endblock %}

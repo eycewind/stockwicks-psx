@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}
+    StockWicks - Stock Prediction & Alerts
+{% endblock %}
+
+{% block content %}
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        background-color: #0d0d2b;
+        color: white;
+    }
+
+    /* Hero Section */
+    .hero {
+        text-align: center;
+        padding: 80px 20px;
+    }
+
+    .hero-text-container {
+        background-color: rgba(0, 0, 0, 0.7);
+        display: inline-block;
+        padding: 30px;
+        border-radius: 12px;
+        max-width: 700px;
+    }
+
+    .hero h1 {
+        font-size: 3rem;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
+
+    .hero p {
+        font-size: 1.2rem;
+        opacity: 0.8;
+    }
+
+    .cta-button {
+        background-color: #ff5733;
+        color: white;
+        padding: 12px 20px;
+        font-size: 16px;
+        font-weight: bold;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-block;
+        margin-top: 10px;
+    }
+
+    .cta-button:hover {
+        background-color: #00c6ff;
+        transform: scale(1.07);
+    }
+
+    /* Announcement Sticker */
+    .splash-sticker {
+        margin-top: 15px;
+        display: inline-block;
+        background-color: #f16d0f;
+        color: white;
+        padding: 6px 12px;
+        font-weight: bold;
+        font-size: 14px;
+        border-radius: 12px;
+        box-shadow: 0 4px 8px rgba(255, 255, 255, 0.2);
+    }
+
+    /* Reviews Section */
+    .reviews-section {
+        padding: 60px 20px;
+        background-color: #131339;
+        color: white;
+    }
+
+    .reviews-section h2 {
+        text-align: center;
+        font-size: 2rem;
+        margin-bottom: 30px;
+        font-weight: bold;
+    }
+
+    .review-card {
+        background-color: #1f1f4d;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+
+    .review-stars {
+        color: #ffcc00;
+    }
+
+    .review-name {
+        margin-left: 8px;
+        opacity: 0.8;
+    }
+</style>
+
+<!-- Hero Section -->
+<section class="hero">
+    <div class="hero-text-container">
+        <h1>Real-Time Stock Predictions</h1>
+        <p>DayTrade, Swing Trade, Long Term</p>
+        <a href="{{ url_for('register_page') }}" class="cta-button">Get Started</a>
+        <div class="splash-sticker">Options Picks - Coming Soon</div>
+    </div>
+</section>
+
+<!-- Reviews Section
+<section class="reviews-section">
+    <h2>What Our Users Say</h2>
+    <div class="container">
+        <div class="row">
+            {% set reviews = [
+                {"text": "StockWicks helped me gain a 17% return on my investments in just one month.", "stars": 5, "name": "Jessica F."},
+                {"text": "The intuitive design and reliable predictions have made StockWicks my go-to tool for stock analysis.", "stars": 5, "name": "Alice W."},
+                {"text": "Very impressed with the insights from StockWicks, but I'd love to see them integrate cryptocurrency predictions.", "stars": 4, "name": "Marcus B."},
+                {"text": "Fantastic tool with robust analytics. It has dramatically improved my trading outcomes.", "stars": 5, "name": "Greg P."},
+                {"text": "Please add a video tutorial, it is a little hard to follow for someone new to stock trading.", "stars": 3, "name": "Jian Yu."},
+                {"text": "StockWicks offers excellent stock predictions, but trade automation features would be a game changer.", "stars": 4, "name": "Robert E."}
+            ] %}
+
+            {% for review in reviews %}
+            <div class="col-md-6 mb-4">
+                <div class="review-card">
+                    <p>"{{ review.text }}"</p>
+                    <div>
+                        <span class="review-stars">{% for _ in range(review.stars) %}★{% endfor %}</span>
+                        <small class="review-name">- {{ review.name }}</small>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section> -->
+
+{% endblock %}
