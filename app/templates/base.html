@@ -1,4 +1,5 @@
 {% set url_prefix = request.headers.get("x-forwarded-prefix", "") if request is defined else "" %}
+{% set client_slug = request.app.state.client_slug|default("client") if request is defined else "client" %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -102,7 +103,7 @@
             <img src="{{ url_prefix }}/static/images/stockwick3_banner.png" alt="StockWicks Commercial">
             <span>StockWicks</span>
             <span class="commercial-badge">Commercial</span>
-            <span class="client-badge">ashakil</span>
+            <span class="client-badge">{{ client_slug }}</span>
         </a>
 
         <div class="nav-links">

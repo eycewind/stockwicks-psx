@@ -7,7 +7,7 @@
 
 <div class="container" style="max-width: 1100px; margin: 0 auto;">
   <h1 style="font-size: 34px; margin-bottom: 8px;">StockWicks Commercial Dashboard</h1>
-  <p style="color:#ffb86b; font-size:16px; margin-top:0; margin-bottom:24px;">Client: ashakil</p>
+  <p style="color:#ffb86b; font-size:16px; margin-top:0; margin-bottom:24px;">Client: {{ request.app.state.client_slug|default("client") }}</p>
 
   <p style="font-size: 18px; margin-bottom: 32px;">
     Welcome{% if user %}, {{ user.username }}{% endif %}.

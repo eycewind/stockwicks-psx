@@ -71,6 +71,7 @@ load_dotenv(env_path)
 
 # App
 app = FastAPI(title="StockWicks API")
+app.state.client_slug = settings.client_slug
 
 # CORS
 app.add_middleware(

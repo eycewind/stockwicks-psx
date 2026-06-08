@@ -1,6 +1,6 @@
 const URL_PREFIX =
   window.STOCKWICKS_URL_PREFIX ||
-  (window.location.pathname.startsWith("/clients/ashakil") ? "/clients/ashakil" : "");
+  ((window.location.pathname.match(/^\/clients\/[^/]+/) || [""])[0]);
 
 async function fetchJson(url) {
   const response = await fetch(url);
