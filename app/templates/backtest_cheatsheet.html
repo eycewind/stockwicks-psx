@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}StockWicks - Backtest Cheat Sheet{% endblock %}
+{% block title %}StockWicks - Strategy Optimizer{% endblock %}
 
 {% block content %}
 <style>
@@ -48,7 +48,7 @@
 </style>
 
 <div class="wrap">
-  <h1>Backtest Cheat Sheet</h1>
+  <h1>Strategy Optimizer</h1>
   <p class="muted" style="text-align:center; margin-top:0;">
     Enter a symbol, scan algo and parameter combinations, then try the best settings in Replay.
   </p>
@@ -170,7 +170,7 @@
 </div>
 
 <script>
-const API_URL = "{{ url_prefix }}/analysis/cheatsheet/api/run";
+const API_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 let latestRows = [];
 
@@ -262,8 +262,23 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
   document.getElementById("results").style.display = "none";
 
   try {
-    const res = await fetch(API_URL, { method: "POST", body: new FormData(event.target) });
-    const data = await res.json();
+    const res = await fetch(API_URL, {
+      method: "POST",
+      body: new FormData(event.target),
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
+    const raw = await res.text();
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch (parseErr) {
+      const plain = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 220);
+      setStatus(`Server returned ${res.status || "non-JSON"} instead of JSON. ${plain || "Try again."}`, "error");
+      return;
+    }
     if (!res.ok) {
       setStatus(data.detail || "Scan failed", "error");
       return;

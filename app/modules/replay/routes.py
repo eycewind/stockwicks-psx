@@ -420,6 +420,7 @@ def replay_page(
 
 
 @router.get("/analysis/cheatsheet")
+@router.get("/analysis/strategy-optimizer")
 @router.get("/auth/backtest-cheatsheet")
 def backtest_cheatsheet_page(
     request: Request,
@@ -437,6 +438,7 @@ def backtest_cheatsheet_page(
 
 
 @router.post("/analysis/cheatsheet/api/run")
+@router.post("/analysis/strategy-optimizer/api/run")
 @router.post("/auth/backtest-cheatsheet/api/run")
 def run_backtest_cheatsheet(
     symbol: str = Form(...),
