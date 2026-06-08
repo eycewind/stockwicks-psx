@@ -281,7 +281,15 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
     document.getElementById("errorsCard").style.display = errors.length ? "block" : "none";
     document.getElementById("errorsList").innerHTML = errors.map(e => `<div>${e}</div>`).join("");
     document.getElementById("results").style.display = "block";
-    setStatus("Scan complete.", "info");
+    if ((data.tested_combinations || 0) === 0) {
+      const reason = errors.length ? ` ${errors[0]}` : "";
+      setStatus(`Scan completed, but no combinations could be tested.${reason}`, "error");
+      document.getElementById("errorsCard").scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (!latestRows.length) {
+      setStatus("Scan completed, but no recommendation ranked high enough to show.", "error");
+    } else {
+      setStatus("Scan complete.", "info");
+    }
   } catch (err) {
     setStatus("Network error: " + err, "error");
   } finally {

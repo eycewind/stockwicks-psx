@@ -89,6 +89,112 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.Data
     return frame.sort_index()
 
 
+def _interval_tolerance(interval: str) -> pd.Timedelta:
+    minutes = {
+        "1min": 1,
+        "5min": 5,
+        "10min": 10,
+        "15min": 15,
+        "30min": 30,
+    }.get((interval or "").lower())
+    if minutes:
+        return pd.Timedelta(minutes=max(minutes // 2, 1))
+    return pd.Timedelta(hours=12)
+
+
+def _with_utc_index(df: pd.DataFrame, naive_tz: str) -> pd.DataFrame:
+    out = df.copy()
+    idx = pd.to_datetime(out.index)
+    if getattr(idx, "tz", None) is None:
+        idx = idx.tz_localize(naive_tz)
+    else:
+        idx = idx.tz_convert("UTC")
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_convert("UTC")
+    out.index = idx
+    return out.sort_index()
+
+
+def _try_exact_align(
+    price_full: pd.DataFrame,
+    train_feat: pd.DataFrame,
+    infer_feat: pd.DataFrame,
+    naive_tz: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    price = _with_utc_index(price_full, naive_tz)
+    train = _with_utc_index(train_feat, naive_tz)
+    infer = _with_utc_index(infer_feat, naive_tz)
+    common_idx = price.index.intersection(train.index).intersection(infer.index)
+    return price.loc[common_idx].copy(), train.loc[common_idx].copy(), infer.loc[common_idx].copy()
+
+
+def _asof_align(
+    price_full: pd.DataFrame,
+    train_feat: pd.DataFrame,
+    infer_feat: pd.DataFrame,
+    interval: str,
+    naive_tz: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    price = _with_utc_index(price_full, naive_tz)
+    train = _with_utc_index(train_feat, naive_tz)
+    infer = _with_utc_index(infer_feat, naive_tz)
+
+    price_base = price.reset_index()
+    train_base = train.reset_index()
+    infer_base = infer.reset_index()
+    price_base = price_base.rename(columns={price_base.columns[0]: "bar_ts"}).sort_values("bar_ts")
+    train_base = train_base.rename(columns={train_base.columns[0]: "feat_ts"}).sort_values("feat_ts")
+    infer_base = infer_base.rename(columns={infer_base.columns[0]: "feat_ts"}).sort_values("feat_ts")
+    tolerance = _interval_tolerance(interval)
+
+    aligned_train = pd.merge_asof(
+        price_base[["bar_ts"]],
+        train_base,
+        left_on="bar_ts",
+        right_on="feat_ts",
+        direction="nearest",
+        tolerance=tolerance,
+    ).drop(columns=["feat_ts"])
+    aligned_infer = pd.merge_asof(
+        price_base[["bar_ts"]],
+        infer_base,
+        left_on="bar_ts",
+        right_on="feat_ts",
+        direction="nearest",
+        tolerance=tolerance,
+    ).drop(columns=["feat_ts"])
+
+    aligned_train = aligned_train.set_index("bar_ts")
+    aligned_infer = aligned_infer.set_index("bar_ts")
+    price = price.loc[aligned_train.index].copy()
+
+    keep = aligned_train.notna().any(axis=1) & aligned_infer.notna().any(axis=1)
+    if "y" in aligned_train.columns:
+        keep = keep & aligned_train["y"].notna()
+    if "w" in aligned_train.columns:
+        keep = keep & aligned_train["w"].notna()
+
+    return price.loc[keep].copy(), aligned_train.loc[keep].copy(), aligned_infer.loc[keep].copy()
+
+
+def _align_price_and_features(
+    price_full: pd.DataFrame,
+    train_feat: pd.DataFrame,
+    infer_feat: pd.DataFrame,
+    interval: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
+    candidates: list[tuple[str, pd.DataFrame, pd.DataFrame, pd.DataFrame]] = []
+    for naive_tz in ("UTC", "America/New_York"):
+        price, train, infer = _try_exact_align(price_full, train_feat, infer_feat, naive_tz)
+        candidates.append((f"exact:{naive_tz}", price, train, infer))
+
+        price, train, infer = _asof_align(price_full, train_feat, infer_feat, interval, naive_tz)
+        candidates.append((f"nearest:{naive_tz}", price, train, infer))
+
+    label, price_df, train_df, infer_df = max(candidates, key=lambda item: len(item[1]))
+    return price_df, train_df, infer_df, label
+
+
 def _param_grid(profile: str) -> list[dict[str, Any]]:
     if str(profile or "quick").lower() == "deep":
         long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
@@ -337,19 +443,24 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 errors.append(f"{algo_name} {interval}: feature build failed: {exc}")
                 continue
 
-            common_idx = train_feat.index.intersection(infer_feat.index).intersection(price_full.index)
-            train_feat = train_feat.loc[common_idx].copy()
-            infer_feat = infer_feat.loc[common_idx].copy()
-            price_df = price_full.loc[common_idx].copy()
-            if len(common_idx) < 80:
-                errors.append(f"{algo_name} {interval}: not enough aligned bars ({len(common_idx)})")
+            price_df, train_feat, infer_feat, align_method = _align_price_and_features(
+                price_full,
+                train_feat,
+                infer_feat,
+                interval,
+            )
+            if len(price_df) < 80:
+                errors.append(
+                    f"{algo_name} {interval}: not enough aligned bars ({len(price_df)}) "
+                    f"using {align_method}"
+                )
                 continue
             if "y" not in train_feat or "w" not in train_feat or train_feat["y"].nunique() < 2:
                 errors.append(f"{algo_name} {interval}: training labels are not usable")
                 continue
 
-            split_at = int(len(common_idx) * (1.0 - req.oos_fraction))
-            split_at = max(30, min(split_at, len(common_idx) - 20))
+            split_at = int(len(price_df) * (1.0 - req.oos_fraction))
+            split_at = max(30, min(split_at, len(price_df) - 20))
             X_train = _prepare_X(train_feat.iloc[:split_at], list(feat_names))
             y_train = train_feat.loc[X_train.index, "y"].astype(int).values
             w_train = train_feat.loc[X_train.index, "w"].astype(float).values
@@ -373,7 +484,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 errors.append(f"{algo_name} {interval}: model training failed: {exc}")
                 continue
 
-            sim_index = common_idx[split_at:]
+            sim_index = price_df.index[split_at:]
             sim_price = price_df.loc[sim_index]
             prob_series = pd.Series(probs, index=X_all.index, name="prob_up").loc[sim_index]
 
