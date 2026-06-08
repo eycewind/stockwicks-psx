@@ -23,6 +23,8 @@ if [[ ! -d "${APP_PATH}" ]]; then
 fi
 
 mkdir -p "${RELEASES_DIR}"
+mkdir -p "${APP_PATH}/models"
+chmod 2775 "${APP_PATH}/models" || true
 
 echo "Backing up current app to ${BACKUP_DIR}"
 mkdir -p "${BACKUP_DIR}"
@@ -31,6 +33,7 @@ rsync -a \
   --exclude '.env' \
   --exclude 'data' \
   --exclude 'logs' \
+  --exclude 'models' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   "${APP_PATH}/" "${BACKUP_DIR}/"
