@@ -40,6 +40,7 @@ from app.routes.auth import get_current_user
 from app.routes import auth as auth_routes
 from app.scripts.replay.data_ingest import fetch_and_save, get_data_paths
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
+from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 from app.services.replay_process import (
     pid_is_alive,
     purge_old_sessions,
@@ -416,6 +417,70 @@ def replay_page(
             "url_prefix": os.getenv("CLIENT_PUBLIC_PREFIX", "/clients/ashakil"),
         },
     )
+
+
+@router.get("/analysis/cheatsheet")
+@router.get("/auth/backtest-cheatsheet")
+def backtest_cheatsheet_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    return templates.TemplateResponse(
+        request=request,
+        name="backtest_cheatsheet.html",
+        context={
+            "request": request,
+            "user": user,
+            "url_prefix": os.getenv("CLIENT_PUBLIC_PREFIX", "/clients/ashakil"),
+        },
+    )
+
+
+@router.post("/analysis/cheatsheet/api/run")
+@router.post("/auth/backtest-cheatsheet/api/run")
+def run_backtest_cheatsheet(
+    symbol: str = Form(...),
+    intervals: str = Form("5min"),
+    trade_size: float = Form(100.0),
+    builder_days: int = Form(DEFAULT_REPLAY_MM_CONFIG["builder_days"]),
+    k_forward: int = Form(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
+    profile: str = Form("quick"),
+    allow_short_selling: str = Form("on"),
+    eod_auto_close: str = Form("on"),
+    user: User = Depends(get_current_user),
+):
+    symbol = (symbol or "").upper().strip()
+    parsed_intervals = tuple(
+        i.strip().lower()
+        for i in str(intervals or "5min").replace(";", ",").split(",")
+        if i.strip()
+    )
+    allowed_intervals = {"1min", "5min", "10min", "15min", "30min", "1d"}
+    if not symbol:
+        raise HTTPException(status_code=400, detail="Symbol is required")
+    if not parsed_intervals or any(i not in allowed_intervals for i in parsed_intervals):
+        raise HTTPException(status_code=400, detail="Choose one or more supported intervals")
+
+    try:
+        result = run_cheatsheet(
+            CheatSheetRequest(
+                symbol=symbol,
+                intervals=parsed_intervals,
+                trade_size=max(float(trade_size or 1.0), 1.0),
+                builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
+                k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
+                profile=str(profile or "quick").lower(),
+                allow_short=_checkbox_on(allow_short_selling),
+                eod_close=_checkbox_on(eod_auto_close),
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        log.exception("[CHEATSHEET] failed for user_id=%s symbol=%s", getattr(user, "id", None), symbol)
+        raise HTTPException(status_code=500, detail=f"Cheat sheet failed: {exc}")
+
+    return JSONResponse(result)
 
 
 # =============================================================================

@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+
+{% block title %}StockWicks - Backtest Cheat Sheet{% endblock %}
+
+{% block content %}
+<style>
+  body { background:#0d0d2b; font-family:Arial,sans-serif; color:#fff; }
+  .wrap { width:95%; max-width:1500px; margin:0 auto; padding:28px 0 60px; }
+  h1 { margin:0 0 8px; color:#4fd1c5; font-size:2rem; text-align:center; }
+  h2 { margin:0 0 14px; color:#4fd1c5; font-size:1.25rem; }
+  .muted { color:#a7a7c7; }
+  .card { background:#1b1b3a; border:1px solid #2a2a55; border-radius:8px; padding:18px; margin:16px 0; box-shadow:0 4px 10px rgba(0,0,0,.28); }
+  .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; align-items:end; }
+  label { display:block; font-size:.82rem; color:#a7a7c7; margin-bottom:5px; }
+  input, select { width:100%; box-sizing:border-box; border:1px solid #2a2a55; border-radius:6px; background:#27274c; color:#fff; padding:10px; font-size:.95rem; }
+  input[type="checkbox"] { width:auto; }
+  .checks { display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; }
+  .checks label { display:flex; align-items:center; gap:8px; margin:0; }
+  .btn { border:0; border-radius:6px; padding:10px 16px; font-weight:700; cursor:pointer; }
+  .btn-primary { background:#4fd1c5; color:#061013; }
+  .btn-secondary { background:#334155; color:#fff; }
+  .btn:disabled { opacity:.55; cursor:not-allowed; }
+  .status { display:none; border-radius:6px; padding:10px 12px; margin-top:12px; }
+  .status.info { display:block; background:#1f3657; color:#cfe8ff; border:1px solid #2f5f93; }
+  .status.error { display:block; background:#4a1f1f; color:#ffb3b3; border:1px solid #ff4d4d; }
+  .summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .stat { background:#151533; border:1px solid #2a2a55; border-radius:8px; padding:12px; }
+  .stat-label { font-size:.72rem; color:#a7a7c7; text-transform:uppercase; letter-spacing:.4px; }
+  .stat-value { margin-top:5px; font-size:1.15rem; font-weight:700; }
+  table { width:100%; border-collapse:collapse; font-size:.86rem; }
+  th { background:#2d2d5c; color:#4fd1c5; text-align:left; padding:10px 8px; font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; }
+  td { padding:10px 8px; border-bottom:1px solid #2a2a55; color:#e5e7eb; vertical-align:top; }
+  tbody tr:nth-child(odd) td { background:#1b1b3a; }
+  tbody tr:nth-child(even) td { background:#21214a; }
+  .pnl-pos { color:#6ff22e; font-weight:700; }
+  .pnl-neg { color:#ff6b6b; font-weight:700; }
+  .chip { display:inline-block; padding:3px 9px; border-radius:999px; font-size:.74rem; font-weight:700; }
+  .chip.High { background:#6ff22e; color:#061013; }
+  .chip.Medium { background:#ffd24d; color:#111827; }
+  .chip.Low { background:#64748b; color:#fff; }
+  .params { color:#d6d6ff; line-height:1.45; }
+  .tools { display:flex; gap:8px; flex-wrap:wrap; }
+  .table-wrap { overflow-x:auto; border-radius:8px; border:1px solid #2a2a55; }
+  @media (max-width:800px) {
+    .wrap { width:92%; }
+    table { min-width:980px; }
+  }
+</style>
+
+<div class="wrap">
+  <h1>Backtest Cheat Sheet</h1>
+  <p class="muted" style="text-align:center; margin-top:0;">
+    Enter a symbol, scan algo and parameter combinations, then try the best settings in Replay.
+  </p>
+
+  <div class="card">
+    <h2>Scan Settings</h2>
+    <form id="scanForm" autocomplete="off">
+      <div class="form-grid">
+        <div>
+          <label>Symbol</label>
+          <input name="symbol" id="f_symbol" value="AAPL" required>
+        </div>
+        <div>
+          <label>Intervals</label>
+          <input name="intervals" id="f_intervals" value="5min" placeholder="1min,5min,15min">
+        </div>
+        <div>
+          <label>Trade Size</label>
+          <input type="number" min="1" step="1" name="trade_size" value="100">
+        </div>
+        <div>
+          <label>History Days</label>
+          <input type="number" min="10" max="90" step="1" name="builder_days" value="30">
+        </div>
+        <div>
+          <label>K Forward</label>
+          <input type="number" min="1" max="10" step="1" name="k_forward" value="3">
+        </div>
+        <div>
+          <label>Search Depth</label>
+          <select name="profile">
+            <option value="quick" selected>Quick</option>
+            <option value="deep">Deep</option>
+          </select>
+        </div>
+        <div>
+          <button class="btn btn-primary" id="runBtn" type="submit">Run Scan</button>
+        </div>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" name="allow_short_selling" checked> Allow Short</label>
+        <label><input type="checkbox" name="eod_auto_close" checked> Close EOD</label>
+      </div>
+      <div id="status" class="status"></div>
+    </form>
+  </div>
+
+  <div id="results" style="display:none;">
+    <div class="card">
+      <h2>Run Summary</h2>
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="stat-label">Symbol</div>
+          <div class="stat-value" id="summarySymbol">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Intervals</div>
+          <div class="stat-value" id="summaryIntervals">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Combos Tested</div>
+          <div class="stat-value" id="summaryCombos">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Best Algo</div>
+          <div class="stat-value" id="summaryBest">-</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Top Recommendations</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Algo</th>
+              <th>Interval</th>
+              <th>Confidence</th>
+              <th>P/L</th>
+              <th>Trades</th>
+              <th>Win Rate</th>
+              <th>Drawdown</th>
+              <th>Parameters</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="topBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Best By Algo</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Algo</th>
+              <th>Interval</th>
+              <th>Confidence</th>
+              <th>P/L</th>
+              <th>Trades</th>
+              <th>Win Rate</th>
+              <th>Parameters</th>
+            </tr>
+          </thead>
+          <tbody id="algoBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="errorsCard" style="display:none;">
+      <h2>Skipped Items</h2>
+      <div id="errorsList" class="muted"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_URL = "{{ url_prefix }}/analysis/cheatsheet/api/run";
+const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
+let latestRows = [];
+
+function money(v) {
+  const n = Number(v || 0);
+  const s = n < 0 ? "-" : "";
+  return `${s}$${Math.abs(n).toFixed(2)}`;
+}
+
+function pct(v) {
+  return `${(Number(v || 0) * 100).toFixed(1)}%`;
+}
+
+function rowParams(r) {
+  return [
+    `Long ${Number(r.long_entry_prob).toFixed(2)}`,
+    `Short ${Number(r.short_entry_prob).toFixed(2)}`,
+    `Prob Trail ${Number(r.prob_trail_drop).toFixed(2)}`,
+    `Hard Stop ${money(r.hard_stop_usd)}`,
+    `Trail Start ${money(r.trailing_stop_activation)}`,
+    `Giveback ${money(r.trailing_stop_distance)}`
+  ].join(" | ");
+}
+
+function replayText(r) {
+  return [
+    `Symbol: ${r.symbol}`,
+    `Interval: ${r.interval}`,
+    `Algo: ${r.algo_name}`,
+    `Trade Size: ${document.querySelector("[name='trade_size']").value || "100"}`,
+    `Hard Stop: ${r.hard_stop_usd}`,
+    `Trail Activation Profit: ${r.trailing_stop_activation}`,
+    `Trail Giveback Distance: ${r.trailing_stop_distance}`,
+    `Long Entry Avg Prob: ${r.long_entry_prob}`,
+    `Short Entry Avg Prob: ${r.short_entry_prob}`,
+    `Probability Trail Drop: ${r.prob_trail_drop}`,
+    `Prob Exit Mode: ${r.prob_exit_mode}`
+  ].join("\n");
+}
+
+async function copySettings(idx) {
+  const row = latestRows[idx];
+  if (!row) return;
+  await navigator.clipboard.writeText(replayText(row));
+  setStatus("Settings copied. Open Replay and paste/use these values.", "info");
+}
+
+function openReplay() {
+  window.location.href = REPLAY_URL;
+}
+
+function setStatus(msg, kind) {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = `status ${kind}`;
+}
+
+function renderRows(rows, targetId, showRank) {
+  const body = document.getElementById(targetId);
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="${showRank ? 10 : 7}" class="muted">No recommendations found.</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map((r, i) => {
+    const pnlClass = Number(r.total_profit || 0) >= 0 ? "pnl-pos" : "pnl-neg";
+    const idx = latestRows.indexOf(r);
+    return `
+      <tr>
+        ${showRank ? `<td>${i + 1}</td>` : ""}
+        <td><b>${r.algo_name}</b><br><span class="muted">${r.feature_set}</span></td>
+        <td>${r.interval}</td>
+        <td><span class="chip ${r.confidence}">${r.confidence}</span></td>
+        <td class="${pnlClass}">${money(r.total_profit)}</td>
+        <td>${Math.trunc(Number(r.num_trades || 0))}</td>
+        <td>${pct(r.win_rate)}</td>
+        <td>${money(r.max_drawdown)}</td>
+        <td class="params">${rowParams(r)}</td>
+        ${showRank ? `<td><div class="tools"><button class="btn btn-secondary" onclick="copySettings(${idx})">Copy</button><button class="btn btn-primary" onclick="openReplay()">Replay</button></div></td>` : ""}
+      </tr>
+    `;
+  }).join("");
+}
+
+document.getElementById("scanForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true;
+  setStatus("Running scan. This can take a bit because models are trained per algo and interval.", "info");
+  document.getElementById("results").style.display = "none";
+
+  try {
+    const res = await fetch(API_URL, { method: "POST", body: new FormData(event.target) });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(data.detail || "Scan failed", "error");
+      return;
+    }
+
+    latestRows = data.top || [];
+    document.getElementById("summarySymbol").textContent = data.symbol || "-";
+    document.getElementById("summaryIntervals").textContent = (data.intervals || []).join(", ") || "-";
+    document.getElementById("summaryCombos").textContent = String(data.tested_combinations || 0);
+    document.getElementById("summaryBest").textContent = latestRows[0] ? `${latestRows[0].algo_name} ${latestRows[0].interval}` : "-";
+    renderRows(latestRows, "topBody", true);
+    renderRows(data.best_by_algo || [], "algoBody", false);
+
+    const errors = data.errors || [];
+    document.getElementById("errorsCard").style.display = errors.length ? "block" : "none";
+    document.getElementById("errorsList").innerHTML = errors.map(e => `<div>${e}</div>`).join("");
+    document.getElementById("results").style.display = "block";
+    setStatus("Scan complete.", "info");
+  } catch (err) {
+    setStatus("Network error: " + err, "error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+{% endblock %}
