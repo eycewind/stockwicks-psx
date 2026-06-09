@@ -171,8 +171,10 @@
 
 <script>
 const API_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run";
+const STATUS_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/status";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 let latestRows = [];
+let activePoll = null;
 
 function money(v) {
   const n = Number(v || 0);
@@ -254,10 +256,79 @@ function renderRows(rows, targetId, showRank) {
   }).join("");
 }
 
+function renderScanResult(data) {
+  latestRows = data.top || [];
+  document.getElementById("summarySymbol").textContent = data.symbol || "-";
+  document.getElementById("summaryIntervals").textContent = (data.intervals || []).join(", ") || "-";
+  document.getElementById("summaryCombos").textContent = String(data.tested_combinations || 0);
+  document.getElementById("summaryBest").textContent = latestRows[0] ? `${latestRows[0].algo_name} ${latestRows[0].interval}` : "-";
+  renderRows(latestRows, "topBody", true);
+  renderRows(data.best_by_algo || [], "algoBody", false);
+
+  const errors = data.errors || [];
+  document.getElementById("errorsCard").style.display = errors.length ? "block" : "none";
+  document.getElementById("errorsList").innerHTML = errors.map(e => `<div>${e}</div>`).join("");
+  document.getElementById("results").style.display = "block";
+  setStatus("Scan complete.", "info");
+}
+
+async function pollScanJob(jobId) {
+  const btn = document.getElementById("runBtn");
+  let attempts = 0;
+  if (activePoll) {
+    clearTimeout(activePoll);
+    activePoll = null;
+  }
+
+  async function tick() {
+    attempts += 1;
+    try {
+      const res = await fetch(`${STATUS_URL}/${encodeURIComponent(jobId)}`, {
+        headers: {
+          "Accept": "application/json",
+          "X-Requested-With": "XMLHttpRequest"
+        }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatus(data.detail || "Could not check scan status.", "error");
+        btn.disabled = false;
+        return;
+      }
+      if (data.status === "succeeded") {
+        activePoll = null;
+        renderScanResult(data.result || {});
+        btn.disabled = false;
+        return;
+      }
+      if (data.status === "failed") {
+        activePoll = null;
+        setStatus(data.error || "Deep scan failed.", "error");
+        btn.disabled = false;
+        return;
+      }
+
+      const seconds = Math.max(1, Math.round(attempts * 2));
+      setStatus(`${data.message || "Deep scan is running."} Checking again in a few seconds. Elapsed ${seconds}s.`, "info");
+      activePoll = setTimeout(tick, 2500);
+    } catch (err) {
+      activePoll = null;
+      setStatus("Network error while checking scan status: " + err, "error");
+      btn.disabled = false;
+    }
+  }
+
+  activePoll = setTimeout(tick, 1200);
+}
+
 document.getElementById("scanForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const btn = document.getElementById("runBtn");
   btn.disabled = true;
+  if (activePoll) {
+    clearTimeout(activePoll);
+    activePoll = null;
+  }
   setStatus("Running scan. This can take a bit because models are trained per algo and interval.", "info");
   document.getElementById("results").style.display = "none";
 
@@ -283,24 +354,17 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
       setStatus(data.detail || "Scan failed", "error");
       return;
     }
+    if (res.status === 202 && data.job_id) {
+      setStatus(data.message || "Deep scan started. Waiting for results.", "info");
+      await pollScanJob(data.job_id);
+      return;
+    }
 
-    latestRows = data.top || [];
-    document.getElementById("summarySymbol").textContent = data.symbol || "-";
-    document.getElementById("summaryIntervals").textContent = (data.intervals || []).join(", ") || "-";
-    document.getElementById("summaryCombos").textContent = String(data.tested_combinations || 0);
-    document.getElementById("summaryBest").textContent = latestRows[0] ? `${latestRows[0].algo_name} ${latestRows[0].interval}` : "-";
-    renderRows(latestRows, "topBody", true);
-    renderRows(data.best_by_algo || [], "algoBody", false);
-
-    const errors = data.errors || [];
-    document.getElementById("errorsCard").style.display = errors.length ? "block" : "none";
-    document.getElementById("errorsList").innerHTML = errors.map(e => `<div>${e}</div>`).join("");
-    document.getElementById("results").style.display = "block";
-    setStatus("Scan complete.", "info");
+    renderScanResult(data);
   } catch (err) {
     setStatus("Network error: " + err, "error");
   } finally {
-    btn.disabled = false;
+    if (!activePoll) btn.disabled = false;
   }
 });
 </script>

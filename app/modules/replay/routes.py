@@ -21,6 +21,10 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 
@@ -57,6 +61,123 @@ if not log.handlers:
     _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [ReplayRoutes] %(message)s"))
     log.addHandler(_h)
 log.setLevel(logging.INFO)
+
+
+CHEATSHEET_JOB_TTL_SEC = 60 * 60 * 2
+_cheatsheet_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CHEATSHEET_MAX_WORKERS", "2")))
+_cheatsheet_jobs: dict[str, dict] = {}
+_cheatsheet_jobs_lock = threading.Lock()
+
+
+def _cheatsheet_redis_client():
+    try:
+        import redis
+
+        redis_url = os.getenv("REDIS_URL")
+        if not redis_url:
+            return None
+        return redis.Redis.from_url(redis_url, decode_responses=True)
+    except Exception:
+        return None
+
+
+def _cheatsheet_redis_key(job_id: str) -> str:
+    return f"stockwicks:cheatsheet_job:{job_id}"
+
+
+def _store_cheatsheet_job(job_id: str, job: dict) -> None:
+    r = _cheatsheet_redis_client()
+    if not r:
+        return
+    try:
+        r.setex(_cheatsheet_redis_key(job_id), CHEATSHEET_JOB_TTL_SEC, json.dumps(job, default=str))
+    except Exception as exc:
+        log.warning("[CHEATSHEET] could not store job in Redis job_id=%s: %s", job_id, exc)
+
+
+def _load_cheatsheet_job(job_id: str) -> dict | None:
+    r = _cheatsheet_redis_client()
+    if not r:
+        return None
+    try:
+        raw = r.get(_cheatsheet_redis_key(job_id))
+        if not raw:
+            return None
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        log.warning("[CHEATSHEET] could not load job from Redis job_id=%s: %s", job_id, exc)
+        return None
+
+
+def _cleanup_cheatsheet_jobs() -> None:
+    cutoff = time.time() - CHEATSHEET_JOB_TTL_SEC
+    with _cheatsheet_jobs_lock:
+        stale_ids = [
+            job_id
+            for job_id, job in _cheatsheet_jobs.items()
+            if float(job.get("updated_at") or job.get("created_at") or 0) < cutoff
+        ]
+        for job_id in stale_ids:
+            _cheatsheet_jobs.pop(job_id, None)
+
+
+def _snapshot_cheatsheet_job(job_id: str, user_id: int) -> dict | None:
+    redis_job = _load_cheatsheet_job(job_id)
+    if redis_job and redis_job.get("user_id") == user_id:
+        return {
+            "job_id": job_id,
+            "status": redis_job.get("status", "queued"),
+            "message": redis_job.get("message"),
+            "result": redis_job.get("result"),
+            "error": redis_job.get("error"),
+        }
+
+    with _cheatsheet_jobs_lock:
+        job = _cheatsheet_jobs.get(job_id)
+        if not job or job.get("user_id") != user_id:
+            return None
+        return {
+            "job_id": job_id,
+            "status": job.get("status", "queued"),
+            "message": job.get("message"),
+            "result": job.get("result"),
+            "error": job.get("error"),
+        }
+
+
+def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
+    with _cheatsheet_jobs_lock:
+        job = _cheatsheet_jobs.get(job_id)
+        if not job:
+            return
+        job["status"] = "running"
+        job["message"] = "Deep scan is running."
+        job["updated_at"] = time.time()
+        _store_cheatsheet_job(job_id, job)
+
+    try:
+        result = run_cheatsheet(req)
+    except Exception as exc:
+        log.exception("[CHEATSHEET] background job failed job_id=%s symbol=%s", job_id, req.symbol)
+        with _cheatsheet_jobs_lock:
+            job = _cheatsheet_jobs.get(job_id)
+            if job:
+                job["status"] = "failed"
+                job["error"] = str(exc)
+                job["message"] = "Deep scan failed."
+                job["updated_at"] = time.time()
+                _store_cheatsheet_job(job_id, job)
+        return
+
+    with _cheatsheet_jobs_lock:
+        job = _cheatsheet_jobs.get(job_id)
+        if job:
+            job["status"] = "succeeded"
+            job["result"] = result
+            job["message"] = "Deep scan complete."
+            job["updated_at"] = time.time()
+            _store_cheatsheet_job(job_id, job)
 
 
 # Commercial MM replay config: keep aligned with paper_trade_bot.py and
@@ -463,19 +584,43 @@ def run_backtest_cheatsheet(
     if not parsed_intervals or any(i not in allowed_intervals for i in parsed_intervals):
         raise HTTPException(status_code=400, detail="Choose one or more supported intervals")
 
-    try:
-        result = run_cheatsheet(
-            CheatSheetRequest(
-                symbol=symbol,
-                intervals=parsed_intervals,
-                trade_size=max(float(trade_size or 1.0), 1.0),
-                builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
-                k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
-                profile=str(profile or "quick").lower(),
-                allow_short=_checkbox_on(allow_short_selling),
-                eod_close=_checkbox_on(eod_auto_close),
-            )
+    req = CheatSheetRequest(
+        symbol=symbol,
+        intervals=parsed_intervals,
+        trade_size=max(float(trade_size or 1.0), 1.0),
+        builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
+        k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
+        profile=str(profile or "quick").lower(),
+        allow_short=_checkbox_on(allow_short_selling),
+        eod_close=_checkbox_on(eod_auto_close),
+    )
+    if req.profile == "deep":
+        _cleanup_cheatsheet_jobs()
+        job_id = uuid.uuid4().hex
+        now = time.time()
+        with _cheatsheet_jobs_lock:
+            _cheatsheet_jobs[job_id] = {
+                "user_id": user.id,
+                "status": "queued",
+                "message": "Deep scan queued.",
+                "result": None,
+                "error": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
+        _cheatsheet_executor.submit(_run_cheatsheet_job, job_id, req)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "job_id": job_id,
+                "status": "queued",
+                "message": "Deep scan started. This page will update when it finishes.",
+            },
         )
+
+    try:
+        result = run_cheatsheet(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -483,6 +628,20 @@ def run_backtest_cheatsheet(
         raise HTTPException(status_code=500, detail=f"Cheat sheet failed: {exc}")
 
     return JSONResponse(result)
+
+
+@router.get("/analysis/cheatsheet/api/status/{job_id}")
+@router.get("/analysis/strategy-optimizer/api/status/{job_id}")
+@router.get("/auth/backtest-cheatsheet/api/status/{job_id}")
+def backtest_cheatsheet_status(
+    job_id: str,
+    user: User = Depends(get_current_user),
+):
+    _cleanup_cheatsheet_jobs()
+    snapshot = _snapshot_cheatsheet_job(job_id, user.id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+    return JSONResponse(snapshot)
 
 
 # =============================================================================
