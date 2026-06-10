@@ -160,6 +160,15 @@ def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
+def _ts_iso(index: pd.Index, pos: int) -> str | None:
+    if len(index) == 0:
+        return None
+    try:
+        return index[pos].isoformat()
+    except Exception:
+        return str(index[pos])
+
+
 def _simulate_combo(
     *,
     price_df: pd.DataFrame,
@@ -376,6 +385,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             sim_index = common_idx[split_at:]
             sim_price = price_df.loc[sim_index]
             prob_series = pd.Series(probs, index=X_all.index, name="prob_up").loc[sim_index]
+            train_index = common_idx[:split_at]
 
             for params in params_grid:
                 trades, metrics = _simulate_combo(
@@ -393,8 +403,21 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     "feature_set": feature_set,
                     "score": _score(metrics),
                     "confidence": _confidence(metrics),
-                    "first_test_bar": sim_price.index[0].isoformat() if not sim_price.empty else None,
-                    "last_test_bar": sim_price.index[-1].isoformat() if not sim_price.empty else None,
+                    "backtest_method": "single_model_oos",
+                    "backtest_method_label": "Single-model OOS scan",
+                    "backtest_notes": (
+                        "Trains one model on the first portion of fetched history, "
+                        "then simulates entries/exits on the out-of-sample tail. "
+                        "Replay is walk-forward and retrains on each replay bar."
+                    ),
+                    "history_bars": int(len(common_idx)),
+                    "train_bars": int(len(train_index)),
+                    "test_bars": int(len(sim_index)),
+                    "first_train_bar": _ts_iso(train_index, 0),
+                    "last_train_bar": _ts_iso(train_index, -1),
+                    "first_test_bar": _ts_iso(sim_price.index, 0),
+                    "last_test_bar": _ts_iso(sim_price.index, -1),
+                    "oos_fraction": float(req.oos_fraction),
                     **params,
                     **metrics,
                 }
@@ -415,6 +438,17 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "symbol": symbol,
         "intervals": intervals,
         "profile": req.profile,
+        "backtest_method": "single_model_oos",
+        "backtest_method_label": "Single-model OOS scan",
+        "backtest_explanation": (
+            "The optimizer fetches recent history, trains one model per algo/interval "
+            "on the first portion, and scores parameter combinations only on the "
+            "out-of-sample tail. Replay walks every selected candle and retrains "
+            "from candles available at that replay timestamp, so optimizer P/L and "
+            "replay P/L are directional comparisons unless the optimizer is changed "
+            "to walk-forward mode."
+        ),
+        "oos_fraction": float(req.oos_fraction),
         "tested_combinations": len(all_rows),
         "top": top_rows,
         "best_by_algo": best_by_algo,

@@ -27,6 +27,8 @@
   .stat { background:#151533; border:1px solid #2a2a55; border-radius:8px; padding:12px; }
   .stat-label { font-size:.72rem; color:#a7a7c7; text-transform:uppercase; letter-spacing:.4px; }
   .stat-value { margin-top:5px; font-size:1.15rem; font-weight:700; }
+  .method-note { margin-top:12px; color:#c7d2fe; font-size:.9rem; line-height:1.45; }
+  .window { color:#c7d2fe; line-height:1.4; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; font-size:.86rem; }
   th { background:#2d2d5c; color:#4fd1c5; text-align:left; padding:10px 8px; font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; }
   td { padding:10px 8px; border-bottom:1px solid #2a2a55; color:#e5e7eb; vertical-align:top; }
@@ -116,7 +118,16 @@
           <div class="stat-label">Best Algo</div>
           <div class="stat-value" id="summaryBest">-</div>
         </div>
+        <div class="stat">
+          <div class="stat-label">Method</div>
+          <div class="stat-value" id="summaryMethod">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">OOS Split</div>
+          <div class="stat-value" id="summaryOos">-</div>
+        </div>
       </div>
+      <div class="method-note" id="summaryMethodNote"></div>
     </div>
 
     <div class="card">
@@ -133,6 +144,7 @@
               <th>Trades</th>
               <th>Win Rate</th>
               <th>Drawdown</th>
+              <th>Test Window</th>
               <th>Parameters</th>
               <th>Action</th>
             </tr>
@@ -154,6 +166,7 @@
               <th>P/L</th>
               <th>Trades</th>
               <th>Win Rate</th>
+              <th>Test Window</th>
               <th>Parameters</th>
             </tr>
           </thead>
@@ -186,6 +199,27 @@ function pct(v) {
   return `${(Number(v || 0) * 100).toFixed(1)}%`;
 }
 
+function barTime(v) {
+  if (!v) return "-";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v).replace("T", " ").slice(0, 16);
+  return d.toLocaleString([], {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function testWindow(r) {
+  const train = `${Number(r.train_bars || 0)} train`;
+  const test = `${Number(r.test_bars || 0)} test`;
+  return `
+    <div>${barTime(r.first_test_bar)} -> ${barTime(r.last_test_bar)}</div>
+    <div class="muted">${train} / ${test}</div>
+  `;
+}
+
 function rowParams(r) {
   return [
     `Long ${Number(r.long_entry_prob).toFixed(2)}`,
@@ -209,7 +243,9 @@ function replayText(r) {
     `Long Entry Avg Prob: ${r.long_entry_prob}`,
     `Short Entry Avg Prob: ${r.short_entry_prob}`,
     `Probability Trail Drop: ${r.prob_trail_drop}`,
-    `Prob Exit Mode: ${r.prob_exit_mode}`
+    `Prob Exit Mode: ${r.prob_exit_mode}`,
+    `Backtest Method: ${r.backtest_method_label || r.backtest_method || "Single-model OOS scan"}`,
+    `Backtest Test Window: ${r.first_test_bar || "-"} -> ${r.last_test_bar || "-"}`
   ].join("\n");
 }
 
@@ -233,7 +269,7 @@ function setStatus(msg, kind) {
 function renderRows(rows, targetId, showRank) {
   const body = document.getElementById(targetId);
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="${showRank ? 10 : 7}" class="muted">No recommendations found.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${showRank ? 11 : 8}" class="muted">No recommendations found.</td></tr>`;
     return;
   }
   body.innerHTML = rows.map((r, i) => {
@@ -248,7 +284,8 @@ function renderRows(rows, targetId, showRank) {
         <td class="${pnlClass}">${money(r.total_profit)}</td>
         <td>${Math.trunc(Number(r.num_trades || 0))}</td>
         <td>${pct(r.win_rate)}</td>
-        <td>${money(r.max_drawdown)}</td>
+        ${showRank ? `<td>${money(r.max_drawdown)}</td>` : ""}
+        <td class="window">${testWindow(r)}</td>
         <td class="params">${rowParams(r)}</td>
         ${showRank ? `<td><div class="tools"><button class="btn btn-secondary" onclick="copySettings(${idx})">Copy</button><button class="btn btn-primary" onclick="openReplay()">Replay</button></div></td>` : ""}
       </tr>
@@ -262,6 +299,9 @@ function renderScanResult(data) {
   document.getElementById("summaryIntervals").textContent = (data.intervals || []).join(", ") || "-";
   document.getElementById("summaryCombos").textContent = String(data.tested_combinations || 0);
   document.getElementById("summaryBest").textContent = latestRows[0] ? `${latestRows[0].algo_name} ${latestRows[0].interval}` : "-";
+  document.getElementById("summaryMethod").textContent = data.backtest_method_label || data.backtest_method || "-";
+  document.getElementById("summaryOos").textContent = data.oos_fraction ? `${pct(data.oos_fraction)} test` : "-";
+  document.getElementById("summaryMethodNote").textContent = data.backtest_explanation || "";
   renderRows(latestRows, "topBody", true);
   renderRows(data.best_by_algo || [], "algoBody", false);
 
