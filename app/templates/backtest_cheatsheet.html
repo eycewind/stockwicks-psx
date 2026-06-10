@@ -213,10 +213,11 @@ function barTime(v) {
 
 function testWindow(r) {
   const train = `${Number(r.train_bars || 0)} train`;
+  const validation = `${Number(r.validation_bars || 0)} validation`;
   const test = `${Number(r.test_bars || 0)} test`;
   return `
     <div>${barTime(r.first_test_bar)} -> ${barTime(r.last_test_bar)}</div>
-    <div class="muted">${train} / ${test}</div>
+    <div class="muted">${train} / ${validation} / ${test}</div>
   `;
 }
 
@@ -244,8 +245,9 @@ function replayText(r) {
     `Short Entry Avg Prob: ${r.short_entry_prob}`,
     `Probability Trail Drop: ${r.prob_trail_drop}`,
     `Prob Exit Mode: ${r.prob_exit_mode}`,
-    `Backtest Method: ${r.backtest_method_label || r.backtest_method || "Single-model OOS scan"}`,
-    `Backtest Test Window: ${r.first_test_bar || "-"} -> ${r.last_test_bar || "-"}`
+    `Backtest Method: ${r.backtest_method_label || r.backtest_method || "Validation-picked holdout scan"}`,
+    `Validation Window: ${r.first_validation_bar || "-"} -> ${r.last_validation_bar || "-"}`,
+    `Holdout Test Window: ${r.first_test_bar || "-"} -> ${r.last_test_bar || "-"}`
   ].join("\n");
 }
 
@@ -300,7 +302,7 @@ function renderScanResult(data) {
   document.getElementById("summaryCombos").textContent = String(data.tested_combinations || 0);
   document.getElementById("summaryBest").textContent = latestRows[0] ? `${latestRows[0].algo_name} ${latestRows[0].interval}` : "-";
   document.getElementById("summaryMethod").textContent = data.backtest_method_label || data.backtest_method || "-";
-  document.getElementById("summaryOos").textContent = data.oos_fraction ? `${pct(data.oos_fraction)} test` : "-";
+  document.getElementById("summaryOos").textContent = data.oos_fraction ? `${pct(data.oos_fraction)} validation+holdout` : "-";
   document.getElementById("summaryMethodNote").textContent = data.backtest_explanation || "";
   renderRows(latestRows, "topBody", true);
   renderRows(data.best_by_algo || [], "algoBody", false);

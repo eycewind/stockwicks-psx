@@ -93,17 +93,17 @@ def _param_grid(profile: str) -> list[dict[str, Any]]:
     if str(profile or "quick").lower() == "deep":
         long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
         short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
-        prob_trail_drops = [0.03, 0.05, 0.08]
-        hard_stops = [200.0, 300.0, 500.0]
-        trail_activations = [50.0, 75.0, 100.0]
-        trail_distances = [25.0, 35.0, 50.0]
+        prob_trail_drops = [0.015, 0.02, 0.03, 0.04]
+        hard_stops = [150.0, 200.0, 300.0]
+        trail_activations = [30.0, 50.0, 75.0]
+        trail_distances = [15.0, 25.0, 35.0]
     else:
         long_entries = [0.58, 0.60, 0.62]
         short_entries = [0.42, 0.40, 0.38]
-        prob_trail_drops = [0.03, 0.05]
-        hard_stops = [200.0, 300.0]
-        trail_activations = [50.0, 75.0]
-        trail_distances = [25.0, 35.0]
+        prob_trail_drops = [0.02, 0.03]
+        hard_stops = [150.0, 200.0, 300.0]
+        trail_activations = [30.0, 50.0]
+        trail_distances = [15.0, 25.0]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -328,13 +328,6 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 continue
 
             try:
-                train_feat = feature_module.build_training_features_from_df(
-                    df=price_full,
-                    symbol=symbol,
-                    interval=interval,
-                    k_forward=req.k_forward,
-                    feature_set=feature_set,
-                )
                 infer_feat = feature_module.build_feature_matrix_from_df(
                     df=price_full,
                     symbol=symbol,
@@ -346,24 +339,57 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 errors.append(f"{algo_name} {interval}: feature build failed: {exc}")
                 continue
 
-            common_idx = train_feat.index.intersection(infer_feat.index).intersection(price_full.index)
-            train_feat = train_feat.loc[common_idx].copy()
+            common_idx = infer_feat.index.intersection(price_full.index)
             infer_feat = infer_feat.loc[common_idx].copy()
             price_df = price_full.loc[common_idx].copy()
             if len(common_idx) < 80:
                 errors.append(f"{algo_name} {interval}: not enough aligned bars ({len(common_idx)})")
                 continue
-            if "y" not in train_feat or "w" not in train_feat or train_feat["y"].nunique() < 2:
-                errors.append(f"{algo_name} {interval}: training labels are not usable")
+
+            n = len(common_idx)
+            min_validation_bars = 20
+            min_holdout_bars = 20
+            train_end = int(n * (1.0 - req.oos_fraction))
+            train_end = max(30, min(train_end, n - min_validation_bars - min_holdout_bars))
+            if train_end < 30 or n - train_end < min_validation_bars + min_holdout_bars:
+                errors.append(f"{algo_name} {interval}: not enough bars for train/validation/holdout split ({n})")
                 continue
 
-            split_at = int(len(common_idx) * (1.0 - req.oos_fraction))
-            split_at = max(30, min(split_at, len(common_idx) - 20))
-            X_train = _prepare_X(train_feat.iloc[:split_at], list(feat_names))
-            y_train = train_feat.loc[X_train.index, "y"].astype(int).values
-            w_train = train_feat.loc[X_train.index, "w"].astype(float).values
+            oos_count = n - train_end
+            validation_count = max(min_validation_bars, oos_count // 2)
+            validation_end = min(train_end + validation_count, n - min_holdout_bars)
+
+            train_index = common_idx[:train_end]
+            validation_index = common_idx[train_end:validation_end]
+            holdout_index = common_idx[validation_end:]
+            if len(validation_index) < min_validation_bars or len(holdout_index) < min_holdout_bars:
+                errors.append(f"{algo_name} {interval}: validation/holdout split too small")
+                continue
+
+            # Build labels from the pre-split price frame only. Building labels
+            # on the full frame would let the last training rows see forward
+            # validation candles through y/w.
+            train_price_source = price_df.loc[train_index].copy()
+            train_feat_safe = feature_module.build_training_features_from_df(
+                df=train_price_source,
+                symbol=symbol,
+                interval=interval,
+                k_forward=req.k_forward,
+                feature_set=feature_set,
+            )
+            if train_feat_safe is None or train_feat_safe.empty:
+                errors.append(f"{algo_name} {interval}: safe training labels are empty")
+                continue
+            train_feat_safe = train_feat_safe.loc[train_feat_safe.index.intersection(train_index)].copy()
+            if "y" not in train_feat_safe or "w" not in train_feat_safe or train_feat_safe["y"].nunique() < 2:
+                errors.append(f"{algo_name} {interval}: safe training labels are not usable")
+                continue
+
+            X_train = _prepare_X(train_feat_safe, list(feat_names))
+            y_train = train_feat_safe.loc[X_train.index, "y"].astype(int).values
+            w_train = train_feat_safe.loc[X_train.index, "w"].astype(float).values
             if len(set(y_train)) < 2:
-                errors.append(f"{algo_name} {interval}: OOS split left only one training class")
+                errors.append(f"{algo_name} {interval}: safe train split left only one training class")
                 continue
 
             try:
@@ -382,48 +408,68 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 errors.append(f"{algo_name} {interval}: model training failed: {exc}")
                 continue
 
-            sim_index = common_idx[split_at:]
-            sim_price = price_df.loc[sim_index]
-            prob_series = pd.Series(probs, index=X_all.index, name="prob_up").loc[sim_index]
-            train_index = common_idx[:split_at]
+            validation_price = price_df.loc[validation_index]
+            holdout_price = price_df.loc[holdout_index]
+            prob_all = pd.Series(probs, index=X_all.index, name="prob_up")
+            validation_prob = prob_all.loc[validation_index]
+            holdout_prob = prob_all.loc[holdout_index]
 
             for params in params_grid:
-                trades, metrics = _simulate_combo(
-                    price_df=sim_price,
-                    prob_up=prob_series,
+                validation_trades, validation_metrics = _simulate_combo(
+                    price_df=validation_price,
+                    prob_up=validation_prob,
                     params=params,
                     trade_size=req.trade_size,
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
                 )
+                holdout_trades, holdout_metrics = _simulate_combo(
+                    price_df=holdout_price,
+                    prob_up=holdout_prob,
+                    params=params,
+                    trade_size=req.trade_size,
+                    allow_short=req.allow_short,
+                    eod_close=req.eod_close,
+                )
+                validation_score = _score(validation_metrics)
+                holdout_score = _score(holdout_metrics)
                 row = {
                     "symbol": symbol,
                     "interval": interval,
                     "algo_name": algo_name,
                     "feature_set": feature_set,
-                    "score": _score(metrics),
-                    "confidence": _confidence(metrics),
-                    "backtest_method": "single_model_oos",
-                    "backtest_method_label": "Single-model OOS scan",
+                    "score": validation_score,
+                    "validation_score": validation_score,
+                    "holdout_score": holdout_score,
+                    "confidence": _confidence(holdout_metrics),
+                    "backtest_method": "validation_picked_holdout",
+                    "backtest_method_label": "Validation-picked holdout scan",
                     "backtest_notes": (
-                        "Trains one model on the first portion of fetched history, "
-                        "then simulates entries/exits on the out-of-sample tail. "
-                        "Replay is walk-forward and retrains on each replay bar."
+                        "Trains one model on pre-split history, selects parameters "
+                        "on validation bars, then reports P/L on later holdout bars. "
+                        "Training labels are rebuilt from pre-split candles only."
                     ),
                     "history_bars": int(len(common_idx)),
-                    "train_bars": int(len(train_index)),
-                    "test_bars": int(len(sim_index)),
+                    "train_bars": int(len(X_train)),
+                    "validation_bars": int(len(validation_index)),
+                    "test_bars": int(len(holdout_index)),
                     "first_train_bar": _ts_iso(train_index, 0),
                     "last_train_bar": _ts_iso(train_index, -1),
-                    "first_test_bar": _ts_iso(sim_price.index, 0),
-                    "last_test_bar": _ts_iso(sim_price.index, -1),
+                    "first_validation_bar": _ts_iso(validation_index, 0),
+                    "last_validation_bar": _ts_iso(validation_index, -1),
+                    "first_test_bar": _ts_iso(holdout_price.index, 0),
+                    "last_test_bar": _ts_iso(holdout_price.index, -1),
                     "oos_fraction": float(req.oos_fraction),
+                    "validation_total_profit": validation_metrics["total_profit"],
+                    "validation_num_trades": validation_metrics["num_trades"],
+                    "validation_win_rate": validation_metrics["win_rate"],
+                    "holdout_num_trades": holdout_metrics["num_trades"],
                     **params,
-                    **metrics,
+                    **holdout_metrics,
                 }
                 all_rows.append(row)
 
-    all_rows.sort(key=lambda r: (r["score"], r["total_profit"], r["win_rate"]), reverse=True)
+    all_rows.sort(key=lambda r: (r["score"], r["holdout_score"], r["total_profit"], r["win_rate"]), reverse=True)
     top_rows = all_rows[:20]
     best_by_algo = []
     seen: set[tuple[str, str]] = set()
@@ -438,15 +484,16 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "symbol": symbol,
         "intervals": intervals,
         "profile": req.profile,
-        "backtest_method": "single_model_oos",
-        "backtest_method_label": "Single-model OOS scan",
+        "backtest_method": "validation_picked_holdout",
+        "backtest_method_label": "Validation-picked holdout scan",
         "backtest_explanation": (
             "The optimizer fetches recent history, trains one model per algo/interval "
-            "on the first portion, and scores parameter combinations only on the "
-            "out-of-sample tail. Replay walks every selected candle and retrains "
-            "from candles available at that replay timestamp, so optimizer P/L and "
-            "replay P/L are directional comparisons unless the optimizer is changed "
-            "to walk-forward mode."
+            "using only pre-split candles, selects parameters on validation bars, "
+            "and reports P/L on later holdout bars. Training labels are rebuilt "
+            "from the pre-split frame so they cannot use future validation candles. "
+            "Replay still walks every selected candle and retrains at each replay "
+            "timestamp, so optimizer P/L and replay P/L can differ, but the "
+            "optimizer no longer ranks by the same holdout it reports."
         ),
         "oos_fraction": float(req.oos_fraction),
         "tested_combinations": len(all_rows),
