@@ -94,17 +94,17 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
     if str(profile or "quick").lower() == "deep":
         long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
         short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
-        prob_trail_drops = [0.015, 0.02, 0.03, 0.04]
-        hard_stops = [150.0, 200.0, 300.0]
-        trail_activations = [30.0, 50.0, 75.0]
-        trail_distances = [15.0, 25.0, 35.0]
+        prob_trail_drops = [0.05, 0.10, 0.20, 0.35, 0.50]
+        hard_stops = [300.0, 500.0, 750.0, 1000.0, 1500.0]
+        trail_activations = [50.0, 75.0, 100.0, 150.0, 250.0]
+        trail_distances = [25.0, 50.0, 75.0, 100.0, 150.0]
     else:
         long_entries = [0.58, 0.60, 0.62]
         short_entries = [0.42, 0.40, 0.38]
-        prob_trail_drops = [0.02, 0.03]
-        hard_stops = [150.0, 200.0, 300.0]
-        trail_activations = [30.0, 50.0]
-        trail_distances = [15.0, 25.0]
+        prob_trail_drops = [0.05, 0.10, 0.20, 0.35]
+        hard_stops = [300.0, 500.0, 750.0, 1000.0]
+        trail_activations = [50.0, 75.0, 100.0, 150.0]
+        trail_distances = [25.0, 50.0, 75.0, 100.0]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -533,8 +533,8 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             "displayed P/L and win rate are holdout results, so the holdout is not "
             "used to pick winners. Training labels are rebuilt from the pre-split "
             "frame so they cannot use future validation candles. The parameter "
-            "grid is limited to replay-supported exits and conservative SL, "
-            "trailing stop, and probability trail values."
+            "grid is limited to replay-supported exits, with wider SL, trailing "
+            "stop, and probability trail values for volatile 5-minute moves."
         ),
         "oos_fraction": float(req.oos_fraction),
         "tested_combinations": len(all_rows),
