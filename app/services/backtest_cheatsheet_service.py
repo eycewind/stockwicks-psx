@@ -94,33 +94,17 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
     if str(profile or "quick").lower() == "deep":
         long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
         short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
-        if is_algo4:
-            prob_trail_drops = [0.05, 0.10, 0.20, 0.35, 0.50]
-            hard_stops = [300.0, 750.0, 1500.0, 3000.0]
-            take_profits = [0.0, 1000.0, 2500.0, 5000.0]
-            trail_activations = [75.0, 250.0, 500.0, 750.0]
-            trail_distances = [35.0, 150.0, 250.0, 350.0]
-        else:
-            prob_trail_drops = [0.02, 0.03, 0.05, 0.10]
-            hard_stops = [150.0, 200.0, 300.0, 500.0]
-            take_profits = [0.0, 300.0, 500.0, 1000.0]
-            trail_activations = [30.0, 50.0, 75.0]
-            trail_distances = [15.0, 25.0, 35.0]
+        prob_trail_drops = [0.015, 0.02, 0.03, 0.04]
+        hard_stops = [150.0, 200.0, 300.0]
+        trail_activations = [30.0, 50.0, 75.0]
+        trail_distances = [15.0, 25.0, 35.0]
     else:
         long_entries = [0.58, 0.60, 0.62]
         short_entries = [0.42, 0.40, 0.38]
-        if is_algo4:
-            prob_trail_drops = [0.05, 0.20, 0.50]
-            hard_stops = [300.0, 1500.0, 3000.0]
-            take_profits = [0.0, 1000.0, 5000.0]
-            trail_activations = [75.0, 750.0]
-            trail_distances = [35.0, 350.0]
-        else:
-            prob_trail_drops = [0.02, 0.03, 0.05]
-            hard_stops = [150.0, 200.0, 300.0]
-            take_profits = [0.0, 300.0, 500.0]
-            trail_activations = [30.0, 50.0]
-            trail_distances = [15.0, 25.0]
+        prob_trail_drops = [0.02, 0.03]
+        hard_stops = [150.0, 200.0, 300.0]
+        trail_activations = [30.0, 50.0]
+        trail_distances = [15.0, 25.0]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -129,25 +113,23 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
                 continue
             for prob_trail_drop in prob_trail_drops:
                 for hard_stop_usd in hard_stops:
-                    for take_profit_usd in take_profits:
-                        for trailing_stop_activation in trail_activations:
-                            for trailing_stop_distance in trail_distances:
-                                rows.append(
-                                    {
-                                        "long_entry_prob": long_entry,
-                                        "short_entry_prob": short_entry,
-                                        "prob_trail_drop": prob_trail_drop,
-                                        "hard_stop_usd": hard_stop_usd,
-                                        "take_profit_usd": take_profit_usd,
-                                        "trailing_stop_activation": trailing_stop_activation,
-                                        "trailing_stop_distance": trailing_stop_distance,
-                                        "prob_exit_mode": "trailing",
-                                        "long_fixed_exit_prob": 0.55,
-                                        "short_fixed_exit_prob": 0.55,
-                                        "prob_smoothing_bars": 3,
-                                        "min_prob_advantage": 0.03 if is_algo4 else 0.0,
-                                    }
-                                )
+                    for trailing_stop_activation in trail_activations:
+                        for trailing_stop_distance in trail_distances:
+                            rows.append(
+                                {
+                                    "long_entry_prob": long_entry,
+                                    "short_entry_prob": short_entry,
+                                    "prob_trail_drop": prob_trail_drop,
+                                    "hard_stop_usd": hard_stop_usd,
+                                    "trailing_stop_activation": trailing_stop_activation,
+                                    "trailing_stop_distance": trailing_stop_distance,
+                                    "prob_exit_mode": "trailing",
+                                    "long_fixed_exit_prob": 0.55,
+                                    "short_fixed_exit_prob": 0.55,
+                                    "prob_smoothing_bars": 3,
+                                    "min_prob_advantage": 0.03 if is_algo4 else 0.0,
+                                }
+                            )
     return rows
 
 
@@ -240,7 +222,6 @@ def _simulate_combo(
     long_entry = float(params["long_entry_prob"])
     short_entry = float(params["short_entry_prob"])
     hard_stop = float(params["hard_stop_usd"])
-    take_profit = float(params.get("take_profit_usd", 0.0) or 0.0)
     trail_activation = float(params["trailing_stop_activation"])
     trail_distance = float(params["trailing_stop_distance"])
     prob_trail_drop = float(params["prob_trail_drop"])
@@ -263,9 +244,6 @@ def _simulate_combo(
             pnl = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
             if hard_stop > 0 and pnl <= -hard_stop:
                 close_trade(ts, price, "HARD_STOP")
-                just_closed = True
-            elif take_profit > 0 and pnl >= take_profit:
-                close_trade(ts, price, "TAKE_PROFIT")
                 just_closed = True
             else:
                 profit_peak = max(profit_peak, pnl)
@@ -328,13 +306,10 @@ def _score(metrics: dict[str, float]) -> float:
     )
 
 
-def _selection_score(validation_metrics: dict[str, float], holdout_metrics: dict[str, float]) -> float:
+def _selection_score(validation_metrics: dict[str, float]) -> float:
     validation_score = _score(validation_metrics)
-    holdout_score = _score(holdout_metrics)
-    stability_penalty = abs(validation_metrics["total_profit"] - holdout_metrics["total_profit"]) * 0.15
-    drawdown_penalty = max(validation_metrics["max_drawdown"], holdout_metrics["max_drawdown"]) * 0.25
-    trade_penalty = 250.0 if holdout_metrics["num_trades"] < 2 else 0.0
-    return (0.35 * validation_score) + (0.65 * holdout_score) - stability_penalty - drawdown_penalty - trade_penalty
+    trade_penalty = 250.0 if validation_metrics["num_trades"] < 2 else 0.0
+    return validation_score - trade_penalty
 
 
 def _confidence(metrics: dict[str, float]) -> str:
@@ -485,7 +460,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 )
                 validation_score = _score(validation_metrics)
                 holdout_score = _score(holdout_metrics)
-                selection_score = _selection_score(validation_metrics, holdout_metrics)
+                selection_score = _selection_score(validation_metrics)
                 row = {
                     "symbol": symbol,
                     "interval": interval,
@@ -497,14 +472,14 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     "holdout_score": holdout_score,
                     "confidence": _confidence(holdout_metrics),
                     "backtest_method": "validation_picked_holdout",
-                    "backtest_method_label": "Validation + holdout robust scan",
+                    "backtest_method_label": "Validation-picked holdout scan",
                     "backtest_notes": (
                         "Trains one model on pre-split history, selects parameters "
-                        "with a robustness score that weights later holdout results "
-                        "more heavily than validation results. Training labels are "
-                        "rebuilt from pre-split candles only. The parameter sweep "
-                        "includes SL, PT, trailing stop, probability trail drop, "
-                        "and long/short probability thresholds."
+                        "on validation bars, then reports P/L on later holdout bars. "
+                        "Training labels are rebuilt from pre-split candles only. "
+                        "The parameter sweep matches replay-supported exits: SL, "
+                        "trailing stop, probability trail drop, and long/short "
+                        "probability thresholds."
                     ),
                     "history_bars": int(len(common_idx)),
                     "train_bars": int(len(X_train)),
@@ -526,7 +501,15 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 }
                 all_rows.append(row)
 
-    all_rows.sort(key=lambda r: (r["score"], r["holdout_score"], r["total_profit"], r["win_rate"]), reverse=True)
+    all_rows.sort(
+        key=lambda r: (
+            r["score"],
+            r["validation_total_profit"],
+            r["validation_win_rate"],
+            -r["max_drawdown"],
+        ),
+        reverse=True,
+    )
     top_rows = all_rows[:20]
     best_by_algo = []
     seen: set[tuple[str, str]] = set()
@@ -542,15 +525,16 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "intervals": intervals,
         "profile": req.profile,
         "backtest_method": "validation_picked_holdout",
-        "backtest_method_label": "Validation + holdout robust scan",
+        "backtest_method_label": "Validation-picked holdout scan",
         "backtest_explanation": (
             "The optimizer fetches recent history, trains one model per algo/interval "
             "using only pre-split candles, tests parameters on validation bars and "
-            "later holdout bars, then ranks by a robustness score that weights "
-            "holdout more heavily and penalizes unstable P/L, drawdown, and tiny "
-            "trade counts. Algo4_MM uses its legacy level/advantage entry style "
-            "and searches wider SL, PT, trailing stop, probability trail drop, "
-            "and probability threshold values."
+            "later holdout bars, then ranks only by validation performance. The "
+            "displayed P/L and win rate are holdout results, so the holdout is not "
+            "used to pick winners. Training labels are rebuilt from the pre-split "
+            "frame so they cannot use future validation candles. The parameter "
+            "grid is limited to replay-supported exits and conservative SL, "
+            "trailing stop, and probability trail values."
         ),
         "oos_fraction": float(req.oos_fraction),
         "tested_combinations": len(all_rows),
