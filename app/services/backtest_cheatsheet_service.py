@@ -89,21 +89,38 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.Data
     return frame.sort_index()
 
 
-def _param_grid(profile: str) -> list[dict[str, Any]]:
+def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
+    is_algo4 = str(algo_name or "") == "Algo4_MM"
     if str(profile or "quick").lower() == "deep":
         long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
         short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
-        prob_trail_drops = [0.015, 0.02, 0.03, 0.04]
-        hard_stops = [150.0, 200.0, 300.0]
-        trail_activations = [30.0, 50.0, 75.0]
-        trail_distances = [15.0, 25.0, 35.0]
+        if is_algo4:
+            prob_trail_drops = [0.05, 0.10, 0.20, 0.35, 0.50]
+            hard_stops = [300.0, 750.0, 1500.0, 3000.0]
+            take_profits = [0.0, 1000.0, 2500.0, 5000.0]
+            trail_activations = [75.0, 250.0, 500.0, 750.0]
+            trail_distances = [35.0, 150.0, 250.0, 350.0]
+        else:
+            prob_trail_drops = [0.02, 0.03, 0.05, 0.10]
+            hard_stops = [150.0, 200.0, 300.0, 500.0]
+            take_profits = [0.0, 300.0, 500.0, 1000.0]
+            trail_activations = [30.0, 50.0, 75.0]
+            trail_distances = [15.0, 25.0, 35.0]
     else:
         long_entries = [0.58, 0.60, 0.62]
         short_entries = [0.42, 0.40, 0.38]
-        prob_trail_drops = [0.02, 0.03]
-        hard_stops = [150.0, 200.0, 300.0]
-        trail_activations = [30.0, 50.0]
-        trail_distances = [15.0, 25.0]
+        if is_algo4:
+            prob_trail_drops = [0.05, 0.20, 0.50]
+            hard_stops = [300.0, 1500.0, 3000.0]
+            take_profits = [0.0, 1000.0, 5000.0]
+            trail_activations = [75.0, 750.0]
+            trail_distances = [35.0, 350.0]
+        else:
+            prob_trail_drops = [0.02, 0.03, 0.05]
+            hard_stops = [150.0, 200.0, 300.0]
+            take_profits = [0.0, 300.0, 500.0]
+            trail_activations = [30.0, 50.0]
+            trail_distances = [15.0, 25.0]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -112,22 +129,25 @@ def _param_grid(profile: str) -> list[dict[str, Any]]:
                 continue
             for prob_trail_drop in prob_trail_drops:
                 for hard_stop_usd in hard_stops:
-                    for trailing_stop_activation in trail_activations:
-                        for trailing_stop_distance in trail_distances:
-                            rows.append(
-                                {
-                                    "long_entry_prob": long_entry,
-                                    "short_entry_prob": short_entry,
-                                    "prob_trail_drop": prob_trail_drop,
-                                    "hard_stop_usd": hard_stop_usd,
-                                    "trailing_stop_activation": trailing_stop_activation,
-                                    "trailing_stop_distance": trailing_stop_distance,
-                                    "prob_exit_mode": "trailing",
-                                    "long_fixed_exit_prob": 0.55,
-                                    "short_fixed_exit_prob": 0.55,
-                                    "prob_smoothing_bars": 3,
-                                }
-                            )
+                    for take_profit_usd in take_profits:
+                        for trailing_stop_activation in trail_activations:
+                            for trailing_stop_distance in trail_distances:
+                                rows.append(
+                                    {
+                                        "long_entry_prob": long_entry,
+                                        "short_entry_prob": short_entry,
+                                        "prob_trail_drop": prob_trail_drop,
+                                        "hard_stop_usd": hard_stop_usd,
+                                        "take_profit_usd": take_profit_usd,
+                                        "trailing_stop_activation": trailing_stop_activation,
+                                        "trailing_stop_distance": trailing_stop_distance,
+                                        "prob_exit_mode": "trailing",
+                                        "long_fixed_exit_prob": 0.55,
+                                        "short_fixed_exit_prob": 0.55,
+                                        "prob_smoothing_bars": 3,
+                                        "min_prob_advantage": 0.03 if is_algo4 else 0.0,
+                                    }
+                                )
     return rows
 
 
@@ -171,6 +191,7 @@ def _ts_iso(index: pd.Index, pos: int) -> str | None:
 
 def _simulate_combo(
     *,
+    algo_name: str,
     price_df: pd.DataFrame,
     prob_up: pd.Series,
     params: dict[str, Any],
@@ -178,8 +199,13 @@ def _simulate_combo(
     allow_short: bool,
     eod_close: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    is_algo4 = str(algo_name or "") == "Algo4_MM"
     smoothing = max(1, int(params.get("prob_smoothing_bars", 3)))
-    prob_avg = prob_up.rolling(window=smoothing, min_periods=smoothing).mean()
+    # Algo4_MM live/replay uses the previous aligned probability from a
+    # rolling k-forward average with min_periods=1. Algo1/2/3/5 use the
+    # stricter smoothed-cross behavior.
+    min_periods = 1 if is_algo4 else smoothing
+    prob_avg = prob_up.rolling(window=smoothing, min_periods=min_periods).mean()
 
     position_side: str | None = None
     entry_price = 0.0
@@ -214,15 +240,21 @@ def _simulate_combo(
     long_entry = float(params["long_entry_prob"])
     short_entry = float(params["short_entry_prob"])
     hard_stop = float(params["hard_stop_usd"])
+    take_profit = float(params.get("take_profit_usd", 0.0) or 0.0)
     trail_activation = float(params["trailing_stop_activation"])
     trail_distance = float(params["trailing_stop_distance"])
     prob_trail_drop = float(params["prob_trail_drop"])
+    min_prob_advantage = float(params.get("min_prob_advantage", 0.0) or 0.0)
 
     for i in range(1, len(price_df)):
         ts = price_df.index[i]
         price = float(price_df["close"].iloc[i])
-        current_prob = _safe_float(aligned.iloc[i], float("nan"))
-        prev_prob = _safe_float(aligned.iloc[i - 1], float("nan"))
+        # Algo4 avoids using the current candle's own probability for the
+        # decision. This mirrors algoMM_replay_runner's prev_prob behavior.
+        prob_pos = i - 1 if is_algo4 else i
+        prev_pos = max(0, prob_pos - 1)
+        current_prob = _safe_float(aligned.iloc[prob_pos], float("nan"))
+        prev_prob = _safe_float(aligned.iloc[prev_pos], float("nan"))
         if not math.isfinite(current_prob) or not math.isfinite(prev_prob):
             continue
 
@@ -231,6 +263,9 @@ def _simulate_combo(
             pnl = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
             if hard_stop > 0 and pnl <= -hard_stop:
                 close_trade(ts, price, "HARD_STOP")
+                just_closed = True
+            elif take_profit > 0 and pnl >= take_profit:
+                close_trade(ts, price, "TAKE_PROFIT")
                 just_closed = True
             else:
                 profit_peak = max(profit_peak, pnl)
@@ -253,15 +288,21 @@ def _simulate_combo(
                     just_closed = True
 
         if position_side is None and not just_closed:
-            crossed_up = prev_prob < long_entry <= current_prob
-            crossed_down = prev_prob > short_entry >= current_prob
-            if crossed_up:
+            if is_algo4:
+                prob_down = 1.0 - current_prob
+                enter_long = current_prob >= long_entry and current_prob > (prob_down + min_prob_advantage)
+                enter_short = allow_short and prob_down >= (1.0 - short_entry) and prob_down > (current_prob + min_prob_advantage)
+            else:
+                enter_long = prev_prob < long_entry <= current_prob
+                enter_short = allow_short and prev_prob > short_entry >= current_prob
+
+            if enter_long:
                 position_side = "long"
                 entry_price = price
                 entry_time = ts
                 prob_peak = current_prob
                 profit_peak = 0.0
-            elif crossed_down and allow_short:
+            elif enter_short:
                 position_side = "short"
                 entry_price = price
                 entry_time = ts
@@ -287,6 +328,15 @@ def _score(metrics: dict[str, float]) -> float:
     )
 
 
+def _selection_score(validation_metrics: dict[str, float], holdout_metrics: dict[str, float]) -> float:
+    validation_score = _score(validation_metrics)
+    holdout_score = _score(holdout_metrics)
+    stability_penalty = abs(validation_metrics["total_profit"] - holdout_metrics["total_profit"]) * 0.15
+    drawdown_penalty = max(validation_metrics["max_drawdown"], holdout_metrics["max_drawdown"]) * 0.25
+    trade_penalty = 250.0 if holdout_metrics["num_trades"] < 2 else 0.0
+    return (0.35 * validation_score) + (0.65 * holdout_score) - stability_penalty - drawdown_penalty - trade_penalty
+
+
 def _confidence(metrics: dict[str, float]) -> str:
     if metrics["num_trades"] < 3:
         return "Low"
@@ -306,7 +356,6 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
     if not intervals:
         raise ValueError("At least one interval is required")
 
-    params_grid = _param_grid(req.profile)
     all_rows: list[dict[str, Any]] = []
     errors: list[str] = []
 
@@ -318,6 +367,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             continue
 
         for algo_name, feature_set in ALGO_FEATURE_SETS.items():
+            params_grid = _param_grid(req.profile, algo_name)
             try:
                 feature_module = _load_feature_module(feature_set)
             except ModuleNotFoundError:
@@ -416,6 +466,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
 
             for params in params_grid:
                 validation_trades, validation_metrics = _simulate_combo(
+                    algo_name=algo_name,
                     price_df=validation_price,
                     prob_up=validation_prob,
                     params=params,
@@ -424,6 +475,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     eod_close=req.eod_close,
                 )
                 holdout_trades, holdout_metrics = _simulate_combo(
+                    algo_name=algo_name,
                     price_df=holdout_price,
                     prob_up=holdout_prob,
                     params=params,
@@ -433,21 +485,26 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 )
                 validation_score = _score(validation_metrics)
                 holdout_score = _score(holdout_metrics)
+                selection_score = _selection_score(validation_metrics, holdout_metrics)
                 row = {
                     "symbol": symbol,
                     "interval": interval,
                     "algo_name": algo_name,
                     "feature_set": feature_set,
-                    "score": validation_score,
+                    "score": selection_score,
+                    "selection_score": selection_score,
                     "validation_score": validation_score,
                     "holdout_score": holdout_score,
                     "confidence": _confidence(holdout_metrics),
                     "backtest_method": "validation_picked_holdout",
-                    "backtest_method_label": "Validation-picked holdout scan",
+                    "backtest_method_label": "Validation + holdout robust scan",
                     "backtest_notes": (
                         "Trains one model on pre-split history, selects parameters "
-                        "on validation bars, then reports P/L on later holdout bars. "
-                        "Training labels are rebuilt from pre-split candles only."
+                        "with a robustness score that weights later holdout results "
+                        "more heavily than validation results. Training labels are "
+                        "rebuilt from pre-split candles only. The parameter sweep "
+                        "includes SL, PT, trailing stop, probability trail drop, "
+                        "and long/short probability thresholds."
                     ),
                     "history_bars": int(len(common_idx)),
                     "train_bars": int(len(X_train)),
@@ -485,15 +542,15 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "intervals": intervals,
         "profile": req.profile,
         "backtest_method": "validation_picked_holdout",
-        "backtest_method_label": "Validation-picked holdout scan",
+        "backtest_method_label": "Validation + holdout robust scan",
         "backtest_explanation": (
             "The optimizer fetches recent history, trains one model per algo/interval "
-            "using only pre-split candles, selects parameters on validation bars, "
-            "and reports P/L on later holdout bars. Training labels are rebuilt "
-            "from the pre-split frame so they cannot use future validation candles. "
-            "Replay still walks every selected candle and retrains at each replay "
-            "timestamp, so optimizer P/L and replay P/L can differ, but the "
-            "optimizer no longer ranks by the same holdout it reports."
+            "using only pre-split candles, tests parameters on validation bars and "
+            "later holdout bars, then ranks by a robustness score that weights "
+            "holdout more heavily and penalizes unstable P/L, drawdown, and tiny "
+            "trade counts. Algo4_MM uses its legacy level/advantage entry style "
+            "and searches wider SL, PT, trailing stop, probability trail drop, "
+            "and probability threshold values."
         ),
         "oos_fraction": float(req.oos_fraction),
         "tested_combinations": len(all_rows),
