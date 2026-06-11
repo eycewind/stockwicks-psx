@@ -347,13 +347,13 @@ async function pollScanJob(jobId) {
       }
       if (data.status === "failed") {
         activePoll = null;
-        setStatus(data.error || "Deep scan failed.", "error");
+        setStatus(data.error || "Strategy scan failed.", "error");
         btn.disabled = false;
         return;
       }
 
       const seconds = Math.max(1, Math.round(attempts * 2));
-      setStatus(`${data.message || "Deep scan is running."} Checking again in a few seconds. Elapsed ${seconds}s.`, "info");
+      setStatus(`${data.message || "Strategy scan is running."} Checking again in a few seconds. Elapsed ${seconds}s.`, "info");
       activePoll = setTimeout(tick, 2500);
     } catch (err) {
       activePoll = null;
@@ -399,7 +399,7 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
       return;
     }
     if (res.status === 202 && data.job_id) {
-      setStatus(data.message || "Deep scan started. Waiting for results.", "info");
+      setStatus(data.message || "Strategy scan started. Waiting for results.", "info");
       await pollScanJob(data.job_id);
       return;
     }

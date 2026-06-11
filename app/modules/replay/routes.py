@@ -152,7 +152,7 @@ def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
         if not job:
             return
         job["status"] = "running"
-        job["message"] = "Deep scan is running."
+        job["message"] = "Strategy scan is running."
         job["updated_at"] = time.time()
         _store_cheatsheet_job(job_id, job)
 
@@ -165,7 +165,7 @@ def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
             if job:
                 job["status"] = "failed"
                 job["error"] = str(exc)
-                job["message"] = "Deep scan failed."
+                job["message"] = "Strategy scan failed."
                 job["updated_at"] = time.time()
                 _store_cheatsheet_job(job_id, job)
         return
@@ -175,7 +175,7 @@ def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
         if job:
             job["status"] = "succeeded"
             job["result"] = result
-            job["message"] = "Deep scan complete."
+            job["message"] = "Strategy scan complete."
             job["updated_at"] = time.time()
             _store_cheatsheet_job(job_id, job)
 
@@ -594,40 +594,29 @@ def run_backtest_cheatsheet(
         allow_short=_checkbox_on(allow_short_selling),
         eod_close=_checkbox_on(eod_auto_close),
     )
-    if req.profile == "deep":
-        _cleanup_cheatsheet_jobs()
-        job_id = uuid.uuid4().hex
-        now = time.time()
-        with _cheatsheet_jobs_lock:
-            _cheatsheet_jobs[job_id] = {
-                "user_id": user.id,
-                "status": "queued",
-                "message": "Deep scan queued.",
-                "result": None,
-                "error": None,
-                "created_at": now,
-                "updated_at": now,
-            }
-            _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-        _cheatsheet_executor.submit(_run_cheatsheet_job, job_id, req)
-        return JSONResponse(
-            status_code=202,
-            content={
-                "job_id": job_id,
-                "status": "queued",
-                "message": "Deep scan started. This page will update when it finishes.",
-            },
-        )
-
-    try:
-        result = run_cheatsheet(req)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        log.exception("[CHEATSHEET] failed for user_id=%s symbol=%s", getattr(user, "id", None), symbol)
-        raise HTTPException(status_code=500, detail=f"Cheat sheet failed: {exc}")
-
-    return JSONResponse(result)
+    _cleanup_cheatsheet_jobs()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _cheatsheet_jobs_lock:
+        _cheatsheet_jobs[job_id] = {
+            "user_id": user.id,
+            "status": "queued",
+            "message": "Strategy scan queued.",
+            "result": None,
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
+    _cheatsheet_executor.submit(_run_cheatsheet_job, job_id, req)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Strategy scan started. This page will update when it finishes.",
+        },
+    )
 
 
 @router.get("/analysis/cheatsheet/api/status/{job_id}")
