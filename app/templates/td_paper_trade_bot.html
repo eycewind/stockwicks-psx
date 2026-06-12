@@ -268,27 +268,15 @@
 
       <div class="row">
         <div class="field">
-          <label>Hard Stop ($)</label>
-          <input type="number" name="hard_stop_usd" min="0" step="1" value="300" />
-          <small>Default 300. Exit if open P/L reaches this loss.</small>
+          <label>Stop Loss ($)</label>
+          <input type="number" name="stop_loss_usd" min="0" step="1" value="300" />
+          <small>Exit if open P/L reaches this loss.</small>
         </div>
 
         <div class="field">
-          <label>Per-Share Stop Pct</label>
-          <input type="number" name="per_share_stop_pct" min="0" max="1" step="0.001" value="0.01" />
-          <small>Algo4 only. 0.01 = 1% per share; 0 disables.</small>
-        </div>
-
-        <div class="field">
-          <label>Trail Activation Profit ($)</label>
-          <input type="number" name="trailing_stop_activation" min="0" step="1" value="75" />
-          <small>Default 75. Profit trail starts after this open profit.</small>
-        </div>
-
-        <div class="field">
-          <label>Trail Giveback Distance ($)</label>
-          <input type="number" name="trailing_stop_distance" min="0" step="1" value="35" />
-          <small>Default 35. Exit after this giveback from peak profit.</small>
+          <label>Trailing Profit ($)</label>
+          <input type="number" name="trailing_profit_usd" min="0" step="1" value="75" />
+          <small>Exit after this giveback from peak open profit.</small>
         </div>
 
         <div class="field">

@@ -45,6 +45,13 @@ from app.scripts.stock_algos.base_wiring import StockBaseRunner, _ET
 from app.scripts.research import Featureset_3 as mm2
 from app.scripts.ml.mm_live_helpers import predict_probability
 from app.services.paper_trade_service import open_position, close_position
+from app.services.mm_core_engine import (
+    MMCorePosition,
+    MMCoreState,
+    config_from_obj,
+    evaluate_entry,
+    evaluate_exit,
+)
 
 logger = logging.getLogger("Algo3_MM_Live")
 logging.basicConfig(
@@ -74,8 +81,10 @@ DEFAULTS = {
 
     # GUI-configurable guardrails.
     "hard_stop_usd": 300.0,
+    "stop_loss_usd": 300.0,
+    "trailing_profit_usd": 75.0,
     "trailing_stop_activation": 75.0,
-    "trailing_stop_distance": 35.0,
+    "trailing_stop_distance": 75.0,
     "eod_close": True,
 
     # Internal/back-end only.
@@ -105,6 +114,8 @@ class BotConfig:
 
     # Guardrails.
     hard_stop_usd: float = DEFAULTS["hard_stop_usd"]
+    stop_loss_usd: float = DEFAULTS["stop_loss_usd"]
+    trailing_profit_usd: float = DEFAULTS["trailing_profit_usd"]
     trailing_stop_activation: float = DEFAULTS["trailing_stop_activation"]
     trailing_stop_distance: float = DEFAULTS["trailing_stop_distance"]
     eod_close: bool = DEFAULTS["eod_close"]
@@ -279,16 +290,18 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
         cfg.short_fixed_exit_prob,
     )
 
-    cfg.hard_stop_usd = _safe_float(js.get("hard_stop_usd", cfg.hard_stop_usd), cfg.hard_stop_usd)
-    cfg.trailing_stop_activation = _safe_float(js.get("trailing_stop_activation", cfg.trailing_stop_activation), cfg.trailing_stop_activation)
-    cfg.trailing_stop_distance = _safe_float(js.get("trailing_stop_distance", cfg.trailing_stop_distance), cfg.trailing_stop_distance)
+    cfg.stop_loss_usd = _safe_float(js.get("stop_loss_usd", js.get("hard_stop_usd", cfg.stop_loss_usd)), cfg.stop_loss_usd)
+    cfg.hard_stop_usd = cfg.stop_loss_usd
+    cfg.trailing_profit_usd = _safe_float(js.get("trailing_profit_usd", js.get("trailing_stop_distance", js.get("trailing_stop_activation", cfg.trailing_profit_usd))), cfg.trailing_profit_usd)
+    cfg.trailing_stop_activation = cfg.trailing_profit_usd
+    cfg.trailing_stop_distance = cfg.trailing_profit_usd
     cfg.eod_close = _safe_bool(js.get("eod_close", js.get("eod_auto_close", cfg.eod_close)), cfg.eod_close)
 
     # Direct bot columns override defaults where present.
     for attr, target, kind in [
-        ("hard_stop_usd", "hard_stop_usd", "float"),
-        ("trailing_stop_activation", "trailing_stop_activation", "float"),
-        ("trailing_stop_distance", "trailing_stop_distance", "float"),
+        ("hard_stop_usd", "stop_loss_usd", "float"),
+        ("stop_loss_usd", "stop_loss_usd", "float"),
+        ("trailing_profit_usd", "trailing_profit_usd", "float"),
         ("eod_auto_close", "eod_close", "bool"),
         ("eod_close", "eod_close", "bool"),
     ]:
@@ -296,6 +309,11 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             val = getattr(bot, attr)
             if kind == "float":
                 setattr(cfg, target, _safe_float(val, getattr(cfg, target)))
+                if target == "stop_loss_usd":
+                    cfg.hard_stop_usd = cfg.stop_loss_usd
+                if target == "trailing_profit_usd":
+                    cfg.trailing_stop_activation = cfg.trailing_profit_usd
+                    cfg.trailing_stop_distance = cfg.trailing_profit_usd
             elif kind == "bool":
                 setattr(cfg, target, _safe_bool(val, getattr(cfg, target)))
 
@@ -675,46 +693,12 @@ def should_enter_trade(
     cfg: BotConfig,
     allow_short: bool = True,
 ) -> Tuple[bool, str, str]:
-    """
-    Model-only crossing logic:
-      LONG  when smoothed prob_up crosses into bullish zone.
-      SHORT when smoothed prob_up crosses into bearish zone.
-
-    Defaults:
-      LONG  previous < 0.60 and current >= 0.60
-      SHORT previous > 0.40 and current <= 0.40
-    """
-    long_entry = float(cfg.long_entry_prob)
-    short_entry = float(cfg.short_entry_prob)
-
-    if not np.isfinite(prob_up_avg):
-        return False, "", "NO_VALID_PROB_AVG"
-
-    if prob_up_avg_prev is None or not np.isfinite(prob_up_avg_prev):
-        return False, "", "NO_PREVIOUS_PROB_AVG_FOR_CROSS"
-
-    crossed_up = prob_up_avg_prev < long_entry and prob_up_avg >= long_entry
-    crossed_down = prob_up_avg_prev > short_entry and prob_up_avg <= short_entry
-
-    if crossed_up:
-        return True, "LONG", f"PROB_AVG_CROSS_ABOVE_LONG_ENTRY_{long_entry:.2f}"
-
-    if crossed_down and allow_short:
-        return True, "SHORT", f"PROB_AVG_CROSS_BELOW_SHORT_ENTRY_{short_entry:.2f}"
-
-    if prob_up_avg >= long_entry:
-        return False, "", "BULLISH_BUT_NO_NEW_LONG_CROSS"
-
-    if prob_up_avg <= short_entry:
-        if allow_short:
-            return False, "", "BEARISH_BUT_NO_NEW_SHORT_CROSS"
-        return False, "", "SHORT_SIGNAL_BUT_SHORT_DISABLED"
-
-    return (
-        False,
-        "",
-        f"NO_ENTRY_PROB_AVG_{prob_up_avg:.4f}_BETWEEN_{short_entry:.2f}_{long_entry:.2f}",
+    decision = evaluate_entry(
+        prob_up_avg=prob_up_avg,
+        prob_up_avg_prev=prob_up_avg_prev,
+        cfg=config_from_obj(cfg, allow_short=allow_short),
     )
+    return decision.should_act, decision.action, decision.reason
 
 
 def should_exit_trade(
@@ -728,65 +712,31 @@ def should_exit_trade(
         return False, ""
 
     bot_id = int(open_trade.bot_id)
-    pnl_usd, side, entry_price, _ = _position_pnl(open_trade, current_price)
-    qty = float(open_trade.quantity or 0.0)
-
-    if entry_price <= 0 or qty <= 0 or current_price <= 0:
-        return False, "BAD_EXIT_INPUT"
-
-    # 1) Hard stop.
-    if float(cfg.hard_stop_usd or 0.0) > 0 and pnl_usd <= -float(cfg.hard_stop_usd):
+    side = str(open_trade.position_side or "").lower()
+    conviction = prob_up_avg if side == "long" else 1.0 - prob_up_avg
+    state = MMCoreState(
+        prob_peak=float(_PROB_PEAK.get(bot_id, conviction)),
+        profit_peak=float(_PROFIT_PEAK.get(bot_id, 0.0)),
+    )
+    decision = evaluate_exit(
+        MMCorePosition(
+            side=side,
+            entry_price=float(open_trade.entry_price or 0.0),
+            quantity=float(open_trade.quantity or 0.0),
+        ),
+        current_price=float(current_price or 0.0),
+        prob_up_avg=float(prob_up_avg),
+        cfg=config_from_obj(cfg),
+        state=state,
+        now_et=_as_et_aware(now_et or datetime.now(_ET)),
+    )
+    next_state = decision.state or state
+    if decision.should_act:
         _cleanup_exit_state(bot_id)
-        return True, "HARD_STOP"
-
-    # 2) Trailing profit protection.
-    prev_peak_profit = float(_PROFIT_PEAK.get(bot_id, max(0.0, pnl_usd)))
-    peak_profit = max(prev_peak_profit, pnl_usd)
-    _PROFIT_PEAK[bot_id] = peak_profit
-
-    trail_activation = float(cfg.trailing_stop_activation or 0.0)
-    trail_distance = float(cfg.trailing_stop_distance or 0.0)
-    if trail_activation > 0 and trail_distance > 0:
-        giveback = peak_profit - pnl_usd
-        if peak_profit >= trail_activation and giveback >= trail_distance:
-            _cleanup_exit_state(bot_id)
-            return True, "TRAILING_PROFIT_STOP"
-
-    # 3) Trailing probability stop.
-    # Long conviction is prob_up_avg. Short conviction is 1 - prob_up_avg.
-    if side == "long":
-        conviction = float(prob_up_avg)
     else:
-        conviction = float(1.0 - prob_up_avg)
-
-    if np.isfinite(conviction):
-        prob_exit_mode = str(getattr(cfg, "prob_exit_mode", "trailing") or "trailing").strip().lower()
-        if prob_exit_mode == "fixed":
-            fixed_attr = "long_fixed_exit_prob" if side == "long" else "short_fixed_exit_prob"
-            fixed_exit = float(
-                getattr(cfg, fixed_attr, getattr(cfg, "prob_fixed_exit_prob", 0.0)) or 0.0
-            )
-            if fixed_exit > 0 and conviction <= fixed_exit:
-                _cleanup_exit_state(bot_id)
-                return True, "PROB_FIXED_EXIT"
-        else:
-            prev_peak_prob = float(_PROB_PEAK.get(bot_id, conviction))
-            peak_prob = max(prev_peak_prob, conviction)
-            _PROB_PEAK[bot_id] = peak_prob
-
-            drop = peak_prob - conviction
-            if float(cfg.prob_trail_drop or 0.0) > 0 and drop >= float(cfg.prob_trail_drop):
-                _cleanup_exit_state(bot_id)
-                return True, "PROB_TRAIL_DROP"
-
-    # 4) Optional EOD close.
-    if cfg.eod_close:
-        now_et = _as_et_aware(now_et or datetime.now(_ET))
-        if now_et and now_et.time() >= dtime(15, 50):
-            _cleanup_exit_state(bot_id)
-            return True, "EOD_CLOSE"
-
-    return False, ""
+        _PROB_PEAK[bot_id] = float(next_state.prob_peak or 0.0)
+        _PROFIT_PEAK[bot_id] = float(next_state.profit_peak or 0.0)
+    return decision.should_act, decision.reason
 
 
 # -------------------- Main tick --------------------

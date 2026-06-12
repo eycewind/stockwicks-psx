@@ -73,11 +73,12 @@ DEFAULT_REPLAY_MM_CONFIG = {
     "short_entry_prob": 0.40,
     "prob_smoothing_bars": 3,
     "prob_trail_drop": 0.05,
+    "prob_exit_mode": "trailing",
+    "long_fixed_exit_prob": 0.55,
+    "short_fixed_exit_prob": 0.55,
+    "stop_loss_usd": 300.0,
     "hard_stop_usd": 300.0,
-    "trailing_stop_activation": 75.0,
-    "trailing_stop_distance": 35.0,
-    "breakeven_activation_usd": 50.0,
-    "breakeven_lock_usd": 5.0,
+    "trailing_profit_usd": 75.0,
     "builder_days": 10,
     "k_forward": 3,
     "model_max_age_hours": 0.25,
@@ -115,14 +116,14 @@ def _build_mm_replay_config(
     algo_name: str,
     eod_auto_close: str | None,
     allow_short_selling: str | None,
-    hard_stop_usd: float | None,
-    trailing_stop_activation: float | None,
-    trailing_stop_distance: float | None,
+    stop_loss_usd: float | None,
+    trailing_profit_usd: float | None,
     prob_trail_drop: float | None,
+    prob_exit_mode: str | None,
+    long_fixed_exit_prob: float | None,
+    short_fixed_exit_prob: float | None,
     long_entry_prob: float | None,
     short_entry_prob: float | None,
-    breakeven_activation_usd: float | None,
-    breakeven_lock_usd: float | None,
     replay_train_min_rows: int | None,
 ) -> dict:
     algo_name = (algo_name or "Algo1_MM").strip()
@@ -133,13 +134,15 @@ def _build_mm_replay_config(
             status_code=400,
             detail="Invalid algo selected. Choose Algo1_MM, Algo2_MM, Algo3_MM, Algo4_MM, or Algo5_MM.",
         )
-    is_algo4 = algo_name == "Algo4_MM"
+    prob_exit_mode = str(prob_exit_mode or DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"]).strip().lower()
+    if prob_exit_mode not in {"trailing", "fixed"}:
+        prob_exit_mode = DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"]
 
     return {
         "algo_name": algo_name,
         "feature_set": ALLOWED_MM_ALGOS[algo_name],
 
-        # Algo4_MM legacy production probability gates. Algo1-3 ignore these.
+        # Backward-compatible aliases for older Algo4 config readers.
         "long_threshold": _safe_float_form(
             long_entry_prob,
             DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"],
@@ -150,10 +153,10 @@ def _build_mm_replay_config(
         ),
         "long_exit_threshold": 0.55,
         "short_exit_threshold": 0.45,
-        "min_prob_advantage": 0.03 if is_algo4 else 0.0,
-        "min_volume_multiplier": 0.1 if is_algo4 else 0.0,
-        "cooldown_sec": 60 if is_algo4 else 0,
-        "obv_slope_threshold": 0.1 if is_algo4 else 0.0,
+        "min_prob_advantage": 0.0,
+        "min_volume_multiplier": 0.0,
+        "cooldown_sec": 0,
+        "obv_slope_threshold": 0.0,
 
         # Exact production model-only probability engine.
         "prediction_strategy": "model_only",
@@ -170,30 +173,31 @@ def _build_mm_replay_config(
             prob_trail_drop,
             DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"],
         ),
+        "prob_exit_mode": prob_exit_mode,
+        "long_fixed_exit_prob": _safe_float_form(
+            long_fixed_exit_prob,
+            DEFAULT_REPLAY_MM_CONFIG["long_fixed_exit_prob"],
+        ),
+        "short_fixed_exit_prob": _safe_float_form(
+            short_fixed_exit_prob,
+            DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"],
+        ),
         "builder_days": DEFAULT_REPLAY_MM_CONFIG["builder_days"],
         "k_forward": DEFAULT_REPLAY_MM_CONFIG["k_forward"],
         "model_max_age_hours": DEFAULT_REPLAY_MM_CONFIG["model_max_age_hours"],
 
         # Same user-set guardrails as production paper bot.
+        "stop_loss_usd": _safe_float_form(
+            stop_loss_usd,
+            DEFAULT_REPLAY_MM_CONFIG["stop_loss_usd"],
+        ),
         "hard_stop_usd": _safe_float_form(
-            hard_stop_usd,
-            DEFAULT_REPLAY_MM_CONFIG["hard_stop_usd"],
+            stop_loss_usd,
+            DEFAULT_REPLAY_MM_CONFIG["stop_loss_usd"],
         ),
-        "trailing_stop_activation": _safe_float_form(
-            trailing_stop_activation,
-            DEFAULT_REPLAY_MM_CONFIG["trailing_stop_activation"],
-        ),
-        "trailing_stop_distance": _safe_float_form(
-            trailing_stop_distance,
-            DEFAULT_REPLAY_MM_CONFIG["trailing_stop_distance"],
-        ),
-        "breakeven_activation_usd": _safe_float_form(
-            breakeven_activation_usd,
-            DEFAULT_REPLAY_MM_CONFIG["breakeven_activation_usd"],
-        ),
-        "breakeven_lock_usd": _safe_float_form(
-            breakeven_lock_usd,
-            DEFAULT_REPLAY_MM_CONFIG["breakeven_lock_usd"],
+        "trailing_profit_usd": _safe_float_form(
+            trailing_profit_usd,
+            DEFAULT_REPLAY_MM_CONFIG["trailing_profit_usd"],
         ),
         "eod_close": _checkbox_on(eod_auto_close),
         "allow_short": _checkbox_on(allow_short_selling),
@@ -368,14 +372,14 @@ def start_replay(
     algo_name: str = Form("Algo1_MM"),
     speed: float = Form(1.0),
     trade_size: float = Form(100.0),
-    hard_stop_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["hard_stop_usd"]),
-    trailing_stop_activation: float = Form(DEFAULT_REPLAY_MM_CONFIG["trailing_stop_activation"]),
-    trailing_stop_distance: float = Form(DEFAULT_REPLAY_MM_CONFIG["trailing_stop_distance"]),
+    stop_loss_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["stop_loss_usd"]),
+    trailing_profit_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["trailing_profit_usd"]),
     prob_trail_drop: float = Form(DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"]),
+    prob_exit_mode: str = Form(DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"]),
+    long_fixed_exit_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["long_fixed_exit_prob"]),
+    short_fixed_exit_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"]),
     long_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"]),
     short_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"]),
-    breakeven_activation_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["breakeven_activation_usd"]),
-    breakeven_lock_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["breakeven_lock_usd"]),
     replay_train_min_rows: int = Form(DEFAULT_REPLAY_MM_CONFIG["replay_train_min_rows"]),
     allow_short_selling: str = Form(None),
     eod_auto_close: str = Form(None),
@@ -461,14 +465,14 @@ def start_replay(
                 algo_name=algo_name,
                 eod_auto_close=eod_auto_close,
                 allow_short_selling=allow_short_selling,
-                hard_stop_usd=hard_stop_usd,
-                trailing_stop_activation=trailing_stop_activation,
-                trailing_stop_distance=trailing_stop_distance,
+                stop_loss_usd=stop_loss_usd,
+                trailing_profit_usd=trailing_profit_usd,
                 prob_trail_drop=prob_trail_drop,
+                prob_exit_mode=prob_exit_mode,
+                long_fixed_exit_prob=long_fixed_exit_prob,
+                short_fixed_exit_prob=short_fixed_exit_prob,
                 long_entry_prob=long_entry_prob,
                 short_entry_prob=short_entry_prob,
-                breakeven_activation_usd=breakeven_activation_usd,
-                breakeven_lock_usd=breakeven_lock_usd,
                 replay_train_min_rows=replay_train_min_rows,
             ),
             separators=(",", ":"),

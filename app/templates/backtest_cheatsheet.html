@@ -226,9 +226,8 @@ function rowParams(r) {
     `PRTH Long ${Number(r.long_entry_prob).toFixed(2)}`,
     `PRTH Short ${Number(r.short_entry_prob).toFixed(2)}`,
     `PRDROP ${Number(r.prob_trail_drop).toFixed(2)}`,
-    `SL ${money(r.hard_stop_usd)}`,
-    `TRLSTL Start ${money(r.trailing_stop_activation)}`,
-    `TRLSTL Giveback ${money(r.trailing_stop_distance)}`
+    `SL ${money(r.stop_loss_usd || r.hard_stop_usd)}`,
+    `TRL ${money(r.trailing_profit_usd)}`
   ].join(" | ");
 }
 
@@ -238,9 +237,8 @@ function replayText(r) {
     `Interval: ${r.interval}`,
     `Algo: ${r.algo_name}`,
     `Trade Size: ${document.querySelector("[name='trade_size']").value || "100"}`,
-    `SL / Hard Stop: ${r.hard_stop_usd}`,
-    `Trail Activation Profit: ${r.trailing_stop_activation}`,
-    `Trail Giveback Distance: ${r.trailing_stop_distance}`,
+    `Stop Loss: ${r.stop_loss_usd || r.hard_stop_usd}`,
+    `Trailing Profit: ${r.trailing_profit_usd}`,
     `Long Entry Avg Prob: ${r.long_entry_prob}`,
     `Short Entry Avg Prob: ${r.short_entry_prob}`,
     `Probability Trail Drop: ${r.prob_trail_drop}`,

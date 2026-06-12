@@ -83,10 +83,9 @@ DEFAULT_BOT_CONFIG = {
     "prob_exit_mode": "trailing",
     "long_fixed_exit_prob": 0.55,
     "short_fixed_exit_prob": 0.55,
+    "stop_loss_usd": 300.0,
     "hard_stop_usd": 300.0,
-    "per_share_stop_pct": 0.01,
-    "trailing_stop_activation": 75.0,
-    "trailing_stop_distance": 35.0,
+    "trailing_profit_usd": 75.0,
     "force_retrain_each_tick": True,
 }
 
@@ -105,10 +104,8 @@ def _bot_config_json(
     *,
     algo_name: str,
     eod_auto_close: str | None,
-    hard_stop_usd: float | None,
-    per_share_stop_pct: float | None = None,
-    trailing_stop_activation: float | None = None,
-    trailing_stop_distance: float | None = None,
+    stop_loss_usd: float | None,
+    trailing_profit_usd: float | None = None,
     prob_trail_drop: float | None = None,
     prob_exit_mode: str | None = None,
     long_fixed_exit_prob: float | None = None,
@@ -125,8 +122,8 @@ def _bot_config_json(
       - SHORT if avg < 0.50
 
     Exits:
-      - hard_stop_usd
-      - trailing_stop_activation / trailing_stop_distance
+      - stop_loss_usd
+      - trailing_profit_usd
       - probability exit mode: trailing drop from peak or fixed conviction floor
       - optional EOD close
     """
@@ -184,21 +181,17 @@ def _bot_config_json(
         ),
 
         # User-configurable guardrails.
+        "stop_loss_usd": _safe_float_form(
+            stop_loss_usd,
+            DEFAULT_BOT_CONFIG["stop_loss_usd"],
+        ),
         "hard_stop_usd": _safe_float_form(
-            hard_stop_usd,
-            DEFAULT_BOT_CONFIG["hard_stop_usd"],
+            stop_loss_usd,
+            DEFAULT_BOT_CONFIG["stop_loss_usd"],
         ),
-        "per_share_stop_pct": _safe_float_form(
-            per_share_stop_pct,
-            DEFAULT_BOT_CONFIG["per_share_stop_pct"],
-        ),
-        "trailing_stop_activation": _safe_float_form(
-            trailing_stop_activation,
-            DEFAULT_BOT_CONFIG["trailing_stop_activation"],
-        ),
-        "trailing_stop_distance": _safe_float_form(
-            trailing_stop_distance,
-            DEFAULT_BOT_CONFIG["trailing_stop_distance"],
+        "trailing_profit_usd": _safe_float_form(
+            trailing_profit_usd,
+            DEFAULT_BOT_CONFIG["trailing_profit_usd"],
         ),
         "force_retrain_each_tick": True,
 
@@ -347,10 +340,8 @@ async def start_paper_trade_bot(
     interval: str = Form(...),
     algo_name: str = Form(...),
     trade_size: float = Form(...),
-    hard_stop_usd: float = Form(DEFAULT_BOT_CONFIG["hard_stop_usd"]),
-    per_share_stop_pct: float = Form(DEFAULT_BOT_CONFIG["per_share_stop_pct"]),
-    trailing_stop_activation: float = Form(DEFAULT_BOT_CONFIG["trailing_stop_activation"]),
-    trailing_stop_distance: float = Form(DEFAULT_BOT_CONFIG["trailing_stop_distance"]),
+    stop_loss_usd: float = Form(DEFAULT_BOT_CONFIG["stop_loss_usd"]),
+    trailing_profit_usd: float = Form(DEFAULT_BOT_CONFIG["trailing_profit_usd"]),
     prob_trail_drop: float = Form(DEFAULT_BOT_CONFIG["prob_trail_drop"]),
     prob_exit_mode: str = Form(DEFAULT_BOT_CONFIG["prob_exit_mode"]),
     long_fixed_exit_prob: float = Form(DEFAULT_BOT_CONFIG["long_fixed_exit_prob"]),
@@ -379,10 +370,8 @@ async def start_paper_trade_bot(
     cfg = _bot_config_json(
         algo_name=algo_name,
         eod_auto_close=eod_auto_close,
-        hard_stop_usd=hard_stop_usd,
-        per_share_stop_pct=per_share_stop_pct,
-        trailing_stop_activation=trailing_stop_activation,
-        trailing_stop_distance=trailing_stop_distance,
+        stop_loss_usd=stop_loss_usd,
+        trailing_profit_usd=trailing_profit_usd,
         prob_trail_drop=prob_trail_drop,
         prob_exit_mode=prob_exit_mode,
         long_fixed_exit_prob=long_fixed_exit_prob,
@@ -765,10 +754,8 @@ def save_size_and_restart_paper_trade_bot(
     bot_id: int,
     request: Request,
     trade_size: float = Form(...),
-    hard_stop_usd: float | None = Form(None),
-    per_share_stop_pct: float | None = Form(None),
-    trailing_stop_activation: float | None = Form(None),
-    trailing_stop_distance: float | None = Form(None),
+    stop_loss_usd: float | None = Form(None),
+    trailing_profit_usd: float | None = Form(None),
     prob_trail_drop: float | None = Form(None),
     prob_exit_mode: str | None = Form(None),
     long_fixed_exit_prob: float | None = Form(None),
@@ -799,22 +786,13 @@ def save_size_and_restart_paper_trade_bot(
 
     # Optional risk setting updates when the restart form provides them.
     cfg = _read_bot_config(bot)
-    if hard_stop_usd is not None:
-        cfg["hard_stop_usd"] = _safe_float_form(hard_stop_usd, DEFAULT_BOT_CONFIG["hard_stop_usd"])
-    if per_share_stop_pct is not None:
-        cfg["per_share_stop_pct"] = _safe_float_form(
-            per_share_stop_pct,
-            DEFAULT_BOT_CONFIG["per_share_stop_pct"],
-        )
-    if trailing_stop_activation is not None:
-        cfg["trailing_stop_activation"] = _safe_float_form(
-            trailing_stop_activation,
-            DEFAULT_BOT_CONFIG["trailing_stop_activation"],
-        )
-    if trailing_stop_distance is not None:
-        cfg["trailing_stop_distance"] = _safe_float_form(
-            trailing_stop_distance,
-            DEFAULT_BOT_CONFIG["trailing_stop_distance"],
+    if stop_loss_usd is not None:
+        cfg["stop_loss_usd"] = _safe_float_form(stop_loss_usd, DEFAULT_BOT_CONFIG["stop_loss_usd"])
+        cfg["hard_stop_usd"] = cfg["stop_loss_usd"]
+    if trailing_profit_usd is not None:
+        cfg["trailing_profit_usd"] = _safe_float_form(
+            trailing_profit_usd,
+            DEFAULT_BOT_CONFIG["trailing_profit_usd"],
         )
     if prob_trail_drop is not None:
         cfg["prob_trail_drop"] = _safe_float_form(
@@ -1158,13 +1136,13 @@ def bot_probs_json(
         "short_fixed_exit_prob": float(
             cfg.get("short_fixed_exit_prob", cfg.get("prob_fixed_exit_prob", DEFAULT_BOT_CONFIG["short_fixed_exit_prob"]))
         ),
-        "hard_stop_usd": float(cfg.get("hard_stop_usd", DEFAULT_BOT_CONFIG["hard_stop_usd"])),
-        "per_share_stop_pct": float(cfg.get("per_share_stop_pct", DEFAULT_BOT_CONFIG["per_share_stop_pct"])),
-        "trailing_stop_activation": float(
-            cfg.get("trailing_stop_activation", DEFAULT_BOT_CONFIG["trailing_stop_activation"])
-        ),
-        "trailing_stop_distance": float(
-            cfg.get("trailing_stop_distance", DEFAULT_BOT_CONFIG["trailing_stop_distance"])
+        "stop_loss_usd": float(cfg.get("stop_loss_usd", cfg.get("hard_stop_usd", DEFAULT_BOT_CONFIG["stop_loss_usd"]))),
+        "hard_stop_usd": float(cfg.get("stop_loss_usd", cfg.get("hard_stop_usd", DEFAULT_BOT_CONFIG["stop_loss_usd"]))),
+        "trailing_profit_usd": float(
+            cfg.get(
+                "trailing_profit_usd",
+                cfg.get("trailing_stop_distance", cfg.get("trailing_stop_activation", DEFAULT_BOT_CONFIG["trailing_profit_usd"])),
+            )
         ),
     }
 
@@ -1492,13 +1470,13 @@ def bot_candles_json(
         "short_fixed_exit_prob": float(
             cfg.get("short_fixed_exit_prob", cfg.get("prob_fixed_exit_prob", DEFAULT_BOT_CONFIG["short_fixed_exit_prob"]))
         ),
-        "hard_stop_usd": float(cfg.get("hard_stop_usd", DEFAULT_BOT_CONFIG["hard_stop_usd"])),
-        "per_share_stop_pct": float(cfg.get("per_share_stop_pct", DEFAULT_BOT_CONFIG["per_share_stop_pct"])),
-        "trailing_stop_activation": float(
-            cfg.get("trailing_stop_activation", DEFAULT_BOT_CONFIG["trailing_stop_activation"])
-        ),
-        "trailing_stop_distance": float(
-            cfg.get("trailing_stop_distance", DEFAULT_BOT_CONFIG["trailing_stop_distance"])
+        "stop_loss_usd": float(cfg.get("stop_loss_usd", cfg.get("hard_stop_usd", DEFAULT_BOT_CONFIG["stop_loss_usd"]))),
+        "hard_stop_usd": float(cfg.get("stop_loss_usd", cfg.get("hard_stop_usd", DEFAULT_BOT_CONFIG["stop_loss_usd"]))),
+        "trailing_profit_usd": float(
+            cfg.get(
+                "trailing_profit_usd",
+                cfg.get("trailing_stop_distance", cfg.get("trailing_stop_activation", DEFAULT_BOT_CONFIG["trailing_profit_usd"])),
+            )
         ),
     }
 

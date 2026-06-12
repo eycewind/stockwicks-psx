@@ -50,6 +50,13 @@ build_features = mm2.build_features
 from app.scripts.ml.mm_live_helpers import predict_probability
 # IMPORTANT: use same flow as algo1_runner
 from app.services.paper_trade_service import open_position, close_position
+from app.services.mm_core_engine import (
+    MMCorePosition,
+    MMCoreState,
+    config_from_obj,
+    evaluate_entry,
+    evaluate_exit,
+)
 
 logger = logging.getLogger("Algo4_MM_Live")
 logging.basicConfig(
@@ -68,12 +75,14 @@ DEFAULTS = {
     "short_threshold": 0.40,
     "long_exit_threshold": 0.55,      # hard floor for longs
     "short_exit_threshold": 0.45,     # hard floor for shorts
-    "min_prob_advantage": 0.03,
+    "min_prob_advantage": 0.0,
     "hard_stop_usd": 300.0,
-    "per_share_stop_pct": 0.01,       # NEW: 1% per-share stop
+    "per_share_stop_pct": 0.0,
+    "stop_loss_usd": 300.0,
+    "trailing_profit_usd": 75.0,
     "eod_close": True,
     "once_per_bar": True,
-    "cooldown_sec": 60,
+    "cooldown_sec": 0,
     "k_forward": 3,                   # predict 15 min ahead (TREND not noise)
     "model_max_age_hours": 0.25,         # retrain every hour (fresh model)
     "daily_loss_limit_usd": 500.0,
@@ -81,13 +90,13 @@ DEFAULTS = {
     "atr_multiplier": 1.0,
     "trailing_stop_activation": 0.5,
     "trailing_stop_distance": 1.0,
-    "min_volume_multiplier": 0.1,
+    "min_volume_multiplier": 0.0,
     "max_same_direction_losses": 5,   # NEW: block after 3 same-dir losses
     "prob_trail_drop": 0.02,          # NEW: trailing prob drop from peak
     "prob_exit_mode": "trailing",
     "long_fixed_exit_prob": 0.55,
     "short_fixed_exit_prob": 0.55,
-    "obv_slope_threshold": 0.1,       # NEW: OBV gate threshold
+    "obv_slope_threshold": 0.0,
 }
 
 
@@ -115,6 +124,8 @@ class BotConfig:
     trailing_stop_distance: float = DEFAULTS["trailing_stop_distance"]
     min_volume_multiplier: float = DEFAULTS["min_volume_multiplier"]
     per_share_stop_pct: float = DEFAULTS["per_share_stop_pct"]
+    stop_loss_usd: float = DEFAULTS["stop_loss_usd"]
+    trailing_profit_usd: float = DEFAULTS["trailing_profit_usd"]
     max_same_direction_losses: int = DEFAULTS["max_same_direction_losses"]
     prob_trail_drop: float = DEFAULTS["prob_trail_drop"]
     prob_exit_mode: str = DEFAULTS["prob_exit_mode"]
@@ -352,6 +363,7 @@ def should_enter_trade(
 
 # Peak probability tracking per bot
 _PEAK_PROB: Dict[int, float] = {}
+_PROFIT_PEAK: Dict[int, float] = {}
 
 def should_exit_trade(
     open_trade: PaperStockBotOpenTrade,
@@ -740,8 +752,18 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             cfg.short_exit_threshold = _safe_float(js.get("short_exit_threshold", cfg.short_exit_threshold), cfg.short_exit_threshold)
             cfg.min_prob_advantage = _safe_float(js.get("min_prob_advantage", cfg.min_prob_advantage), cfg.min_prob_advantage)
             cfg.min_volume_multiplier = _safe_float(js.get("min_volume_multiplier", cfg.min_volume_multiplier), cfg.min_volume_multiplier)
-            cfg.hard_stop_usd = _safe_float(js.get("hard_stop_usd", cfg.hard_stop_usd), cfg.hard_stop_usd)
-            cfg.per_share_stop_pct = _safe_float(js.get("per_share_stop_pct", cfg.per_share_stop_pct), cfg.per_share_stop_pct)
+            cfg.stop_loss_usd = _safe_float(js.get("stop_loss_usd", js.get("hard_stop_usd", cfg.stop_loss_usd)), cfg.stop_loss_usd)
+            cfg.hard_stop_usd = cfg.stop_loss_usd
+            cfg.per_share_stop_pct = 0.0
+            cfg.trailing_profit_usd = _safe_float(
+                js.get(
+                    "trailing_profit_usd",
+                    js.get("trailing_stop_distance", js.get("trailing_stop_activation", cfg.trailing_profit_usd)),
+                ),
+                cfg.trailing_profit_usd,
+            )
+            cfg.trailing_stop_activation = cfg.trailing_profit_usd
+            cfg.trailing_stop_distance = cfg.trailing_profit_usd
             cfg.daily_loss_limit_usd = _safe_float(js.get("daily_loss_limit_usd", cfg.daily_loss_limit_usd), cfg.daily_loss_limit_usd)
             cfg.take_profit_percent = _safe_float(js.get("take_profit_percent", cfg.take_profit_percent), cfg.take_profit_percent)
             cfg.eod_close = _safe_bool(js.get("eod_close", cfg.eod_close), cfg.eod_close)
@@ -770,8 +792,9 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
         ("short_exit_threshold", "short_exit_threshold", _safe_float),
         ("min_prob_advantage", "min_prob_advantage", _safe_float),
         ("min_volume_multiplier", "min_volume_multiplier", _safe_float),
-        ("hard_stop_usd", "hard_stop_usd", _safe_float),
-        ("per_share_stop_pct", "per_share_stop_pct", _safe_float),
+        ("hard_stop_usd", "stop_loss_usd", _safe_float),
+        ("stop_loss_usd", "stop_loss_usd", _safe_float),
+        ("trailing_profit_usd", "trailing_profit_usd", _safe_float),
         ("daily_loss_limit_usd", "daily_loss_limit_usd", _safe_float),
         ("take_profit_percent", "take_profit_percent", _safe_float),
         ("eod_close", "eod_close", _safe_bool),
@@ -785,6 +808,11 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
                 current = getattr(cfg, col)
                 try:
                     setattr(cfg, col, caster(val, current))
+                    if col == "stop_loss_usd":
+                        cfg.hard_stop_usd = cfg.stop_loss_usd
+                    if col == "trailing_profit_usd":
+                        cfg.trailing_stop_activation = cfg.trailing_profit_usd
+                        cfg.trailing_stop_distance = cfg.trailing_profit_usd
                 except Exception:
                     pass
 
@@ -1206,6 +1234,7 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
             return
 
         prev_prob = float(prob_series_aligned.iloc[-2])
+        prev_prev_prob = float(prob_series_aligned.iloc[-3]) if len(prob_series_aligned) >= 3 else prev_prob
         if not np.isfinite(prev_prob):
             decision = "NO_VALID_PROB"
             reason = "PREV_PROB_NAN_OR_INF"
@@ -1269,13 +1298,14 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
 
         # ENTRY / EXIT LOGIC
         if open_trade is None:
-            should_enter, enter_direction, entry_reason = should_enter_trade(
-                prob_up,
-                prob_down,
-                df,
-                len(df) - 1,
-                cfg,
+            entry_decision = evaluate_entry(
+                prob_up_avg=prob_up,
+                prob_up_avg_prev=prev_prev_prob,
+                cfg=config_from_obj(cfg, allow_short=bool(getattr(bot, "allow_short_selling", True))),
             )
+            should_enter = entry_decision.should_act
+            enter_direction = entry_decision.action
+            entry_reason = entry_decision.reason
 
             if not should_enter:
                 decision = "NO_ENTRY_SIGNAL"
@@ -1299,20 +1329,39 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
                 decision = f"OPEN_{enter_direction}"
                 reason = entry_reason or f"{enter_direction}_CONDITIONS_MET"
                 open_trade = db.query(PaperStockBotOpenTrade).filter_by(bot_id=bot.id).first()
+                _PEAK_PROB[int(bot.id)] = float(prob_up if enter_direction == "LONG" else prob_down)
+                _PROFIT_PEAK[int(bot.id)] = 0.0
 
         elif open_trade is not None:
-            should_exit, exit_reason = should_exit_trade(
-                open_trade,
-                bar_close_px,
-                prob_up,
-                prob_down,
-                cfg,
+            side = str(open_trade.position_side or "").lower()
+            conviction = prob_up if side == "long" else prob_down
+            state = MMCoreState(
+                prob_peak=float(_PEAK_PROB.get(int(open_trade.bot_id), conviction)),
+                profit_peak=float(_PROFIT_PEAK.get(int(open_trade.bot_id), 0.0)),
+            )
+            exit_decision = evaluate_exit(
+                MMCorePosition(
+                    side=side,
+                    entry_price=float(open_trade.entry_price or 0.0),
+                    quantity=float(open_trade.quantity or 0.0),
+                ),
+                current_price=bar_close_px,
+                prob_up_avg=prob_up,
+                cfg=config_from_obj(cfg),
+                state=state,
                 now_et=now_et,
             )
+            should_exit = exit_decision.should_act
+            exit_reason = exit_decision.reason
+            if not should_exit and exit_decision.state:
+                _PEAK_PROB[int(open_trade.bot_id)] = float(exit_decision.state.prob_peak or 0.0)
+                _PROFIT_PEAK[int(open_trade.bot_id)] = float(exit_decision.state.profit_peak or 0.0)
             if should_exit:
                 exec_price = get_smart_execution_price(df, execution_type="vwap")
                 close_position(db, open_trade, exec_price)
                 db.commit()
+                _PEAK_PROB.pop(int(open_trade.bot_id), None)
+                _PROFIT_PEAK.pop(int(open_trade.bot_id), None)
                 decision = f"EXIT_{exit_reason}"
                 reason = exit_reason
                 open_trade = None

@@ -153,24 +153,37 @@
 
       <div class="row">
         <div>
-          <label>Hard Stop ($)</label>
-          <input type="number" name="hard_stop_usd" min="0" step="1" value="300" />
-          <small>Default 300. Exit if open P/L reaches this loss.</small>
+          <label>Stop Loss ($)</label>
+          <input type="number" name="stop_loss_usd" min="0" step="1" value="300" />
+          <small>Exit if open P/L reaches this loss.</small>
         </div>
         <div>
-          <label>Trail Activation Profit ($)</label>
-          <input type="number" name="trailing_stop_activation" min="0" step="1" value="75" />
-          <small>Default 75. Profit trail starts after this open profit.</small>
+          <label>Trailing Profit ($)</label>
+          <input type="number" name="trailing_profit_usd" min="0" step="1" value="75" />
+          <small>Exit after this giveback from peak open profit.</small>
         </div>
         <div>
-          <label>Trail Giveback Distance ($)</label>
-          <input type="number" name="trailing_stop_distance" min="0" step="1" value="35" />
-          <small>Default 35. Exit after this giveback from peak profit.</small>
+          <label>Probability Exit Mode</label>
+          <select name="prob_exit_mode" class="js-prob-exit-mode">
+            <option value="trailing" selected>Trailing drop</option>
+            <option value="fixed">Fixed threshold</option>
+          </select>
+          <small>Choose peak giveback or fixed conviction floor.</small>
         </div>
         <div>
           <label>Probability Trail Drop</label>
-          <input type="number" name="prob_trail_drop" min="0" max="1" step="0.01" value="0.05" />
-          <small>Exit if smoothed probability drops this much from peak.</small>
+          <input type="number" name="prob_trail_drop" class="js-prob-trail-drop" min="0" max="1" step="0.01" value="0.05" />
+          <small>Used in trailing mode. Exit after this drop from peak.</small>
+        </div>
+        <div>
+          <label>Long Fixed Exit Prob</label>
+          <input type="number" name="long_fixed_exit_prob" class="js-prob-fixed-exit" min="0" max="1" step="0.01" value="0.55" />
+          <small>Used in fixed mode for long positions.</small>
+        </div>
+        <div>
+          <label>Short Fixed Exit Prob</label>
+          <input type="number" name="short_fixed_exit_prob" class="js-prob-fixed-exit" min="0" max="1" step="0.01" value="0.55" />
+          <small>Used in fixed mode for short positions.</small>
         </div>
       </div>
 

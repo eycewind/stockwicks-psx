@@ -49,6 +49,13 @@ from app.services.replay_trade_service import (
     get_open_trade,
     get_session_pnl,
 )
+from app.services.mm_core_engine import (
+    MMCorePosition,
+    MMCoreState,
+    config_from_obj,
+    evaluate_entry,
+    evaluate_exit,
+)
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.scripts.stock_algos.base_wiring import _ET
 
@@ -259,6 +266,8 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         ("prob_exit_mode", lambda v, d: str(v or d)),
         ("long_fixed_exit_prob", _safe_float),
         ("short_fixed_exit_prob", _safe_float),
+        ("stop_loss_usd", _safe_float),
+        ("trailing_profit_usd", _safe_float),
         ("hard_stop_usd", _safe_float),
         ("trailing_stop_activation", _safe_float),
         ("trailing_stop_distance", _safe_float),
@@ -315,6 +324,21 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
 
     cfg.prob_smoothing_bars = max(1, int(getattr(cfg, "prob_smoothing_bars", 3) or 3))
     cfg.k_forward = max(1, int(getattr(cfg, "k_forward", 3) or 3))
+    cfg.stop_loss_usd = _safe_float(
+        js.get("stop_loss_usd", js.get("hard_stop_usd", getattr(cfg, "hard_stop_usd", 300.0))),
+        300.0,
+    )
+    cfg.hard_stop_usd = cfg.stop_loss_usd
+    cfg.trailing_profit_usd = _safe_float(
+        js.get(
+            "trailing_profit_usd",
+            js.get("trailing_stop_distance", js.get("trailing_stop_activation", getattr(cfg, "trailing_profit_usd", 75.0))),
+        ),
+        75.0,
+    )
+    cfg.trailing_stop_activation = cfg.trailing_profit_usd
+    cfg.trailing_stop_distance = cfg.trailing_profit_usd
+    cfg.per_share_stop_pct = 0.0
     cfg.prob_exit_mode = str(getattr(cfg, "prob_exit_mode", "trailing") or "trailing").strip().lower()
     if cfg.prob_exit_mode not in {"trailing", "fixed"}:
         cfg.prob_exit_mode = "trailing"
@@ -331,8 +355,8 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         logger.warning(
             "[REPLAY CONFIG APPLIED] session_id=%s algo=%s long_entry_prob=%.3f "
             "short_entry_prob=%.3f prob_exit_mode=%s prob_trail_drop=%.3f "
-            "long_fixed_exit_prob=%.3f short_fixed_exit_prob=%.3f hard_stop_usd=%.2f "
-            "trailing_stop_activation=%.2f trailing_stop_distance=%.2f "
+            "long_fixed_exit_prob=%.3f short_fixed_exit_prob=%.3f stop_loss_usd=%.2f "
+            "trailing_profit_usd=%.2f "
             "long_threshold=%.3f short_threshold=%.3f min_prob_advantage=%.3f "
             "min_volume_multiplier=%.3f cooldown_sec=%s obv_slope_threshold=%.3f",
             session_id,
@@ -343,9 +367,8 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
             float(getattr(cfg, "prob_trail_drop", 0.0) or 0.0),
             float(getattr(cfg, "long_fixed_exit_prob", 0.0) or 0.0),
             float(getattr(cfg, "short_fixed_exit_prob", 0.0) or 0.0),
-            float(getattr(cfg, "hard_stop_usd", 0.0) or 0.0),
-            float(getattr(cfg, "trailing_stop_activation", 0.0) or 0.0),
-            float(getattr(cfg, "trailing_stop_distance", 0.0) or 0.0),
+            float(getattr(cfg, "stop_loss_usd", 0.0) or 0.0),
+            float(getattr(cfg, "trailing_profit_usd", 0.0) or 0.0),
             float(getattr(cfg, "long_threshold", 0.0) or 0.0),
             float(getattr(cfg, "short_threshold", 0.0) or 0.0),
             float(getattr(cfg, "min_prob_advantage", 0.0) or 0.0),
@@ -408,7 +431,7 @@ def _clear_algo_state(live: Any, session_id: int) -> None:
     try:
         if hasattr(live, "_cleanup_exit_state"):
             live._cleanup_exit_state(int(session_id))
-        for name in ("_PROB_PEAK", "_PROFIT_PEAK", "_LAST_BAR_TS"):
+        for name in ("_PROB_PEAK", "_PEAK_PROB", "_PROFIT_PEAK", "_LAST_BAR_TS"):
             d = getattr(live, name, None)
             if isinstance(d, dict):
                 d.pop(int(session_id), None)
@@ -473,29 +496,27 @@ def _log_decision(
 
 
 
-def _should_enter_trade_6040(prob_up_avg, prob_up_avg_prev, cfg, allow_short=True):
-    long_th = float(getattr(cfg, "long_entry_prob", 0.60) or 0.60)
-    short_th = float(getattr(cfg, "short_entry_prob", 0.40) or 0.40)
+def _core_state_from_live(live: Any, session_id: int, fallback_conviction: float = 0.0) -> MMCoreState:
+    prob_peak_map = getattr(live, "_PROB_PEAK", None)
+    if not isinstance(prob_peak_map, dict):
+        prob_peak_map = getattr(live, "_PEAK_PROB", None)
+    profit_peak_map = getattr(live, "_PROFIT_PEAK", None)
+    return MMCoreState(
+        prob_peak=float(prob_peak_map.get(int(session_id), fallback_conviction) if isinstance(prob_peak_map, dict) else fallback_conviction),
+        profit_peak=float(profit_peak_map.get(int(session_id), 0.0) if isinstance(profit_peak_map, dict) else 0.0),
+    )
 
-    if prob_up_avg_prev is None or not np.isfinite(prob_up_avg_prev):
-        return False, "", "NO_PREVIOUS_PROB_AVG_FOR_CROSS"
 
-    crossed_up = prob_up_avg_prev < long_th and prob_up_avg >= long_th
-    crossed_down = prob_up_avg_prev > short_th and prob_up_avg <= short_th
-
-    if crossed_up:
-        return True, "LONG", f"PROB_AVG_CROSS_ABOVE_{long_th:.2f}"
-
-    if crossed_down and allow_short:
-        return True, "SHORT", f"PROB_AVG_CROSS_BELOW_{short_th:.2f}"
-
-    if prob_up_avg >= long_th:
-        return False, "", "BULLISH_BUT_NO_NEW_CROSS"
-
-    if prob_up_avg <= short_th:
-        return False, "", "BEARISH_BUT_NO_NEW_CROSS"
-
-    return False, "", f"NEUTRAL_BETWEEN_{short_th:.2f}_{long_th:.2f}"
+def _store_core_state(live: Any, session_id: int, state: MMCoreState) -> None:
+    prob_peak_map = getattr(live, "_PROB_PEAK", None)
+    alt_prob_peak_map = getattr(live, "_PEAK_PROB", None)
+    profit_peak_map = getattr(live, "_PROFIT_PEAK", None)
+    if isinstance(prob_peak_map, dict):
+        prob_peak_map[int(session_id)] = float(state.prob_peak or 0.0)
+    if isinstance(alt_prob_peak_map, dict):
+        alt_prob_peak_map[int(session_id)] = float(state.prob_peak or 0.0)
+    if isinstance(profit_peak_map, dict):
+        profit_peak_map[int(session_id)] = float(state.profit_peak or 0.0)
 
 def run_algoMM_replay_tick(
     session_id: int,
@@ -591,6 +612,7 @@ def run_algoMM_replay_tick(
         symbol = session.symbol
         interval = session.interval or "1min"
         allow_short = _safe_bool(js.get("allow_short_selling", js.get("allow_short", True)), True)
+        core_cfg = config_from_obj(cfg, allow_short=allow_short)
 
         bar_time = provider.bar_time(bar_idx)
         now_et = _as_et(bar_time)
@@ -788,22 +810,14 @@ def run_algoMM_replay_tick(
             last_bar_map[session.id] = bar_key
 
         if open_trade is None:
-            if cfg.algo_name == "Algo4_MM":
-                should_enter, enter_direction, entry_reason = live.should_enter_trade(
-                    prob_up,
-                    prob_down,
-                    df,
-                    len(df) - 1,
-                    cfg,
-                    allow_short=allow_short,
-                )
-            else:
-                should_enter, enter_direction, entry_reason = _should_enter_trade_6040(
-                    prob_up_avg=prob_up_avg,
-                    prob_up_avg_prev=prob_up_avg_prev,
-                    cfg=cfg,
-                    allow_short=allow_short,
-                )
+            entry_decision = evaluate_entry(
+                prob_up_avg=float(prob_up_avg),
+                prob_up_avg_prev=float(prob_up_avg_prev) if prob_up_avg_prev is not None else None,
+                cfg=core_cfg,
+            )
+            should_enter = entry_decision.should_act
+            enter_direction = entry_decision.action
+            entry_reason = entry_decision.reason
 
             if not should_enter:
                 decision = "NO_ENTRY_SIGNAL"
@@ -839,11 +853,7 @@ def run_algoMM_replay_tick(
                     prob_peak = getattr(live, "_PROB_PEAK", None)
                     profit_peak = getattr(live, "_PROFIT_PEAK", None)
                     if isinstance(prob_peak, dict):
-                        conviction = prob_up if cfg.algo_name == "Algo4_MM" and enter_direction == "LONG" else (
-                            prob_down if cfg.algo_name == "Algo4_MM" else (
-                                prob_up_avg if enter_direction == "LONG" else 1.0 - prob_up_avg
-                            )
-                        )
+                        conviction = prob_up_avg if enter_direction == "LONG" else 1.0 - prob_up_avg
                         prob_peak[int(session_id)] = float(conviction)
                     if isinstance(profit_peak, dict):
                         profit_peak[int(session_id)] = 0.0
@@ -853,23 +863,24 @@ def run_algoMM_replay_tick(
 
         else:
             exit_view = _make_open_trade_adapter(open_trade, session_id)
-            if cfg.algo_name == "Algo4_MM":
-                should_exit, exit_reason = live.should_exit_trade(
-                    open_trade=exit_view,
-                    current_price=bar_close_px,
-                    prob_up=prob_up,
-                    prob_down=prob_down,
-                    cfg=cfg,
-                    now_et=now_et,
-                )
-            else:
-                should_exit, exit_reason = live.should_exit_trade(
-                    open_trade=exit_view,
-                    current_price=bar_close_px,
-                    prob_up_avg=prob_up_avg,
-                    cfg=cfg,
-                    now_et=now_et,
-                )
+            side = str(getattr(exit_view, "position_side", "") or "").lower()
+            fallback_conviction = float(prob_up_avg if side == "long" else 1.0 - prob_up_avg)
+            core_state = _core_state_from_live(live, session_id, fallback_conviction=fallback_conviction)
+            exit_decision = evaluate_exit(
+                MMCorePosition(
+                    side=side,
+                    entry_price=float(getattr(exit_view, "entry_price", 0.0) or 0.0),
+                    quantity=float(getattr(exit_view, "quantity", 0.0) or 0.0),
+                ),
+                current_price=bar_close_px,
+                prob_up_avg=float(prob_up_avg),
+                cfg=core_cfg,
+                state=core_state,
+                now_et=now_et,
+            )
+            _store_core_state(live, session_id, exit_decision.state or core_state)
+            should_exit = exit_decision.should_act
+            exit_reason = exit_decision.reason
 
             if should_exit:
                 exec_price = live.get_smart_execution_price(df)

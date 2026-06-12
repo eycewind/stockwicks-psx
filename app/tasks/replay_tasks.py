@@ -116,8 +116,7 @@ def _log_replay_config_from_db(sess: ReplaySession) -> Dict[str, Any]:
     logger.warning(
         "[REPLAY CONFIG FROM DB] session_id=%s symbol=%s interval=%s algo=%s "
         "long_entry_prob=%s short_entry_prob=%s prob_trail_drop=%s "
-        "hard_stop_usd=%s trailing_stop_activation=%s trailing_stop_distance=%s "
-        "breakeven_activation_usd=%s breakeven_lock_usd=%s allow_short=%s eod_close=%s "
+        "stop_loss_usd=%s trailing_profit_usd=%s allow_short=%s eod_close=%s "
         "config_keys=%s",
         getattr(sess, "id", None),
         getattr(sess, "symbol", None),
@@ -126,11 +125,8 @@ def _log_replay_config_from_db(sess: ReplaySession) -> Dict[str, Any]:
         cfg.get("long_entry_prob"),
         cfg.get("short_entry_prob"),
         cfg.get("prob_trail_drop"),
-        cfg.get("hard_stop_usd"),
-        cfg.get("trailing_stop_activation"),
-        cfg.get("trailing_stop_distance"),
-        cfg.get("breakeven_activation_usd"),
-        cfg.get("breakeven_lock_usd"),
+        cfg.get("stop_loss_usd", cfg.get("hard_stop_usd")),
+        cfg.get("trailing_profit_usd", cfg.get("trailing_stop_distance")),
         cfg.get("allow_short"),
         cfg.get("eod_close"),
         sorted(cfg.keys()),
@@ -252,9 +248,8 @@ def start_replay_session_task(session_id: int):
                 "long_entry_prob": cfg.get("long_entry_prob"),
                 "short_entry_prob": cfg.get("short_entry_prob"),
                 "prob_trail_drop": cfg.get("prob_trail_drop"),
-                "hard_stop_usd": cfg.get("hard_stop_usd"),
-                "trailing_stop_activation": cfg.get("trailing_stop_activation"),
-                "trailing_stop_distance": cfg.get("trailing_stop_distance"),
+                "stop_loss_usd": cfg.get("stop_loss_usd", cfg.get("hard_stop_usd")),
+                "trailing_profit_usd": cfg.get("trailing_profit_usd", cfg.get("trailing_stop_distance")),
             },
         }
 

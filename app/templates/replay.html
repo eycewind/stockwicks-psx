@@ -188,35 +188,14 @@
           <input type="number" step="1" min="1" name="trade_size" id="f_qty" value="100" required>
         </div>
         <div>
-          <label>Hard Stop ($)</label>
-          <input type="number" step="1" min="0" name="hard_stop_usd" id="f_hard_stop" value="300">
-          <div class="field-help">Same as production. Exit if open P/L reaches this loss.</div>
+          <label>Stop Loss ($)</label>
+          <input type="number" step="1" min="0" name="stop_loss_usd" id="f_stop_loss" value="300">
+          <div class="field-help">Exit if open P/L reaches this loss.</div>
         </div>
         <div>
-          <label>Trail Activation Profit ($)</label>
-          <input type="number" step="1" min="0" name="trailing_stop_activation" id="f_trail_activation" value="75">
-          <div class="field-help">Same as production. Profit trail starts after this open profit.</div>
-        </div>
-        <div>
-          <label>Trail Giveback Distance ($)</label>
-          <input type="number" step="1" min="0" name="trailing_stop_distance" id="f_trail_distance" value="35">
-          <div class="field-help">Same as production. Exit after this giveback from peak profit.</div>
-        </div>
-        <div>
-        <label>Probability Trail Drop</label>
-        <input
-            type="number"
-            step="0.01"
-            min="0"
-            max="1"
-            name="prob_trail_drop"
-            id="f_prob_trail_drop"
-            value="0.05"
-        >
-        <div class="field-help">
-            Exit when probability conviction drops this much from its peak.
-            Example: 0.05 = exit after 5% probability reversal.
-        </div>
+          <label>Trailing Profit ($)</label>
+          <input type="number" step="1" min="0" name="trailing_profit_usd" id="f_trailing_profit" value="75">
+          <div class="field-help">Exit after this giveback from peak open profit.</div>
         </div>
         <div>
   <label>Long Entry Avg Prob</label>
@@ -246,9 +225,27 @@
   <div class="field-help">Enter short when smoothed prob crosses below this.</div>
 </div>
         <div>
-          <label>Replay Train Min Rows</label>
-          <input type="number" step="1" min="1" name="replay_train_min_rows" id="f_min_rows" value="30">
-          <div class="field-help">Replay-only warmup guard. Does not change entry/exit logic.</div>
+          <label>Probability Exit Mode</label>
+          <select name="prob_exit_mode" id="f_prob_exit_mode" class="js-prob-exit-mode">
+            <option value="trailing" selected>Trailing drop</option>
+            <option value="fixed">Fixed threshold</option>
+          </select>
+          <div class="field-help">Choose peak giveback or fixed conviction floor.</div>
+        </div>
+        <div>
+          <label>Probability Trail Drop</label>
+          <input type="number" step="0.01" min="0" max="1" name="prob_trail_drop" id="f_prob_trail_drop" class="js-prob-trail-drop" value="0.05">
+          <div class="field-help">Exit when probability conviction drops this much from its peak.</div>
+        </div>
+        <div>
+          <label>Long Fixed Exit Prob</label>
+          <input type="number" step="0.01" min="0" max="1" name="long_fixed_exit_prob" id="f_long_fixed_exit_prob" class="js-prob-fixed-exit" value="0.55">
+          <div class="field-help">Used in fixed mode for long positions.</div>
+        </div>
+        <div>
+          <label>Short Fixed Exit Prob</label>
+          <input type="number" step="0.01" min="0" max="1" name="short_fixed_exit_prob" id="f_short_fixed_exit_prob" class="js-prob-fixed-exit" value="0.55">
+          <div class="field-help">Used in fixed mode for short positions.</div>
         </div>
         <div>
           <button type="submit" class="btn btn-start" id="startBtn">▶ Start Replay</button>
@@ -472,13 +469,14 @@ function renderSessionList(sessions) {
       : `0/0`;
     const cfg = s.config || {};
     const params = [
-      `Hard Stop: ${fmtMoney(cfg.hard_stop_usd)}`,
-      `Trail Activation: ${fmtMoney(cfg.trailing_stop_activation)}`,
-      `Trail Giveback: ${fmtMoney(cfg.trailing_stop_distance)}`,
+      `Stop Loss: ${fmtMoney(cfg.stop_loss_usd || cfg.hard_stop_usd)}`,
+      `Trailing Profit: ${fmtMoney(cfg.trailing_profit_usd)}`,
       `Long Avg Prob: ${fmtProb(cfg.long_entry_prob)}`,
       `Short Avg Prob: ${fmtProb(cfg.short_entry_prob)}`,
-      `Prob Trail Drop: ${fmtProb(cfg.prob_trail_drop)}`,
-      `Train Min Rows: ${fmtInt(cfg.replay_train_min_rows)}`,
+      `Prob Exit: ${cfg.prob_exit_mode === "fixed" ? "Fixed" : "Trailing"}`,
+      cfg.prob_exit_mode === "fixed"
+        ? `Long/Short Fixed Exit: ${fmtProb(cfg.long_fixed_exit_prob)}/${fmtProb(cfg.short_fixed_exit_prob)}`
+        : `Prob Trail Drop: ${fmtProb(cfg.prob_trail_drop)}`,
       `Interval: ${s.interval}`,
       `Algo: ${s.algo_name}`
     ].join(" | ");

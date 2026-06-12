@@ -9,6 +9,14 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from app.services.mm_core_engine import (
+    MMCorePosition,
+    MMCoreState,
+    config_from_obj,
+    evaluate_entry,
+    evaluate_exit,
+)
+
 
 ALGO_FEATURE_SETS = {
     "Algo1_MM": "Featureset_1",
@@ -96,15 +104,13 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
         short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
         prob_trail_drops = [0.05, 0.10, 0.20, 0.35]
         hard_stops = [300.0, 500.0, 750.0, 1000.0]
-        trail_activations = [50.0, 75.0, 100.0, 150.0]
-        trail_distances = [25.0, 50.0, 75.0, 100.0]
+        trailing_profits = [35.0, 50.0, 75.0, 100.0]
     else:
         long_entries = [0.58, 0.60, 0.62]
         short_entries = [0.42, 0.40, 0.38]
         prob_trail_drops = [0.05, 0.20]
         hard_stops = [300.0, 750.0]
-        trail_activations = [75.0, 150.0]
-        trail_distances = [50.0]
+        trailing_profits = [35.0, 75.0]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -113,23 +119,22 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
                 continue
             for prob_trail_drop in prob_trail_drops:
                 for hard_stop_usd in hard_stops:
-                    for trailing_stop_activation in trail_activations:
-                        for trailing_stop_distance in trail_distances:
-                            rows.append(
-                                {
-                                    "long_entry_prob": long_entry,
-                                    "short_entry_prob": short_entry,
-                                    "prob_trail_drop": prob_trail_drop,
-                                    "hard_stop_usd": hard_stop_usd,
-                                    "trailing_stop_activation": trailing_stop_activation,
-                                    "trailing_stop_distance": trailing_stop_distance,
-                                    "prob_exit_mode": "trailing",
-                                    "long_fixed_exit_prob": 0.55,
-                                    "short_fixed_exit_prob": 0.55,
-                                    "prob_smoothing_bars": 3,
-                                    "min_prob_advantage": 0.03 if is_algo4 else 0.0,
-                                }
-                            )
+                    for trailing_profit_usd in trailing_profits:
+                        rows.append(
+                            {
+                                "long_entry_prob": long_entry,
+                                "short_entry_prob": short_entry,
+                                "prob_trail_drop": prob_trail_drop,
+                                "hard_stop_usd": hard_stop_usd,
+                                "stop_loss_usd": hard_stop_usd,
+                                "trailing_profit_usd": trailing_profit_usd,
+                                "prob_exit_mode": "trailing",
+                                "long_fixed_exit_prob": 0.55,
+                                "short_fixed_exit_prob": 0.55,
+                                "prob_smoothing_bars": 3,
+                                "min_prob_advantage": 0.03 if is_algo4 else 0.0,
+                            }
+                        )
     return rows
 
 
@@ -196,12 +201,13 @@ def _simulate_combo(
     position_side: str | None = None
     entry_price = 0.0
     entry_time = None
-    prob_peak = 0.0
-    profit_peak = 0.0
+    core_state = MMCoreState()
     trades: list[dict[str, Any]] = []
+    core_cfg = config_from_obj(type("ScanConfig", (), params)(), allow_short=allow_short)
+    core_cfg.eod_close = bool(eod_close)
 
     def close_trade(ts, price: float, reason: str):
-        nonlocal position_side, entry_price, entry_time, prob_peak, profit_peak
+        nonlocal position_side, entry_price, entry_time, core_state
         if not position_side:
             return
         profit = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
@@ -219,17 +225,9 @@ def _simulate_combo(
         position_side = None
         entry_price = 0.0
         entry_time = None
-        prob_peak = 0.0
-        profit_peak = 0.0
+        core_state = MMCoreState()
 
     aligned = prob_avg.reindex(price_df.index).ffill()
-    long_entry = float(params["long_entry_prob"])
-    short_entry = float(params["short_entry_prob"])
-    hard_stop = float(params["hard_stop_usd"])
-    trail_activation = float(params["trailing_stop_activation"])
-    trail_distance = float(params["trailing_stop_distance"])
-    prob_trail_drop = float(params["prob_trail_drop"])
-    min_prob_advantage = float(params.get("min_prob_advantage", 0.0) or 0.0)
 
     for i in range(1, len(price_df)):
         ts = price_df.index[i]
@@ -245,51 +243,32 @@ def _simulate_combo(
 
         just_closed = False
         if position_side:
-            pnl = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
-            if hard_stop > 0 and pnl <= -hard_stop:
-                close_trade(ts, price, "HARD_STOP")
+            exit_decision = evaluate_exit(
+                MMCorePosition(side=position_side, entry_price=entry_price, quantity=trade_size),
+                price,
+                current_prob,
+                core_cfg,
+                core_state,
+                now_et=ts.astimezone(_ET).to_pydatetime() if hasattr(ts, "astimezone") else None,
+            )
+            core_state = exit_decision.state or core_state
+            if exit_decision.should_act:
+                close_trade(ts, price, exit_decision.reason)
                 just_closed = True
-            else:
-                profit_peak = max(profit_peak, pnl)
-                if trail_activation > 0 and trail_distance > 0 and profit_peak >= trail_activation:
-                    if profit_peak - pnl >= trail_distance:
-                        close_trade(ts, price, "TRAILING_PROFIT_STOP")
-                        just_closed = True
-
-            if position_side and not just_closed:
-                conviction = current_prob if position_side == "long" else 1.0 - current_prob
-                prob_peak = max(prob_peak, conviction)
-                if prob_trail_drop > 0 and prob_peak - conviction >= prob_trail_drop:
-                    close_trade(ts, price, "PROB_TRAIL_DROP")
-                    just_closed = True
-
-            if position_side and not just_closed and eod_close:
-                cur_time = ts.astimezone(_ET).time() if getattr(ts, "tzinfo", None) else ts.time()
-                if cur_time.hour > 15 or (cur_time.hour == 15 and cur_time.minute >= 50):
-                    close_trade(ts, price, "EOD_CLOSE")
-                    just_closed = True
 
         if position_side is None and not just_closed:
-            if is_algo4:
-                prob_down = 1.0 - current_prob
-                enter_long = current_prob >= long_entry and current_prob > (prob_down + min_prob_advantage)
-                enter_short = allow_short and prob_down >= (1.0 - short_entry) and prob_down > (current_prob + min_prob_advantage)
-            else:
-                enter_long = prev_prob < long_entry <= current_prob
-                enter_short = allow_short and prev_prob > short_entry >= current_prob
+            enter_decision = evaluate_entry(current_prob, prev_prob, core_cfg)
 
-            if enter_long:
+            if enter_decision.should_act and enter_decision.action == "LONG":
                 position_side = "long"
                 entry_price = price
                 entry_time = ts
-                prob_peak = current_prob
-                profit_peak = 0.0
-            elif enter_short:
+                core_state = MMCoreState(prob_peak=current_prob, profit_peak=0.0)
+            elif enter_decision.should_act and enter_decision.action == "SHORT":
                 position_side = "short"
                 entry_price = price
                 entry_time = ts
-                prob_peak = 1.0 - current_prob
-                profit_peak = 0.0
+                core_state = MMCoreState(prob_peak=1.0 - current_prob, profit_peak=0.0)
 
     if position_side:
         close_trade(price_df.index[-1], float(price_df["close"].iloc[-1]), "FINAL_BAR_CLOSE")
@@ -488,8 +467,8 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                         "short_entry_prob",
                         "prob_trail_drop",
                         "hard_stop_usd",
-                        "trailing_stop_activation",
-                        "trailing_stop_distance",
+                        "stop_loss_usd",
+                        "trailing_profit_usd",
                         "prob_exit_mode",
                         "long_fixed_exit_prob",
                         "short_fixed_exit_prob",
