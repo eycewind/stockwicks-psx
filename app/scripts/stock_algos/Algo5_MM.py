@@ -4,6 +4,8 @@ StockWicks Algo5_MM commercial runner.
 
 Commercial clean model-only behavior:
 - Algo5_MM -> Featureset_5
+- Featureset_5 is MACD-focused: standard/fast/slow MACD state, crosses,
+  histogram slope, and histogram acceleration drive the model probability.
 - One probability value drives direction: prob_up.
 - Entry uses 3-bar smoothed prob_up crossing the 0.50 midline.
 - No cooldown.
