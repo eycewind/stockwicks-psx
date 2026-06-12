@@ -94,17 +94,17 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
     if str(profile or "quick").lower() == "deep":
         long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
         short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
-        prob_trail_drops = [0.05, 0.10, 0.20, 0.35, 0.50]
-        hard_stops = [300.0, 500.0, 750.0, 1000.0, 1500.0]
-        trail_activations = [50.0, 75.0, 100.0, 150.0, 250.0]
-        trail_distances = [25.0, 50.0, 75.0, 100.0, 150.0]
-    else:
-        long_entries = [0.58, 0.60, 0.62]
-        short_entries = [0.42, 0.40, 0.38]
         prob_trail_drops = [0.05, 0.10, 0.20, 0.35]
         hard_stops = [300.0, 500.0, 750.0, 1000.0]
         trail_activations = [50.0, 75.0, 100.0, 150.0]
         trail_distances = [25.0, 50.0, 75.0, 100.0]
+    else:
+        long_entries = [0.58, 0.60, 0.62]
+        short_entries = [0.42, 0.40, 0.38]
+        prob_trail_drops = [0.05, 0.20]
+        hard_stops = [300.0, 750.0]
+        trail_activations = [75.0, 150.0]
+        trail_distances = [50.0]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -131,6 +131,10 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
                                 }
                             )
     return rows
+
+
+def _holdout_candidate_limit(profile: str) -> int:
+    return 50 if str(profile or "quick").lower() == "deep" else 20
 
 
 def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
@@ -333,6 +337,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
 
     all_rows: list[dict[str, Any]] = []
     errors: list[str] = []
+    tested_combinations = 0
 
     for interval in intervals:
         try:
@@ -439,6 +444,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             validation_prob = prob_all.loc[validation_index]
             holdout_prob = prob_all.loc[holdout_index]
 
+            validation_candidates: list[dict[str, Any]] = []
             for params in params_grid:
                 validation_trades, validation_metrics = _simulate_combo(
                     algo_name=algo_name,
@@ -449,6 +455,49 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
                 )
+                tested_combinations += 1
+                validation_score = _score(validation_metrics)
+                selection_score = _selection_score(validation_metrics)
+                validation_candidates.append(
+                    {
+                        "score": selection_score,
+                        "selection_score": selection_score,
+                        "validation_score": validation_score,
+                        "validation_total_profit": validation_metrics["total_profit"],
+                        "validation_num_trades": validation_metrics["num_trades"],
+                        "validation_win_rate": validation_metrics["win_rate"],
+                        **params,
+                    }
+                )
+
+            validation_candidates.sort(
+                key=lambda r: (
+                    r["score"],
+                    r["validation_total_profit"],
+                    r["validation_win_rate"],
+                    -r.get("hard_stop_usd", 0.0),
+                ),
+                reverse=True,
+            )
+
+            for candidate in validation_candidates[: _holdout_candidate_limit(req.profile)]:
+                params = {
+                    key: candidate[key]
+                    for key in (
+                        "long_entry_prob",
+                        "short_entry_prob",
+                        "prob_trail_drop",
+                        "hard_stop_usd",
+                        "trailing_stop_activation",
+                        "trailing_stop_distance",
+                        "prob_exit_mode",
+                        "long_fixed_exit_prob",
+                        "short_fixed_exit_prob",
+                        "prob_smoothing_bars",
+                        "min_prob_advantage",
+                    )
+                    if key in candidate
+                }
                 holdout_trades, holdout_metrics = _simulate_combo(
                     algo_name=algo_name,
                     price_df=holdout_price,
@@ -458,17 +507,15 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
                 )
-                validation_score = _score(validation_metrics)
                 holdout_score = _score(holdout_metrics)
-                selection_score = _selection_score(validation_metrics)
                 row = {
                     "symbol": symbol,
                     "interval": interval,
                     "algo_name": algo_name,
                     "feature_set": feature_set,
-                    "score": selection_score,
-                    "selection_score": selection_score,
-                    "validation_score": validation_score,
+                    "score": candidate["selection_score"],
+                    "selection_score": candidate["selection_score"],
+                    "validation_score": candidate["validation_score"],
                     "holdout_score": holdout_score,
                     "confidence": _confidence(holdout_metrics),
                     "backtest_method": "validation_picked_holdout",
@@ -492,9 +539,9 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     "first_test_bar": _ts_iso(holdout_price.index, 0),
                     "last_test_bar": _ts_iso(holdout_price.index, -1),
                     "oos_fraction": float(req.oos_fraction),
-                    "validation_total_profit": validation_metrics["total_profit"],
-                    "validation_num_trades": validation_metrics["num_trades"],
-                    "validation_win_rate": validation_metrics["win_rate"],
+                    "validation_total_profit": candidate["validation_total_profit"],
+                    "validation_num_trades": candidate["validation_num_trades"],
+                    "validation_win_rate": candidate["validation_win_rate"],
                     "holdout_num_trades": holdout_metrics["num_trades"],
                     **params,
                     **holdout_metrics,
@@ -529,7 +576,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "backtest_explanation": (
             "The optimizer fetches recent history, trains one model per algo/interval "
             "using only pre-split candles, tests parameters on validation bars and "
-            "later holdout bars, then ranks only by validation performance. The "
+            "runs later holdout bars for the strongest validation candidates, then ranks only by validation performance. The "
             "displayed P/L and win rate are holdout results, so the holdout is not "
             "used to pick winners. Training labels are rebuilt from the pre-split "
             "frame so they cannot use future validation candles. The parameter "
@@ -537,7 +584,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             "stop, and probability trail values for volatile 5-minute moves."
         ),
         "oos_fraction": float(req.oos_fraction),
-        "tested_combinations": len(all_rows),
+        "tested_combinations": tested_combinations,
         "top": top_rows,
         "best_by_algo": best_by_algo,
         "errors": errors,
