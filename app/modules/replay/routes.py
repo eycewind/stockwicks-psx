@@ -206,9 +206,9 @@ DEFAULT_REPLAY_MM_CONFIG = {
     "k_forward": 3,
     "model_max_age_hours": 0.25,
     "daily_loss_limit_usd": 5000.0,
-    "replay_train_min_rows": 30,
     "replay_training_warmup_days": 45,
 }
+REPLAY_TRAIN_MIN_ROWS = 30
 
 
 def _safe_float_form(value, default: float, min_value: float = 0.0) -> float:
@@ -219,16 +219,6 @@ def _safe_float_form(value, default: float, min_value: float = 0.0) -> float:
     if f < min_value:
         f = float(default)
     return f
-
-
-def _safe_int_form(value, default: int, min_value: int = 0) -> int:
-    try:
-        i = int(float(value))
-    except Exception:
-        i = int(default)
-    if i < min_value:
-        i = int(default)
-    return i
 
 
 def _checkbox_on(value: str | None) -> bool:
@@ -248,7 +238,6 @@ def _build_mm_replay_config(
     short_fixed_exit_prob: float | None,
     long_entry_prob: float | None,
     short_entry_prob: float | None,
-    replay_train_min_rows: int | None,
 ) -> dict:
     algo_name = (algo_name or "Algo1_MM").strip()
     if algo_name == "AlgoMM":
@@ -328,11 +317,7 @@ def _build_mm_replay_config(
         "allow_short_selling": _checkbox_on(allow_short_selling),
 
         # Replay controls only.
-        "replay_train_min_rows": _safe_int_form(
-            replay_train_min_rows,
-            DEFAULT_REPLAY_MM_CONFIG["replay_train_min_rows"],
-            min_value=1,
-        ),
+        "replay_train_min_rows": REPLAY_TRAIN_MIN_ROWS,
         "replay_training_warmup_days": DEFAULT_REPLAY_MM_CONFIG["replay_training_warmup_days"],
         "force_retrain_each_tick": True,
         "replay_force_retrain_each_bar": True,
@@ -439,9 +424,6 @@ def _serialize_session(s: ReplaySession) -> dict:
                     "short_fixed_exit_prob",
                     cfg.get("prob_fixed_exit_prob", DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"]),
                 )
-            ),
-            "replay_train_min_rows": int(
-                cfg.get("replay_train_min_rows", DEFAULT_REPLAY_MM_CONFIG["replay_train_min_rows"])
             ),
             "interval": s.interval,
             "algo_name": s.algo_name,
@@ -648,7 +630,6 @@ def start_replay(
     short_fixed_exit_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"]),
     long_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"]),
     short_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"]),
-    replay_train_min_rows: int = Form(DEFAULT_REPLAY_MM_CONFIG["replay_train_min_rows"]),
     allow_short_selling: str = Form(None),
     eod_auto_close: str = Form(None),
     db: Session = Depends(get_db),
@@ -739,7 +720,6 @@ def start_replay(
                 short_fixed_exit_prob=short_fixed_exit_prob,
                 long_entry_prob=long_entry_prob,
                 short_entry_prob=short_entry_prob,
-                replay_train_min_rows=replay_train_min_rows,
             ),
             separators=(",", ":"),
             sort_keys=True,

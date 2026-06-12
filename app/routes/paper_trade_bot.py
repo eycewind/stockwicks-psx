@@ -68,11 +68,11 @@ DATA_DIR = os.getenv("DATA_DIR", "/var/stockwicks/clients/ashakil/data")
 
 # --- AlgoMM commercial bot config ------------------------------------------
 ALLOWED_MM_ALGOS = {
-    "Algo1_MM": "FeatureSet_1",
-    "Algo2_MM": "FeatureSet_2",
-    "Algo3_MM": "FeatureSet_3",
-    "Algo4_MM": "FeatureSet_4",
-    "Algo5_MM": "FeatureSet_5",
+    "Algo1_MM": "Featureset_1",
+    "Algo2_MM": "Featureset_2",
+    "Algo3_MM": "Featureset_3",
+    "Algo4_MM": "Featureset_4",
+    "Algo5_MM": "Featureset_5",
 }
 
 DEFAULT_BOT_CONFIG = {
@@ -141,7 +141,7 @@ def _bot_config_json(
         "algo_name": algo_name,
         "feature_set": ALLOWED_MM_ALGOS[algo_name],
 
-        # Algo4_MM legacy production probability gates. Algo1-3 ignore these.
+        # Backward-compatible aliases for older config readers.
         "long_threshold": _safe_float_form(
             long_entry_prob,
             DEFAULT_BOT_CONFIG["long_entry_prob"],
