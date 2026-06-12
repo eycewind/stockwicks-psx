@@ -465,6 +465,15 @@ def _session_belongs_to_user(sess: ReplaySession | None, user: User) -> bool:
     return bool(sess and sess.user_id == user.id)
 
 
+def _safe_replay_housekeeping(db: Session) -> None:
+    try:
+        reap_stale_sessions(db)
+        purge_old_sessions(db, days=7)
+    except Exception as e:
+        db.rollback()
+        log.warning("Replay housekeeping failed: %s", e)
+
+
 # =============================================================================
 # Page
 # =============================================================================
@@ -476,11 +485,7 @@ def replay_page(
     user: User = Depends(get_current_user),
 ):
     # Housekeeping on every page load
-    try:
-        reap_stale_sessions(db)
-        purge_old_sessions(db, days=7)
-    except Exception as e:
-        log.warning("Housekeeping failed: %s", e)
+    _safe_replay_housekeeping(db)
 
     user_sessions = (
         db.query(ReplaySession)
@@ -665,7 +670,7 @@ def start_replay(
         raise HTTPException(status_code=400, detail="end_date must be >= start_date")
 
     # 2) Reap stale sessions. One-session enforcement is intentionally disabled.
-    reap_stale_sessions(db)
+    _safe_replay_housekeeping(db)
 
     # 3) Ensure data is available — auto-ingest if missing
     csv_path, _ = get_data_paths(user.id, symbol)
@@ -917,7 +922,7 @@ def api_list_sessions(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    reap_stale_sessions(db)
+    _safe_replay_housekeeping(db)
     rows = (
         db.query(ReplaySession)
         .filter_by(user_id=user.id)
@@ -941,7 +946,7 @@ def api_state(
 
     # Liveness sanity — only reap PID-based sessions.
     if sess.status == "RUNNING" and sess.pid and not pid_is_alive(sess.pid):
-        reap_stale_sessions(db)
+        _safe_replay_housekeeping(db)
         db.refresh(sess)
 
     closed_count = (
