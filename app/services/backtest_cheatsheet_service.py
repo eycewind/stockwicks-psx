@@ -99,18 +99,14 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.Data
 
 def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
     is_algo4 = str(algo_name or "") == "Algo4_MM"
-    if str(profile or "quick").lower() == "deep":
-        long_entries = [0.56, 0.58, 0.60, 0.62, 0.65]
-        short_entries = [0.44, 0.42, 0.40, 0.38, 0.35]
-        prob_trail_drops = [0.05, 0.10, 0.20, 0.35]
-        hard_stops = [300.0, 500.0, 750.0, 1000.0]
-        trailing_profits = [35.0, 50.0, 75.0, 100.0]
-    else:
-        long_entries = [0.58, 0.60, 0.62]
-        short_entries = [0.42, 0.40, 0.38]
-        prob_trail_drops = [0.05, 0.20]
-        hard_stops = [300.0, 750.0]
-        trailing_profits = [35.0, 75.0]
+    long_entries = [0.50, 0.55, 0.60, 0.65]
+    short_entries = [0.30, 0.35, 0.40, 0.45]
+    prob_trail_drops = [round(x / 100.0, 2) for x in range(5, 66, 5)]
+    stop_loss_pcts = [0.01, 0.02, 0.03]
+    trailing_profit_pcts = [0.005, 0.01]
+    prob_exit_modes = ["trailing", "fixed"]
+    long_fixed_exit_probs = [0.40]
+    short_fixed_exit_probs = [0.60]
 
     rows: list[dict[str, Any]] = []
     for long_entry in long_entries:
@@ -118,23 +114,56 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
             if short_entry >= long_entry:
                 continue
             for prob_trail_drop in prob_trail_drops:
-                for hard_stop_usd in hard_stops:
-                    for trailing_profit_usd in trailing_profits:
-                        rows.append(
-                            {
-                                "long_entry_prob": long_entry,
-                                "short_entry_prob": short_entry,
-                                "prob_trail_drop": prob_trail_drop,
-                                "hard_stop_usd": hard_stop_usd,
-                                "stop_loss_usd": hard_stop_usd,
-                                "trailing_profit_usd": trailing_profit_usd,
-                                "prob_exit_mode": "trailing",
-                                "long_fixed_exit_prob": 0.55,
-                                "short_fixed_exit_prob": 0.55,
-                                "prob_smoothing_bars": 3,
-                                "min_prob_advantage": 0.03 if is_algo4 else 0.0,
-                            }
-                        )
+                for stop_loss_pct in stop_loss_pcts:
+                    for trailing_profit_pct in trailing_profit_pcts:
+                        for prob_exit_mode in prob_exit_modes:
+                            for long_fixed_exit_prob in long_fixed_exit_probs:
+                                for short_fixed_exit_prob in short_fixed_exit_probs:
+                                    rows.append(
+                                        {
+                                            "long_entry_prob": long_entry,
+                                            "short_entry_prob": short_entry,
+                                            "prob_trail_drop": prob_trail_drop,
+                                            "hard_stop_usd": 0.0,
+                                            "stop_loss_usd": 0.0,
+                                            "trailing_profit_usd": 0.0,
+                                            "stop_loss_pct": stop_loss_pct,
+                                            "trailing_profit_pct": trailing_profit_pct,
+                                            "per_share_stop_pct": stop_loss_pct,
+                                            "per_share_trailing_profit_pct": trailing_profit_pct,
+                                            "prob_exit_mode": prob_exit_mode,
+                                            "long_fixed_exit_prob": long_fixed_exit_prob,
+                                            "short_fixed_exit_prob": short_fixed_exit_prob,
+                                            "prob_smoothing_bars": 3,
+                                            "min_prob_advantage": 0.03 if is_algo4 else 0.0,
+                                        }
+                                    )
+    return rows
+
+
+def _indicator_param_grid() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for stop_loss_pct in (0.01, 0.02, 0.03):
+        for trailing_profit_pct in (0.005, 0.01):
+            rows.append(
+                {
+                    "hard_stop_usd": 0.0,
+                    "stop_loss_usd": 0.0,
+                    "trailing_profit_usd": 0.0,
+                    "stop_loss_pct": stop_loss_pct,
+                    "trailing_profit_pct": trailing_profit_pct,
+                    "per_share_stop_pct": stop_loss_pct,
+                    "per_share_trailing_profit_pct": trailing_profit_pct,
+                    "prob_exit_mode": "indicator_only",
+                    "long_entry_prob": None,
+                    "short_entry_prob": None,
+                    "prob_trail_drop": None,
+                    "long_fixed_exit_prob": None,
+                    "short_fixed_exit_prob": None,
+                    "prob_smoothing_bars": None,
+                    "min_prob_advantage": None,
+                }
+            )
     return rows
 
 
@@ -276,6 +305,114 @@ def _simulate_combo(
     return trades, _trade_metrics(trades)
 
 
+def _simulate_indicator_algo(
+    *,
+    algo_name: str,
+    price_df: pd.DataFrame,
+    trade_size: float,
+    allow_short: bool,
+    eod_close: bool,
+    params: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    if str(algo_name or "") == "Algo3_MM":
+        from app.scripts.stocks.bots.algo3_logic import determine_signals
+        indicator_name = "SMI"
+    elif str(algo_name or "") == "Algo5_MM":
+        from app.scripts.stocks.bots.algo5_logic import determine_signals
+        indicator_name = "MACD"
+    else:
+        raise ValueError(f"Unsupported indicator-only algo: {algo_name}")
+
+    signals_df = determine_signals(price_df)
+    position_side: str | None = None
+    entry_price = 0.0
+    entry_time = None
+    profit_peak = 0.0
+    trades: list[dict[str, Any]] = []
+    params = params or {}
+    stop_loss_pct = max(0.0, _safe_float(params.get("stop_loss_pct", params.get("per_share_stop_pct", 0.0)), 0.0))
+    trailing_profit_pct = max(
+        0.0,
+        _safe_float(params.get("trailing_profit_pct", params.get("per_share_trailing_profit_pct", 0.0)), 0.0),
+    )
+
+    def close_trade(ts, price: float, reason: str):
+        nonlocal position_side, entry_price, entry_time, profit_peak
+        if not position_side:
+            return
+        profit = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
+        trades.append(
+            {
+                "side": position_side,
+                "entry_time": entry_time,
+                "exit_time": ts,
+                "entry_price": entry_price,
+                "exit_price": price,
+                "profit": float(profit),
+                "exit_reason": reason,
+            }
+        )
+        position_side = None
+        entry_price = 0.0
+        entry_time = None
+        profit_peak = 0.0
+
+    for i in range(1, len(signals_df)):
+        ts = signals_df.index[i]
+        prev = signals_df.iloc[i - 1]
+        curr = signals_df.iloc[i]
+        price = _safe_float(curr.get("open", curr.get("close", 0.0)), 0.0)
+        if price <= 0:
+            continue
+
+        buy_signal = bool(prev.get("Buy_Signal", False))
+        sell_signal = bool(prev.get("Sell_Signal", False))
+        just_closed = False
+        if position_side:
+            pnl = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
+            profit_peak = max(profit_peak, pnl)
+            basis = abs(entry_price * trade_size)
+            stop_loss_usd = basis * stop_loss_pct
+            trailing_profit_usd = basis * trailing_profit_pct
+
+            if stop_loss_usd > 0 and pnl <= -stop_loss_usd:
+                close_trade(ts, price, "STOP_LOSS_PCT")
+                just_closed = True
+            elif trailing_profit_usd > 0 and profit_peak >= trailing_profit_usd and (profit_peak - pnl) >= trailing_profit_usd:
+                close_trade(ts, price, "TRAILING_PROFIT_PCT")
+                just_closed = True
+
+        if not just_closed and position_side == "long" and sell_signal:
+            close_trade(ts, price, f"{indicator_name}_SELL_SIGNAL")
+            just_closed = True
+        elif not just_closed and position_side == "short" and buy_signal:
+            close_trade(ts, price, f"{indicator_name}_BUY_SIGNAL")
+            just_closed = True
+
+        if eod_close and position_side is not None:
+            ts_et = ts.astimezone(_ET) if hasattr(ts, "astimezone") else None
+            if ts_et is not None and ts_et.hour >= 15 and (ts_et.hour > 15 or ts_et.minute >= 58):
+                close_trade(ts, price, "EOD_CLOSE")
+                just_closed = True
+
+        if position_side is None and not just_closed:
+            if buy_signal:
+                position_side = "long"
+                entry_price = price
+                entry_time = ts
+                profit_peak = 0.0
+            elif sell_signal and allow_short:
+                position_side = "short"
+                entry_price = price
+                entry_time = ts
+                profit_peak = 0.0
+
+    if position_side:
+        close_trade(signals_df.index[-1], float(signals_df["close"].iloc[-1]), "FINAL_BAR_CLOSE")
+
+    return trades, _trade_metrics(trades)
+
+
 def _score(metrics: dict[str, float]) -> float:
     trades = metrics["num_trades"]
     if trades < 2:
@@ -326,6 +463,62 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             continue
 
         for algo_name, feature_set in ALGO_FEATURE_SETS.items():
+            if algo_name in {"Algo3_MM", "Algo5_MM"}:
+                n = len(price_full)
+                test_start = int(max(1, n * (1.0 - req.oos_fraction)))
+                test_price = price_full.iloc[test_start:].copy()
+                if len(test_price) < 20:
+                    errors.append(f"{algo_name} {interval}: not enough holdout bars for indicator test ({len(test_price)})")
+                    continue
+
+                for params in _indicator_param_grid():
+                    trades, metrics = _simulate_indicator_algo(
+                        algo_name=algo_name,
+                        price_df=test_price,
+                        trade_size=req.trade_size,
+                        allow_short=req.allow_short,
+                        eod_close=req.eod_close,
+                        params=params,
+                    )
+                    tested_combinations += 1
+                    row = {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "algo_name": algo_name,
+                        "feature_set": feature_set,
+                        "score": _score(metrics),
+                        "selection_score": _score(metrics),
+                        "validation_score": _score(metrics),
+                        "holdout_score": _score(metrics),
+                        "confidence": _confidence(metrics),
+                        "backtest_method": "indicator_only_holdout",
+                        "backtest_method_label": "Indicator-only holdout scan",
+                        "backtest_notes": (
+                            f"{algo_name} uses direct {'SMI' if algo_name == 'Algo3_MM' else 'MACD'} "
+                            "Buy_Signal/Sell_Signal logic plus percent stop/trailing guardrails. "
+                            "No model training, no probability thresholds."
+                        ),
+                        "history_bars": int(n),
+                        "train_bars": 0,
+                        "validation_bars": 0,
+                        "test_bars": int(len(test_price)),
+                        "first_train_bar": None,
+                        "last_train_bar": None,
+                        "first_validation_bar": None,
+                        "last_validation_bar": None,
+                        "first_test_bar": _ts_iso(test_price.index, 0),
+                        "last_test_bar": _ts_iso(test_price.index, -1),
+                        "oos_fraction": float(req.oos_fraction),
+                        "validation_total_profit": metrics["total_profit"],
+                        "validation_num_trades": metrics["num_trades"],
+                        "validation_win_rate": metrics["win_rate"],
+                        "holdout_num_trades": metrics["num_trades"],
+                        **params,
+                        **metrics,
+                    }
+                    all_rows.append(row)
+                continue
+
             params_grid = _param_grid(req.profile, algo_name)
             try:
                 feature_module = _load_feature_module(feature_set)
@@ -469,6 +662,10 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                         "hard_stop_usd",
                         "stop_loss_usd",
                         "trailing_profit_usd",
+                        "stop_loss_pct",
+                        "trailing_profit_pct",
+                        "per_share_stop_pct",
+                        "per_share_trailing_profit_pct",
                         "prob_exit_mode",
                         "long_fixed_exit_prob",
                         "short_fixed_exit_prob",
@@ -503,8 +700,8 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                         "Trains one model on pre-split history, selects parameters "
                         "on validation bars, then reports P/L on later holdout bars. "
                         "Training labels are rebuilt from pre-split candles only. "
-                        "The parameter sweep matches replay-supported exits: SL, "
-                        "trailing stop, probability trail drop, and long/short "
+                        "The parameter sweep matches replay-supported exits: percent SL, "
+                        "percent trailing profit, probability trail drop, and long/short "
                         "probability thresholds."
                     ),
                     "history_bars": int(len(common_idx)),
@@ -559,8 +756,8 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             "displayed P/L and win rate are holdout results, so the holdout is not "
             "used to pick winners. Training labels are rebuilt from the pre-split "
             "frame so they cannot use future validation candles. The parameter "
-            "grid is limited to replay-supported exits, with wider SL, trailing "
-            "stop, and probability trail values for volatile 5-minute moves."
+            "grid is limited to replay-supported exits, with percent stop loss, "
+            "percent trailing profit, and probability trail values for volatile moves."
         ),
         "oos_fraction": float(req.oos_fraction),
         "tested_combinations": tested_combinations,

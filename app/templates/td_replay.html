@@ -198,6 +198,16 @@
           <div class="field-help">Exit after this giveback from peak open profit.</div>
         </div>
         <div>
+          <label>Stop Loss (%)</label>
+          <input type="number" step="0.001" min="0" max="1" name="stop_loss_pct" id="f_stop_loss_pct" value="0.02">
+          <div class="field-help">Per-share stop. Example: 0.02 = 2%.</div>
+        </div>
+        <div>
+          <label>Trailing Profit (%)</label>
+          <input type="number" step="0.001" min="0" max="1" name="trailing_profit_pct" id="f_trailing_profit_pct" value="0.005">
+          <div class="field-help">Per-share giveback. Example: 0.005 = 0.5%.</div>
+        </div>
+        <div>
           <label>Long Entry Avg Prob</label>
           <input
             type="number"
@@ -258,7 +268,7 @@
             name="long_fixed_exit_prob"
             id="f_long_fixed_exit_prob"
             class="js-prob-fixed-exit"
-            value="0.55"
+            value="0.40"
           >
           <div class="field-help">Used in fixed mode for long positions.</div>
         </div>
@@ -272,7 +282,7 @@
             name="short_fixed_exit_prob"
             id="f_short_fixed_exit_prob"
             class="js-prob-fixed-exit"
-            value="0.55"
+            value="0.60"
           >
           <div class="field-help">Used in fixed mode for short positions.</div>
         </div>
@@ -285,7 +295,7 @@
         <label><input type="checkbox" name="eod_auto_close" value="on" checked> Close EOD</label>
       </div>
       <p class="muted" style="font-size:0.8rem; margin-top:10px;">
-        Replay now supports Algo1_MM / Algo2_MM / Algo3_MM / Algo4_MM / Algo5_MM with the shared probability core.
+        Replay supports probability algos plus indicator-only SMI and MACD modes.
         Dates must be within the last 30 days. If you've never ingested data for this symbol, we'll auto-download on Submit.
       </p>
     </form>
@@ -520,6 +530,8 @@ function renderSessionList(sessions) {
     const params = [
       `Stop Loss: ${fmtMoney(cfg.stop_loss_usd || cfg.hard_stop_usd)}`,
       `Trailing Profit: ${fmtMoney(cfg.trailing_profit_usd)}`,
+      `Stop Loss %: ${fmtProb(cfg.stop_loss_pct)}`,
+      `Trailing Profit %: ${fmtProb(cfg.trailing_profit_pct)}`,
       `Long Avg Prob: ${fmtProb(cfg.long_entry_prob)}`,
       `Short Avg Prob: ${fmtProb(cfg.short_entry_prob)}`,
       `Prob Exit: ${cfg.prob_exit_mode === "fixed" ? "Fixed" : "Trailing"}`,

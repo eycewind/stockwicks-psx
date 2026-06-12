@@ -163,6 +163,16 @@
           <small>Exit after this giveback from peak open profit.</small>
         </div>
         <div>
+          <label>Stop Loss (%)</label>
+          <input type="number" name="stop_loss_pct" min="0" max="1" step="0.001" value="0.02" />
+          <small>Per-share stop. 0.02 = 2%.</small>
+        </div>
+        <div>
+          <label>Trailing Profit (%)</label>
+          <input type="number" name="trailing_profit_pct" min="0" max="1" step="0.001" value="0.005" />
+          <small>Per-share trailing giveback. 0.005 = 0.5%.</small>
+        </div>
+        <div>
           <label>Probability Exit Mode</label>
           <select name="prob_exit_mode" class="js-prob-exit-mode">
             <option value="trailing" selected>Trailing drop</option>
@@ -177,12 +187,12 @@
         </div>
         <div>
           <label>Long Fixed Exit Prob</label>
-          <input type="number" name="long_fixed_exit_prob" class="js-prob-fixed-exit" min="0" max="1" step="0.01" value="0.55" />
+          <input type="number" name="long_fixed_exit_prob" class="js-prob-fixed-exit" min="0" max="1" step="0.01" value="0.40" />
           <small>Used in fixed mode for long positions.</small>
         </div>
         <div>
           <label>Short Fixed Exit Prob</label>
-          <input type="number" name="short_fixed_exit_prob" class="js-prob-fixed-exit" min="0" max="1" step="0.01" value="0.55" />
+          <input type="number" name="short_fixed_exit_prob" class="js-prob-fixed-exit" min="0" max="1" step="0.01" value="0.60" />
           <small>Used in fixed mode for short positions.</small>
         </div>
       </div>

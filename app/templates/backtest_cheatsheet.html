@@ -222,13 +222,18 @@ function testWindow(r) {
 }
 
 function rowParams(r) {
-  return [
-    `PRTH Long ${Number(r.long_entry_prob).toFixed(2)}`,
-    `PRTH Short ${Number(r.short_entry_prob).toFixed(2)}`,
-    `PRDROP ${Number(r.prob_trail_drop).toFixed(2)}`,
-    `SL ${money(r.stop_loss_usd || r.hard_stop_usd)}`,
-    `TRL ${money(r.trailing_profit_usd)}`
-  ].join(" | ");
+  const parts = [];
+  if (r.long_entry_prob !== null && r.long_entry_prob !== undefined) parts.push(`PRTH Long ${Number(r.long_entry_prob).toFixed(2)}`);
+  if (r.short_entry_prob !== null && r.short_entry_prob !== undefined) parts.push(`PRTH Short ${Number(r.short_entry_prob).toFixed(2)}`);
+  if (r.prob_trail_drop !== null && r.prob_trail_drop !== undefined) parts.push(`PRDROP ${Number(r.prob_trail_drop).toFixed(2)}`);
+  parts.push(`SL% ${pct(r.stop_loss_pct || r.per_share_stop_pct)}`);
+  parts.push(`TRL% ${pct(r.trailing_profit_pct || r.per_share_trailing_profit_pct)}`);
+  if (Number(r.stop_loss_usd || r.hard_stop_usd || 0) > 0) parts.push(`SL ${money(r.stop_loss_usd || r.hard_stop_usd)}`);
+  if (Number(r.trailing_profit_usd || 0) > 0) parts.push(`TRL ${money(r.trailing_profit_usd)}`);
+  if (r.prob_exit_mode) parts.push(`Exit ${r.prob_exit_mode}`);
+  if (r.long_fixed_exit_prob !== null && r.long_fixed_exit_prob !== undefined) parts.push(`LFix ${Number(r.long_fixed_exit_prob).toFixed(2)}`);
+  if (r.short_fixed_exit_prob !== null && r.short_fixed_exit_prob !== undefined) parts.push(`SFix ${Number(r.short_fixed_exit_prob).toFixed(2)}`);
+  return parts.join(" | ");
 }
 
 function replayText(r) {
@@ -239,6 +244,8 @@ function replayText(r) {
     `Trade Size: ${document.querySelector("[name='trade_size']").value || "100"}`,
     `Stop Loss: ${r.stop_loss_usd || r.hard_stop_usd}`,
     `Trailing Profit: ${r.trailing_profit_usd}`,
+    `Stop Loss %: ${r.stop_loss_pct || r.per_share_stop_pct}`,
+    `Trailing Profit %: ${r.trailing_profit_pct || r.per_share_trailing_profit_pct}`,
     `Long Entry Avg Prob: ${r.long_entry_prob}`,
     `Short Entry Avg Prob: ${r.short_entry_prob}`,
     `Probability Trail Drop: ${r.prob_trail_drop}`,

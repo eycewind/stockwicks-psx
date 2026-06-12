@@ -8,7 +8,6 @@ from app.scripts.stock_algos.algo_runner import run_algo_bot_tick
 from app.trading.logging.algo_logger import AlgoLogger
 from app.scripts.stock_algos.Algo1_MM import run_algoMM_bot_tick as run_algo1_mm_tick
 from app.scripts.stock_algos.Algo2_MM import run_algoMM_bot_tick as run_algo2_mm_tick
-from app.scripts.stock_algos.Algo3_MM import run_algoMM_bot_tick as run_algo3_mm_tick
 from app.scripts.stock_algos.Algo4_MM import run_algoMM_bot_tick as run_algo4_mm_tick
 
 logger = logging.getLogger(__name__)
@@ -112,9 +111,13 @@ def run_stock_bot_tick(
         elif algo_name == "Algo2_MM":
             result = run_algo2_mm_tick(bot_id, anchor_dt=anchor_dt)
         elif algo_name == "Algo3_MM":
-            result = run_algo3_mm_tick(bot_id, anchor_dt=anchor_dt)
+            from app.scripts.stock_algos.algo3_runner import run_algo3_bot_tick as run_smi_tick
+            result = run_smi_tick(bot_id, anchor_dt=anchor_dt)
         elif algo_name == "Algo4_MM":
             result = run_algo4_mm_tick(bot_id, anchor_dt=anchor_dt)
+        elif algo_name == "Algo5_MM":
+            from app.scripts.stock_algos.algo2_runner import run_algo2_bot_tick as run_macd_tick
+            result = run_macd_tick(bot_id, anchor_dt=anchor_dt)
         else:
             result = run_algo_bot_tick(bot, anchor_dt=anchor_dt)
 

@@ -80,6 +80,8 @@ DEFAULTS = {
     "per_share_stop_pct": 0.0,
     "stop_loss_usd": 300.0,
     "trailing_profit_usd": 75.0,
+    "stop_loss_pct": 0.0,
+    "trailing_profit_pct": 0.0,
     "eod_close": True,
     "once_per_bar": True,
     "cooldown_sec": 0,
@@ -94,8 +96,8 @@ DEFAULTS = {
     "max_same_direction_losses": 5,   # NEW: block after 3 same-dir losses
     "prob_trail_drop": 0.02,          # NEW: trailing prob drop from peak
     "prob_exit_mode": "trailing",
-    "long_fixed_exit_prob": 0.55,
-    "short_fixed_exit_prob": 0.55,
+    "long_fixed_exit_prob": 0.40,
+    "short_fixed_exit_prob": 0.60,
     "obv_slope_threshold": 0.0,
 }
 
@@ -126,6 +128,8 @@ class BotConfig:
     per_share_stop_pct: float = DEFAULTS["per_share_stop_pct"]
     stop_loss_usd: float = DEFAULTS["stop_loss_usd"]
     trailing_profit_usd: float = DEFAULTS["trailing_profit_usd"]
+    stop_loss_pct: float = DEFAULTS["stop_loss_pct"]
+    trailing_profit_pct: float = DEFAULTS["trailing_profit_pct"]
     max_same_direction_losses: int = DEFAULTS["max_same_direction_losses"]
     prob_trail_drop: float = DEFAULTS["prob_trail_drop"]
     prob_exit_mode: str = DEFAULTS["prob_exit_mode"]
@@ -754,7 +758,8 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             cfg.min_volume_multiplier = _safe_float(js.get("min_volume_multiplier", cfg.min_volume_multiplier), cfg.min_volume_multiplier)
             cfg.stop_loss_usd = _safe_float(js.get("stop_loss_usd", js.get("hard_stop_usd", cfg.stop_loss_usd)), cfg.stop_loss_usd)
             cfg.hard_stop_usd = cfg.stop_loss_usd
-            cfg.per_share_stop_pct = 0.0
+            cfg.stop_loss_pct = _safe_float(js.get("stop_loss_pct", js.get("per_share_stop_pct", cfg.stop_loss_pct)), cfg.stop_loss_pct)
+            cfg.per_share_stop_pct = cfg.stop_loss_pct
             cfg.trailing_profit_usd = _safe_float(
                 js.get(
                     "trailing_profit_usd",
@@ -764,6 +769,10 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             )
             cfg.trailing_stop_activation = cfg.trailing_profit_usd
             cfg.trailing_stop_distance = cfg.trailing_profit_usd
+            cfg.trailing_profit_pct = _safe_float(
+                js.get("trailing_profit_pct", js.get("per_share_trailing_profit_pct", cfg.trailing_profit_pct)),
+                cfg.trailing_profit_pct,
+            )
             cfg.daily_loss_limit_usd = _safe_float(js.get("daily_loss_limit_usd", cfg.daily_loss_limit_usd), cfg.daily_loss_limit_usd)
             cfg.take_profit_percent = _safe_float(js.get("take_profit_percent", cfg.take_profit_percent), cfg.take_profit_percent)
             cfg.eod_close = _safe_bool(js.get("eod_close", cfg.eod_close), cfg.eod_close)

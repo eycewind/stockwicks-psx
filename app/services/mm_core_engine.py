@@ -11,13 +11,16 @@ import numpy as np
 class MMCoreConfig:
     long_entry_prob: float = 0.60
     short_entry_prob: float = 0.40
+    min_prob_advantage: float = 0.0
     prob_smoothing_bars: int = 3
     stop_loss_usd: float = 300.0
     trailing_profit_usd: float = 75.0
+    stop_loss_pct: float = 0.0
+    trailing_profit_pct: float = 0.0
     prob_trail_drop: float = 0.05
     prob_exit_mode: str = "trailing"
-    long_fixed_exit_prob: float = 0.55
-    short_fixed_exit_prob: float = 0.55
+    long_fixed_exit_prob: float = 0.40
+    short_fixed_exit_prob: float = 0.60
     allow_short: bool = True
     eod_close: bool = True
 
@@ -85,13 +88,16 @@ def config_from_obj(obj, *, allow_short: bool | None = None) -> MMCoreConfig:
     return MMCoreConfig(
         long_entry_prob=_finite_float(getattr(obj, "long_entry_prob", 0.60), 0.60),
         short_entry_prob=_finite_float(getattr(obj, "short_entry_prob", 0.40), 0.40),
+        min_prob_advantage=max(0.0, _finite_float(getattr(obj, "min_prob_advantage", 0.0), 0.0)),
         prob_smoothing_bars=max(1, int(_finite_float(getattr(obj, "prob_smoothing_bars", 3), 3))),
         stop_loss_usd=stop_loss,
         trailing_profit_usd=trailing_profit,
+        stop_loss_pct=max(0.0, _finite_float(getattr(obj, "stop_loss_pct", getattr(obj, "per_share_stop_pct", 0.0)), 0.0)),
+        trailing_profit_pct=max(0.0, _finite_float(getattr(obj, "trailing_profit_pct", getattr(obj, "per_share_trailing_profit_pct", 0.0)), 0.0)),
         prob_trail_drop=_finite_float(getattr(obj, "prob_trail_drop", 0.05), 0.05),
         prob_exit_mode=mode,
-        long_fixed_exit_prob=_finite_float(getattr(obj, "long_fixed_exit_prob", 0.55), 0.55),
-        short_fixed_exit_prob=_finite_float(getattr(obj, "short_fixed_exit_prob", 0.55), 0.55),
+        long_fixed_exit_prob=_finite_float(getattr(obj, "long_fixed_exit_prob", 0.40), 0.40),
+        short_fixed_exit_prob=_finite_float(getattr(obj, "short_fixed_exit_prob", 0.60), 0.60),
         allow_short=_bool_value(allow_short, True) if allow_short is not None else _bool_value(getattr(obj, "allow_short", True), True),
         eod_close=_bool_value(getattr(obj, "eod_close", True), True),
     )
@@ -106,14 +112,46 @@ def evaluate_entry(
         return MMCoreDecision(False, reason="NO_VALID_PROB_AVG")
     if prob_up_avg_prev is None or not np.isfinite(prob_up_avg_prev):
         return MMCoreDecision(False, reason="NO_PREVIOUS_PROB_AVG_FOR_CROSS")
+    if not np.isfinite(cfg.long_entry_prob) or not np.isfinite(cfg.short_entry_prob):
+        return MMCoreDecision(False, reason="BAD_ENTRY_THRESHOLDS")
+    if cfg.short_entry_prob >= cfg.long_entry_prob:
+        return MMCoreDecision(
+            False,
+            reason=f"BAD_ENTRY_BAND_SHORT_{cfg.short_entry_prob:.2f}_GTE_LONG_{cfg.long_entry_prob:.2f}",
+        )
+
+    prob_down_avg = 1.0 - prob_up_avg
+    long_advantage = prob_up_avg - prob_down_avg
+    short_advantage = prob_down_avg - prob_up_avg
+    min_advantage = max(0.0, float(cfg.min_prob_advantage or 0.0))
+    long_has_edge = long_advantage >= min_advantage
+    short_has_edge = short_advantage >= min_advantage
 
     crossed_up = prob_up_avg_prev < cfg.long_entry_prob <= prob_up_avg
     crossed_down = prob_up_avg_prev > cfg.short_entry_prob >= prob_up_avg
 
+    if crossed_up and long_has_edge:
+        return MMCoreDecision(
+            True,
+            action="LONG",
+            reason=f"PROB_AVG_CROSS_ABOVE_LONG_ENTRY_{cfg.long_entry_prob:.2f}_EDGE_{long_advantage:.3f}",
+        )
     if crossed_up:
-        return MMCoreDecision(True, action="LONG", reason=f"PROB_AVG_CROSS_ABOVE_LONG_ENTRY_{cfg.long_entry_prob:.2f}")
+        return MMCoreDecision(
+            False,
+            reason=f"LONG_CROSS_BUT_EDGE_{long_advantage:.3f}_LT_MIN_{min_advantage:.3f}",
+        )
+    if crossed_down and cfg.allow_short and short_has_edge:
+        return MMCoreDecision(
+            True,
+            action="SHORT",
+            reason=f"PROB_AVG_CROSS_BELOW_SHORT_ENTRY_{cfg.short_entry_prob:.2f}_EDGE_{short_advantage:.3f}",
+        )
     if crossed_down and cfg.allow_short:
-        return MMCoreDecision(True, action="SHORT", reason=f"PROB_AVG_CROSS_BELOW_SHORT_ENTRY_{cfg.short_entry_prob:.2f}")
+        return MMCoreDecision(
+            False,
+            reason=f"SHORT_CROSS_BUT_EDGE_{short_advantage:.3f}_LT_MIN_{min_advantage:.3f}",
+        )
     if crossed_down and not cfg.allow_short:
         return MMCoreDecision(False, reason="SHORT_SIGNAL_BUT_SHORT_DISABLED")
     if prob_up_avg >= cfg.long_entry_prob:
@@ -143,14 +181,19 @@ def evaluate_exit(
 
     pnl_usd = position_pnl(position, current_price)
     next_state = MMCoreState(prob_peak=state.prob_peak, profit_peak=max(state.profit_peak, pnl_usd))
+    position_basis = abs(position.entry_price * position.quantity)
+    stop_loss_usd = abs(cfg.stop_loss_pct * position_basis) if cfg.stop_loss_pct > 0 else abs(cfg.stop_loss_usd)
+    trailing_profit_usd = abs(cfg.trailing_profit_pct * position_basis) if cfg.trailing_profit_pct > 0 else abs(cfg.trailing_profit_usd)
 
-    if cfg.stop_loss_usd > 0 and pnl_usd <= -abs(cfg.stop_loss_usd):
-        return MMCoreDecision(True, action="EXIT", reason="STOP_LOSS", state=MMCoreState())
+    if stop_loss_usd > 0 and pnl_usd <= -stop_loss_usd:
+        reason = "STOP_LOSS_PCT" if cfg.stop_loss_pct > 0 else "STOP_LOSS"
+        return MMCoreDecision(True, action="EXIT", reason=reason, state=MMCoreState())
 
-    if cfg.trailing_profit_usd > 0:
+    if trailing_profit_usd > 0:
         giveback = next_state.profit_peak - pnl_usd
-        if next_state.profit_peak >= cfg.trailing_profit_usd and giveback >= cfg.trailing_profit_usd:
-            return MMCoreDecision(True, action="EXIT", reason="TRAILING_PROFIT", state=MMCoreState())
+        if next_state.profit_peak >= trailing_profit_usd and giveback >= trailing_profit_usd:
+            reason = "TRAILING_PROFIT_PCT" if cfg.trailing_profit_pct > 0 else "TRAILING_PROFIT"
+            return MMCoreDecision(True, action="EXIT", reason=reason, state=MMCoreState())
 
     side = position.side.lower()
     conviction = prob_up_avg if side == "long" else 1.0 - prob_up_avg

@@ -271,6 +271,9 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         ("hard_stop_usd", _safe_float),
         ("trailing_stop_activation", _safe_float),
         ("trailing_stop_distance", _safe_float),
+        ("stop_loss_pct", _safe_float),
+        ("trailing_profit_pct", _safe_float),
+        ("per_share_trailing_profit_pct", _safe_float),
         ("eod_close", _safe_bool),
         ("prediction_strategy", lambda v, d: str(v or d)),
         ("once_per_bar", _safe_bool),
@@ -338,7 +341,13 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
     )
     cfg.trailing_stop_activation = cfg.trailing_profit_usd
     cfg.trailing_stop_distance = cfg.trailing_profit_usd
-    cfg.per_share_stop_pct = 0.0
+    cfg.stop_loss_pct = _safe_float(js.get("stop_loss_pct", js.get("per_share_stop_pct", getattr(cfg, "stop_loss_pct", 0.0))), 0.0)
+    cfg.per_share_stop_pct = cfg.stop_loss_pct
+    cfg.trailing_profit_pct = _safe_float(
+        js.get("trailing_profit_pct", js.get("per_share_trailing_profit_pct", getattr(cfg, "trailing_profit_pct", 0.0))),
+        0.0,
+    )
+    cfg.per_share_trailing_profit_pct = cfg.trailing_profit_pct
     cfg.prob_exit_mode = str(getattr(cfg, "prob_exit_mode", "trailing") or "trailing").strip().lower()
     if cfg.prob_exit_mode not in {"trailing", "fixed"}:
         cfg.prob_exit_mode = "trailing"
@@ -663,6 +672,152 @@ def run_algoMM_replay_tick(
         open_trade = get_open_trade(db, session_id)
         if open_trade is not None:
             update_open_trade_mark_replay(db, open_trade, bar_close_px, commit=True)
+
+        if cfg.algo_name in {"Algo3_MM", "Algo5_MM"}:
+            if cfg.algo_name == "Algo3_MM":
+                from app.scripts.stocks.bots.algo3_logic import determine_signals as _indicator_signals
+                indicator_name = "SMI"
+            else:
+                from app.scripts.stocks.bots.algo5_logic import determine_signals as _indicator_signals
+                indicator_name = "MACD"
+
+            signals_df = _indicator_signals(df)
+            if signals_df is None or signals_df.empty or len(signals_df) < 2:
+                decision = "NO_INDICATOR_SIGNAL_ROWS"
+                reason = f"{indicator_name}_SIGNALS_TOO_SHORT"
+                return finish("ok")
+
+            prev_bar = signals_df.iloc[-2]
+            curr_bar = signals_df.iloc[-1]
+            buy_signal = bool(prev_bar.get("Buy_Signal", False))
+            sell_signal = bool(prev_bar.get("Sell_Signal", False))
+            exec_price = float(curr_bar.get("open", bar_close_px) or bar_close_px)
+            if exec_price <= 0 or not np.isfinite(exec_price):
+                exec_price = bar_close_px
+
+            if open_trade is not None and bool(getattr(cfg, "eod_close", True)) and now_et.time() >= datetime.strptime("15:50", "%H:%M").time():
+                close_position_replay(
+                    db=db,
+                    trade=open_trade,
+                    price=float(exec_price),
+                    bar_time=now_et.replace(tzinfo=None),
+                    reason="EOD_CLOSE",
+                )
+                db.commit()
+                decision = "EXIT_EOD_CLOSE"
+                reason = f"{indicator_name}_EOD_CLOSE"
+                return finish("ok")
+
+            if open_trade is not None:
+                side = str(getattr(open_trade, "position_side", "") or "").lower()
+                entry_price = float(getattr(open_trade, "entry_price", 0.0) or 0.0)
+                qty = float(getattr(open_trade, "quantity", 0.0) or 0.0)
+                if entry_price > 0 and qty > 0 and exec_price > 0:
+                    pnl = (exec_price - entry_price) * qty if side == "long" else (entry_price - exec_price) * qty
+                    basis = abs(entry_price * qty)
+                    stop_loss_pct = max(0.0, float(getattr(cfg, "stop_loss_pct", getattr(cfg, "per_share_stop_pct", 0.0)) or 0.0))
+                    trailing_profit_pct = max(
+                        0.0,
+                        float(getattr(cfg, "trailing_profit_pct", getattr(cfg, "per_share_trailing_profit_pct", 0.0)) or 0.0),
+                    )
+                    if stop_loss_pct > 0 and pnl <= -(basis * stop_loss_pct):
+                        close_position_replay(
+                            db=db,
+                            trade=open_trade,
+                            price=float(exec_price),
+                            bar_time=now_et.replace(tzinfo=None),
+                            reason="STOP_LOSS_PCT",
+                        )
+                        db.commit()
+                        decision = "EXIT_STOP_LOSS_PCT"
+                        reason = f"{indicator_name}_STOP_LOSS_PCT"
+                        return finish("ok")
+                    if trailing_profit_pct > 0:
+                        core_state = _core_state_from_live(live, session_id, fallback_conviction=0.0)
+                        profit_peak = max(float(getattr(core_state, "profit_peak", 0.0) or 0.0), pnl)
+                        _store_core_state(live, session_id, MMCoreState(prob_peak=core_state.prob_peak, profit_peak=profit_peak))
+                        trail_usd = basis * trailing_profit_pct
+                        if profit_peak >= trail_usd and (profit_peak - pnl) >= trail_usd:
+                            close_position_replay(
+                                db=db,
+                                trade=open_trade,
+                                price=float(exec_price),
+                                bar_time=now_et.replace(tzinfo=None),
+                                reason="TRAILING_PROFIT_PCT",
+                            )
+                            db.commit()
+                            _clear_algo_state(live, session_id)
+                            decision = "EXIT_TRAILING_PROFIT_PCT"
+                            reason = f"{indicator_name}_TRAILING_PROFIT_PCT"
+                            return finish("ok")
+
+                if side == "long" and sell_signal:
+                    close_position_replay(
+                        db=db,
+                        trade=open_trade,
+                        price=float(exec_price),
+                        bar_time=now_et.replace(tzinfo=None),
+                        reason=f"{indicator_name}_SELL_SIGNAL",
+                    )
+                    db.commit()
+                    decision = f"EXIT_{indicator_name}_SELL_SIGNAL"
+                    reason = "OPPOSITE_INDICATOR_SIGNAL"
+                    return finish("ok")
+                if side == "short" and buy_signal:
+                    close_position_replay(
+                        db=db,
+                        trade=open_trade,
+                        price=float(exec_price),
+                        bar_time=now_et.replace(tzinfo=None),
+                        reason=f"{indicator_name}_BUY_SIGNAL",
+                    )
+                    db.commit()
+                    decision = f"EXIT_{indicator_name}_BUY_SIGNAL"
+                    reason = "OPPOSITE_INDICATOR_SIGNAL"
+                    return finish("ok")
+
+                decision = "HOLD_POSITION"
+                reason = f"{indicator_name}_NO_OPPOSITE_SIGNAL"
+                return finish("ok")
+
+            if buy_signal:
+                qty = float(getattr(session, "trade_size", 0.0) or 1.0)
+                open_position_replay(
+                    db=db,
+                    session=session,
+                    position_side="long",
+                    price=float(exec_price),
+                    bar_time=now_et.replace(tzinfo=None),
+                    quantity=qty,
+                )
+                db.commit()
+                decision = f"OPEN_LONG_{indicator_name}"
+                reason = f"{indicator_name}_BUY_SIGNAL"
+                return finish("ok")
+
+            if sell_signal and allow_short:
+                qty = float(getattr(session, "trade_size", 0.0) or 1.0)
+                open_position_replay(
+                    db=db,
+                    session=session,
+                    position_side="short",
+                    price=float(exec_price),
+                    bar_time=now_et.replace(tzinfo=None),
+                    quantity=qty,
+                )
+                db.commit()
+                decision = f"OPEN_SHORT_{indicator_name}"
+                reason = f"{indicator_name}_SELL_SIGNAL"
+                return finish("ok")
+
+            if sell_signal and not allow_short:
+                decision = "SHORT_SIGNAL_BUT_SHORT_DISABLED"
+                reason = f"{indicator_name}_SELL_SIGNAL"
+                return finish("ok")
+
+            decision = "NO_ENTRY_SIGNAL"
+            reason = f"{indicator_name}_NO_SIGNAL"
+            return finish("ok")
 
         mm2 = getattr(live, "mm2", None)
         if mm2 is None or not hasattr(mm2, "build_feature_matrix_from_df") or not hasattr(mm2, "build_training_features_from_df"):

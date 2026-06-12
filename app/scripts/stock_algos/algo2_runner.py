@@ -54,6 +54,7 @@ from app.scripts.stock_algos.base_wiring import (
     StockBaseRunner,
     _ET,
 )
+from app.scripts.stocks.bots.algo5_logic import compute_macd
 
 # --- Config ---
 load_dotenv()
@@ -66,78 +67,6 @@ logger = logging.getLogger("ALGO2")
 # -----------------------------------------------------------------------------
 # MACD Calculation + REALISTIC Signal Generation
 # -----------------------------------------------------------------------------
-def _ema_sma_seed(series: pd.Series, length: int) -> pd.Series:
-    """
-    Thinkorswim-style EMA approximation:
-    - Seed EMA with SMA(length) at the first point where SMA exists
-    - Then continue EMA recursively with alpha = 2/(length+1)
-    """
-    s = series.astype(float).copy()
-    ema = pd.Series(index=s.index, dtype="float64")
-
-    if length <= 0:
-        return ema
-
-    alpha = 2.0 / (length + 1.0)
-    sma = s.rolling(length).mean()
-
-    first_valid = sma.first_valid_index()
-    if first_valid is None:
-        return ema  # all NaN
-
-    # Seed at the first valid SMA point
-    ema.loc[first_valid] = sma.loc[first_valid]
-
-    # Recursive EMA after seed
-    started = False
-    prev = np.nan
-    for idx in s.index:
-        if idx == first_valid:
-            started = True
-            prev = float(ema.loc[idx])
-            continue
-        if not started:
-            continue
-        val = float(s.loc[idx])
-        prev = (val - prev) * alpha + prev
-        ema.loc[idx] = prev
-
-    return ema
-
-
-def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
-    """
-    ToS-matching MACD (close-based, exponential average, SMA-seeded EMA):
-      - fast EMA (12)
-      - slow EMA (26)
-      - MACD = fast - slow
-      - Signal = EMA(MACD, 9)
-      - Hist = MACD - Signal
-    """
-    df = df.copy()
-
-    # Ensure close exists
-    if "close" not in df.columns or df["close"].isna().all():
-        df["macd"] = np.nan
-        df["macd_signal"] = np.nan
-        df["macd_hist"] = np.nan
-        return df
-
-    close = df["close"].astype(float)
-
-    ema_fast = _ema_sma_seed(close, fast)
-    ema_slow = _ema_sma_seed(close, slow)
-
-    macd_line = ema_fast - ema_slow
-    macd_signal = _ema_sma_seed(macd_line, signal)
-    macd_hist = macd_line - macd_signal
-
-    df["macd"] = macd_line
-    df["macd_signal"] = macd_signal
-    df["macd_hist"] = macd_hist
-    return df
-
-
 def algo2_signals_live(df: pd.DataFrame) -> pd.DataFrame:
     """
     MACD reversal signal generation for Algo2 LIVE trading.
@@ -153,7 +82,7 @@ def algo2_signals_live(df: pd.DataFrame) -> pd.DataFrame:
     df["ATR14"] = ta.atr(df["high"], df["low"], df["close"], length=14)
 
     # MACD (ToS-matching)
-    df = calculate_macd(df, fast=12, slow=26, signal=9)
+    df = compute_macd(df, fast=12, slow=26, signal=9)
 
     # Cross detection:
     # Bullish crossover at bar i when:

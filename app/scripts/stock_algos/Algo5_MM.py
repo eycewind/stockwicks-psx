@@ -75,16 +75,19 @@ DEFAULTS = {
     # Uses avg of latest probability + previous 2 probabilities.
     "long_entry_prob": 0.60,
     "short_entry_prob": 0.40,
+    "min_prob_advantage": 0.0,
     "prob_smoothing_bars": 3,
     "prob_trail_drop": 0.05,
     "prob_exit_mode": "trailing",
-    "long_fixed_exit_prob": 0.55,
-    "short_fixed_exit_prob": 0.55,
+    "long_fixed_exit_prob": 0.40,
+    "short_fixed_exit_prob": 0.60,
 
     # GUI-configurable guardrails.
     "hard_stop_usd": 300.0,
     "stop_loss_usd": 300.0,
     "trailing_profit_usd": 75.0,
+    "stop_loss_pct": 0.0,
+    "trailing_profit_pct": 0.0,
     "trailing_stop_activation": 75.0,
     "trailing_stop_distance": 75.0,
     "eod_close": True,
@@ -108,6 +111,7 @@ class BotConfig:
     # Simple probability engine.
     long_entry_prob: float = DEFAULTS["long_entry_prob"]
     short_entry_prob: float = DEFAULTS["short_entry_prob"]
+    min_prob_advantage: float = DEFAULTS["min_prob_advantage"]
     prob_smoothing_bars: int = DEFAULTS["prob_smoothing_bars"]
     prob_trail_drop: float = DEFAULTS["prob_trail_drop"]
     prob_exit_mode: str = DEFAULTS["prob_exit_mode"]
@@ -118,6 +122,8 @@ class BotConfig:
     hard_stop_usd: float = DEFAULTS["hard_stop_usd"]
     stop_loss_usd: float = DEFAULTS["stop_loss_usd"]
     trailing_profit_usd: float = DEFAULTS["trailing_profit_usd"]
+    stop_loss_pct: float = DEFAULTS["stop_loss_pct"]
+    trailing_profit_pct: float = DEFAULTS["trailing_profit_pct"]
     trailing_stop_activation: float = DEFAULTS["trailing_stop_activation"]
     trailing_stop_distance: float = DEFAULTS["trailing_stop_distance"]
     eod_close: bool = DEFAULTS["eod_close"]
@@ -272,6 +278,7 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
         js.get("short_entry_prob", js.get("entry_prob_short", cfg.short_entry_prob)),
         cfg.short_entry_prob,
     )
+    cfg.min_prob_advantage = _safe_float(js.get("min_prob_advantage", cfg.min_prob_advantage), cfg.min_prob_advantage)
     cfg.prob_smoothing_bars = max(
         1,
         _safe_int(js.get("prob_smoothing_bars", cfg.prob_smoothing_bars), cfg.prob_smoothing_bars),
@@ -297,6 +304,11 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
     cfg.trailing_profit_usd = _safe_float(js.get("trailing_profit_usd", js.get("trailing_stop_distance", js.get("trailing_stop_activation", cfg.trailing_profit_usd))), cfg.trailing_profit_usd)
     cfg.trailing_stop_activation = cfg.trailing_profit_usd
     cfg.trailing_stop_distance = cfg.trailing_profit_usd
+    cfg.stop_loss_pct = _safe_float(js.get("stop_loss_pct", js.get("per_share_stop_pct", cfg.stop_loss_pct)), cfg.stop_loss_pct)
+    cfg.trailing_profit_pct = _safe_float(
+        js.get("trailing_profit_pct", js.get("per_share_trailing_profit_pct", cfg.trailing_profit_pct)),
+        cfg.trailing_profit_pct,
+    )
     cfg.eod_close = _safe_bool(js.get("eod_close", js.get("eod_auto_close", cfg.eod_close)), cfg.eod_close)
 
     # Direct bot columns override defaults where present.
@@ -748,6 +760,9 @@ def run_algoMM_bot_tick(
     anchor_dt: Optional[datetime] = None,
     _backfill: bool = False,
 ):
+    from app.scripts.stock_algos.algo2_runner import run_algo2_bot_tick
+    return run_algo2_bot_tick(bot_id, anchor_dt=anchor_dt)
+
     db: Session = SessionLocal()
     runner = StockBaseRunner()
 
