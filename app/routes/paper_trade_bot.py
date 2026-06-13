@@ -73,6 +73,8 @@ ALLOWED_MM_ALGOS = {
     "Algo3_MM": "Featureset_3",
     "Algo4_MM": "Featureset_4",
     "Algo5_MM": "Featureset_5",
+    "Algo_SMI": "SMI",
+    "Algo_MACD": "MACD",
 }
 
 DEFAULT_BOT_CONFIG = {
@@ -134,7 +136,7 @@ def _bot_config_json(
     if algo_name not in ALLOWED_MM_ALGOS:
         raise HTTPException(
             status_code=400,
-            detail="Invalid algo selected. Choose Algo1_MM, Algo2_MM, Algo3_MM, Algo4_MM, or Algo5_MM.",
+            detail="Invalid algo selected. Choose an MM algo, Algo_SMI, or Algo_MACD.",
         )
 
     prob_exit_mode = str(prob_exit_mode or DEFAULT_BOT_CONFIG["prob_exit_mode"]).strip().lower()
@@ -383,7 +385,7 @@ async def start_paper_trade_bot(
     if algo_name not in ALLOWED_MM_ALGOS:
         raise HTTPException(
             status_code=400,
-            detail="Invalid algo selected. Choose Algo1_MM, Algo2_MM, Algo3_MM, Algo4_MM, or Algo5_MM.",
+            detail="Invalid algo selected. Choose an MM algo, Algo_SMI, or Algo_MACD.",
         )
 
     if db.query(PaperStockTradeBot).filter_by(user_id=user.id, symbol=symbol, is_active=True).first():

@@ -32,15 +32,15 @@ def run_algo_bot_tick(bot, anchor_dt=None) -> None:
             from app.scripts.stock_algos.algo3_runner import run_algo3_bot_tick
             fn = run_algo3_bot_tick
 
-        elif name in {"algo3_mm"}:
+        elif name in {"algo_smi"}:
             from app.scripts.stock_algos.algo3_runner import run_algo3_bot_tick
             fn = run_algo3_bot_tick
 
-        elif name in {"algo5_mm"}:
+        elif name in {"algo_macd"}:
             from app.scripts.stock_algos.algo2_runner import run_algo2_bot_tick
             fn = run_algo2_bot_tick
 
-        elif name in {"algomm", "algo1_mm", "algo2_mm"}:
+        elif name in {"algomm", "algo1_mm", "algo2_mm", "algo3_mm", "algo4_mm", "algo5_mm"}:
             from app.scripts.stock_algos.algoMM_runner import run_algoMM_bot_tick
             fn = run_algoMM_bot_tick
 

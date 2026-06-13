@@ -188,6 +188,8 @@ ALLOWED_MM_ALGOS = {
     "Algo3_MM": "Featureset_3",
     "Algo4_MM": "Featureset_4",
     "Algo5_MM": "Featureset_5",
+    "Algo_SMI": "SMI",
+    "Algo_MACD": "MACD",
 }
 
 DEFAULT_REPLAY_MM_CONFIG = {
@@ -245,7 +247,7 @@ def _build_mm_replay_config(
     if algo_name not in ALLOWED_MM_ALGOS:
         raise HTTPException(
             status_code=400,
-            detail="Invalid algo selected. Choose Algo1_MM, Algo2_MM, Algo3_MM, Algo4_MM, or Algo5_MM.",
+            detail="Invalid algo selected. Choose an MM algo, Algo_SMI, or Algo_MACD.",
         )
     prob_exit_mode = str(prob_exit_mode or DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"]).strip().lower()
     if prob_exit_mode not in {"trailing", "fixed"}:
@@ -659,7 +661,7 @@ def start_replay(
     if algo_name == "AlgoMM":
         algo_name = "Algo1_MM"
     if algo_name not in ALLOWED_MM_ALGOS:
-        raise HTTPException(status_code=400, detail="Choose Algo1_MM, Algo2_MM, Algo3_MM, Algo4_MM, or Algo5_MM")
+        raise HTTPException(status_code=400, detail="Choose an MM algo, Algo_SMI, or Algo_MACD")
 
     try:
         sd = datetime.strptime(start_date, "%Y-%m-%d").date()

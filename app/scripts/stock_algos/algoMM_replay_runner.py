@@ -76,6 +76,8 @@ ALLOWED_MM_ALGOS = {
     "Algo3_MM": "app.scripts.stock_algos.Algo3_MM",
     "Algo4_MM": "app.scripts.stock_algos.Algo4_MM",
     "Algo5_MM": "app.scripts.stock_algos.Algo5_MM",
+    "Algo_SMI": "app.scripts.stock_algos.Algo1_MM",
+    "Algo_MACD": "app.scripts.stock_algos.Algo1_MM",
 }
 
 # Backward compatibility if an older session row says AlgoMM.
@@ -251,6 +253,8 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         "Algo3_MM": "Featureset_3",
         "Algo4_MM": "Featureset_4",
         "Algo5_MM": "Featureset_5",
+        "Algo_SMI": "SMI",
+        "Algo_MACD": "MACD",
     }
     cfg.feature_set = feature_sets.get(algo_name, "Featureset_1")
 
@@ -673,8 +677,8 @@ def run_algoMM_replay_tick(
         if open_trade is not None:
             update_open_trade_mark_replay(db, open_trade, bar_close_px, commit=True)
 
-        if cfg.algo_name in {"Algo3_MM", "Algo5_MM"}:
-            if cfg.algo_name == "Algo3_MM":
+        if cfg.algo_name in {"Algo_SMI", "Algo_MACD"}:
+            if cfg.algo_name == "Algo_SMI":
                 from app.scripts.stocks.bots.algo3_logic import determine_signals as _indicator_signals
                 indicator_name = "SMI"
             else:
@@ -1100,4 +1104,12 @@ def run_Algo4_MM_replay_tick(session_id: int, bar_idx: int, provider: ReplayData
 
 
 def run_Algo5_MM_replay_tick(session_id: int, bar_idx: int, provider: ReplayDataProvider, cfg: Optional[Any] = None):
+    return run_algoMM_replay_tick(session_id=session_id, bar_idx=bar_idx, provider=provider, cfg=cfg)
+
+
+def run_Algo_SMI_replay_tick(session_id: int, bar_idx: int, provider: ReplayDataProvider, cfg: Optional[Any] = None):
+    return run_algoMM_replay_tick(session_id=session_id, bar_idx=bar_idx, provider=provider, cfg=cfg)
+
+
+def run_Algo_MACD_replay_tick(session_id: int, bar_idx: int, provider: ReplayDataProvider, cfg: Optional[Any] = None):
     return run_algoMM_replay_tick(session_id=session_id, bar_idx=bar_idx, provider=provider, cfg=cfg)

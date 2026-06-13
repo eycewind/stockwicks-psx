@@ -24,6 +24,8 @@ ALGO_FEATURE_SETS = {
     "Algo3_MM": "Featureset_3",
     "Algo4_MM": "Featureset_4",
     "Algo5_MM": "Featureset_5",
+    "Algo_SMI": "SMI",
+    "Algo_MACD": "MACD",
 }
 
 _ET = ZoneInfo("America/New_York")
@@ -314,10 +316,10 @@ def _simulate_indicator_algo(
     eod_close: bool,
     params: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
-    if str(algo_name or "") == "Algo3_MM":
+    if str(algo_name or "") == "Algo_SMI":
         from app.scripts.stocks.bots.algo3_logic import determine_signals
         indicator_name = "SMI"
-    elif str(algo_name or "") == "Algo5_MM":
+    elif str(algo_name or "") == "Algo_MACD":
         from app.scripts.stocks.bots.algo5_logic import determine_signals
         indicator_name = "MACD"
     else:
@@ -463,7 +465,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
             continue
 
         for algo_name, feature_set in ALGO_FEATURE_SETS.items():
-            if algo_name in {"Algo3_MM", "Algo5_MM"}:
+            if algo_name in {"Algo_SMI", "Algo_MACD"}:
                 n = len(price_full)
                 test_start = int(max(1, n * (1.0 - req.oos_fraction)))
                 test_price = price_full.iloc[test_start:].copy()
@@ -494,7 +496,7 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                         "backtest_method": "indicator_only_holdout",
                         "backtest_method_label": "Indicator-only holdout scan",
                         "backtest_notes": (
-                            f"{algo_name} uses direct {'SMI' if algo_name == 'Algo3_MM' else 'MACD'} "
+                            f"{algo_name} uses direct {'SMI' if algo_name == 'Algo_SMI' else 'MACD'} "
                             "Buy_Signal/Sell_Signal logic plus percent stop/trailing guardrails. "
                             "No model training, no probability thresholds."
                         ),

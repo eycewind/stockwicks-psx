@@ -186,6 +186,23 @@
   };
 
   document.addEventListener("DOMContentLoaded", function() {
+    document.querySelectorAll("form").forEach((form) => {
+      const algo = form.querySelector("[name='algo_name']");
+      if (!algo) return;
+      function syncAlgoFields() {
+        const indicatorOnly = algo.value === "Algo_SMI" || algo.value === "Algo_MACD";
+        ["long_entry_prob", "short_entry_prob", "prob_exit_mode", "prob_trail_drop", "long_fixed_exit_prob", "short_fixed_exit_prob"].forEach((name) => {
+          const el = form.querySelector(`[name='${name}']`);
+          if (!el) return;
+          el.disabled = indicatorOnly;
+          const box = el.closest(".field") || el.parentElement;
+          if (box) box.style.opacity = indicatorOnly ? "0.45" : "1";
+        });
+      }
+      algo.addEventListener("change", syncAlgoFields);
+      syncAlgoFields();
+    });
+
     document.querySelectorAll(".js-prob-exit-mode").forEach((modeSelect) => {
       const form = modeSelect.closest("form");
       if (!form) return;
@@ -252,11 +269,13 @@
         <div class="field">
           <label>Algo</label>
           <select name="algo_name" required>
-            <option value="Algo1_MM">Algo1_MM — Featureset_1 (Original 12)</option>
-            <option value="Algo2_MM">Algo2_MM — Featureset_2 (OBV/VWAP 26)</option>
-            <option value="Algo3_MM">Algo3_MM — Featureset_3 (SMI only)</option>
-            <option value="Algo4_MM">Algo4_MM — Featureset_4</option>
-            <option value="Algo5_MM">Algo5_MM — Featureset_5 (MACD only)</option>
+            <option value="Algo1_MM">Algo1_MM - Model Featureset_1</option>
+            <option value="Algo2_MM">Algo2_MM - Model Featureset_2</option>
+            <option value="Algo3_MM">Algo3_MM - Model Featureset_3</option>
+            <option value="Algo4_MM">Algo4_MM - Model Featureset_4 legacy/adaptive</option>
+            <option value="Algo5_MM">Algo5_MM - Model Featureset_5</option>
+            <option value="Algo_SMI">Algo_SMI - Simple SMI -40/+40 cross</option>
+            <option value="Algo_MACD">Algo_MACD - Simple MACD crossover</option>
           </select>
         </div>
 
@@ -359,6 +378,9 @@
           <span>Mirror to Schwab (Live Orders)</span>
         </label>
       </div>
+      <small>
+        Algo1_MM-5_MM use probability models with their feature sets. Algo4_MM is the older adaptive MM model path with Featureset_4. Algo_SMI is SMI level cross only; Algo_MACD is MACD/signal cross only.
+      </small>
 
       <small>EOD Tip: The End of Day toggle closes any remaining positions at 3:50 pm ET Daily. For Day Traders with no overnight hold</small>
 
@@ -491,8 +513,8 @@
     </tbody>
   </table>
 
-<!-- Algo1_MM / Algo2_MM / Algo3_MM / Algo4_MM / Algo5_MM Live Candle Chart with Trade Markers -->
-<h2 class="section-title">Algo1_MM / Algo2_MM / Algo3_MM / Algo4_MM / Algo5_MM Live Chart</h2>
+<!-- Stock algo live candle chart with trade markers -->
+<h2 class="section-title">Stock Algo Live Chart</h2>
 <div class="charts-card">
   <div class="summary-header">
     <h3>Price Action + Trade Markers</h3>
@@ -500,13 +522,13 @@
       <select id="candleBotSelect" aria-label="Select bot for candle chart">
         {% set ns = namespace(found=false) %}
         {% for b in all_bots %}
-          {% if b.algo_name in ["Algo1_MM", "Algo2_MM", "Algo3_MM", "Algo4_MM", "Algo5_MM"] %}
+          {% if b.algo_name in ["Algo1_MM", "Algo2_MM", "Algo3_MM", "Algo4_MM", "Algo5_MM", "Algo_SMI", "Algo_MACD"] %}
             {% set ns.found = true %}
             <option value="{{ b.id }}">#{{ b.id }} {{ b.algo_name }} {{ b.symbol }} ({{ b.interval }})</option>
           {% endif %}
         {% endfor %}
         {% if not ns.found %}
-          <option value="">No Algo1_MM / Algo2_MM / Algo3_MM / Algo4_MM / Algo5_MM bots</option>
+          <option value="">No stock algo bots</option>
         {% endif %}
       </select>
       <button type="button" class="prob-zoom-btn active" id="candleRefreshBtn">↻ Refresh</button>

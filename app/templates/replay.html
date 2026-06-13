@@ -167,11 +167,13 @@
         <div>
           <label>Algo</label>
           <select name="algo_name" id="f_algo">
-            <option value="Algo1_MM" selected>Algo1_MM — Featureset_1 (Original 12)</option>
-            <option value="Algo2_MM">Algo2_MM — Featureset_2 (OBV/VWAP 26)</option>
-            <option value="Algo3_MM">Algo3_MM — Featureset_3 (SMI only)</option>
-            <option value="Algo4_MM">Algo4_MM — Featureset_4</option>
-            <option value="Algo5_MM">Algo5_MM — Featureset_5 (MACD only)</option>
+            <option value="Algo1_MM" selected>Algo1_MM - Model Featureset_1</option>
+            <option value="Algo2_MM">Algo2_MM - Model Featureset_2</option>
+            <option value="Algo3_MM">Algo3_MM - Model Featureset_3</option>
+            <option value="Algo4_MM">Algo4_MM - Model Featureset_4 legacy/adaptive</option>
+            <option value="Algo5_MM">Algo5_MM - Model Featureset_5</option>
+            <option value="Algo_SMI">Algo_SMI - Simple SMI -40/+40 cross</option>
+            <option value="Algo_MACD">Algo_MACD - Simple MACD crossover</option>
           </select>
         </div>
         <div>
@@ -266,7 +268,7 @@
         <label><input type="checkbox" name="eod_auto_close" value="on" checked> Close EOD</label>
       </div>
       <p class="muted" style="font-size:0.8rem; margin-top:10px;">
-        Replay supports probability algos plus indicator-only SMI and MACD modes.
+        Algo1_MM-5_MM use probability models. Algo4_MM is the older adaptive MM model path. Algo_SMI and Algo_MACD are indicator-only and should match their live bot runners.
         Dates must be within the last 30 days. If you've never ingested data for this symbol, we'll auto-download on Submit.
       </p>
     </form>
@@ -411,6 +413,27 @@ function showError(msg) {
 // =============================================================================
 
 var REPLAY_BASE = "{{ url_prefix }}/replay-simulator";
+
+function syncAlgoFields(form) {
+  if (!form) return;
+  const algo = form.querySelector("[name='algo_name']");
+  if (!algo) return;
+  const indicatorOnly = algo.value === "Algo_SMI" || algo.value === "Algo_MACD";
+  ["long_entry_prob", "short_entry_prob", "prob_exit_mode", "prob_trail_drop", "long_fixed_exit_prob", "short_fixed_exit_prob"].forEach((name) => {
+    const el = form.querySelector(`[name='${name}']`);
+    if (!el) return;
+    el.disabled = indicatorOnly;
+    const box = el.parentElement;
+    if (box) box.style.opacity = indicatorOnly ? "0.45" : "1";
+  });
+}
+
+const startFormEl = document.getElementById("startForm");
+if (startFormEl) {
+  const algoSelect = startFormEl.querySelector("[name='algo_name']");
+  if (algoSelect) algoSelect.addEventListener("change", () => syncAlgoFields(startFormEl));
+  syncAlgoFields(startFormEl);
+}
 
 document.getElementById("startForm").addEventListener("submit", async (e) => {
   e.preventDefault();

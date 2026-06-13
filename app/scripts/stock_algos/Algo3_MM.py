@@ -758,9 +758,6 @@ def run_algoMM_bot_tick(
     anchor_dt: Optional[datetime] = None,
     _backfill: bool = False,
 ):
-    from app.scripts.stock_algos.algo3_runner import run_algo3_bot_tick
-    return run_algo3_bot_tick(bot_id, anchor_dt=anchor_dt)
-
     db: Session = SessionLocal()
     runner = StockBaseRunner()
 

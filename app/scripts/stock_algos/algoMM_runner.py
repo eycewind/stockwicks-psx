@@ -25,12 +25,16 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
     finally:
         db.close()
 
-    if algo_name == "Algo5_MM":
+    if algo_name == "Algo_MACD":
         from app.scripts.stock_algos.algo2_runner import run_algo2_bot_tick as _run
+    elif algo_name == "Algo_SMI":
+        from app.scripts.stock_algos.algo3_runner import run_algo3_bot_tick as _run
+    elif algo_name == "Algo5_MM":
+        from app.scripts.stock_algos.Algo5_MM import run_algoMM_bot_tick as _run
     elif algo_name == "Algo4_MM":
         from app.scripts.stock_algos.Algo4_MM import run_algoMM_bot_tick as _run
     elif algo_name == "Algo3_MM":
-        from app.scripts.stock_algos.algo3_runner import run_algo3_bot_tick as _run
+        from app.scripts.stock_algos.Algo3_MM import run_algoMM_bot_tick as _run
     elif algo_name == "Algo2_MM":
         from app.scripts.stock_algos.Algo2_MM import run_algoMM_bot_tick as _run
     else:
