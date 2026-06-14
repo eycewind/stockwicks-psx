@@ -31,6 +31,10 @@
   .window { color:#c7d2fe; line-height:1.4; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; font-size:.86rem; }
   th { background:#2d2d5c; color:#4fd1c5; text-align:left; padding:10px 8px; font-size:.74rem; text-transform:uppercase; letter-spacing:.4px; }
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable::after { content:""; display:inline-block; width:.8em; margin-left:5px; color:#c7d2fe; }
+  th.sortable.sort-asc::after { content:"^"; }
+  th.sortable.sort-desc::after { content:"v"; }
   td { padding:10px 8px; border-bottom:1px solid #2a2a55; color:#e5e7eb; vertical-align:top; }
   tbody tr:nth-child(odd) td { background:#1b1b3a; }
   tbody tr:nth-child(even) td { background:#21214a; }
@@ -145,16 +149,16 @@
         <table>
           <thead>
             <tr>
-              <th>Rank</th>
-              <th>Algo</th>
-              <th>Interval</th>
-              <th>Confidence</th>
-              <th>P/L</th>
-              <th>Trades</th>
-              <th>Win Rate</th>
-              <th>Drawdown</th>
-              <th>Test Window</th>
-              <th>Parameters</th>
+              <th class="sortable" data-table="top" data-sort="rank">Rank</th>
+              <th class="sortable" data-table="top" data-sort="algo_name">Algo</th>
+              <th class="sortable" data-table="top" data-sort="interval">Interval</th>
+              <th class="sortable" data-table="top" data-sort="confidence">Confidence</th>
+              <th class="sortable" data-table="top" data-sort="total_profit">P/L</th>
+              <th class="sortable" data-table="top" data-sort="num_trades">Trades</th>
+              <th class="sortable" data-table="top" data-sort="win_rate">Win Rate</th>
+              <th class="sortable" data-table="top" data-sort="max_drawdown">Drawdown</th>
+              <th class="sortable" data-table="top" data-sort="first_test_bar">Test Window</th>
+              <th class="sortable" data-table="top" data-sort="params">Parameters</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -169,14 +173,14 @@
         <table>
           <thead>
             <tr>
-              <th>Algo</th>
-              <th>Interval</th>
-              <th>Confidence</th>
-              <th>P/L</th>
-              <th>Trades</th>
-              <th>Win Rate</th>
-              <th>Test Window</th>
-              <th>Parameters</th>
+              <th class="sortable" data-table="algo" data-sort="algo_name">Algo</th>
+              <th class="sortable" data-table="algo" data-sort="interval">Interval</th>
+              <th class="sortable" data-table="algo" data-sort="confidence">Confidence</th>
+              <th class="sortable" data-table="algo" data-sort="total_profit">P/L</th>
+              <th class="sortable" data-table="algo" data-sort="num_trades">Trades</th>
+              <th class="sortable" data-table="algo" data-sort="win_rate">Win Rate</th>
+              <th class="sortable" data-table="algo" data-sort="first_test_bar">Test Window</th>
+              <th class="sortable" data-table="algo" data-sort="params">Parameters</th>
             </tr>
           </thead>
           <tbody id="algoBody"></tbody>
@@ -199,6 +203,12 @@ const BATCH_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-qqq-batc
 const NEXT_SYMBOL_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-next-qqq-symbol";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 let latestRows = [];
+let topRows = [];
+let algoRows = [];
+let sortState = {
+  top: { key: null, direction: "desc" },
+  algo: { key: null, direction: "desc" }
+};
 let activePoll = null;
 
 function money(v) {
@@ -246,6 +256,73 @@ function rowParams(r) {
   if (r.long_fixed_exit_prob !== null && r.long_fixed_exit_prob !== undefined) parts.push(`LFix ${Number(r.long_fixed_exit_prob).toFixed(2)}`);
   if (r.short_fixed_exit_prob !== null && r.short_fixed_exit_prob !== undefined) parts.push(`SFix ${Number(r.short_fixed_exit_prob).toFixed(2)}`);
   return parts.join(" | ");
+}
+
+function confidenceRank(v) {
+  return { Low: 1, Medium: 2, High: 3 }[String(v || "")] || 0;
+}
+
+function sortValue(r, key, idx) {
+  if (key === "rank") return idx;
+  if (key === "confidence") return confidenceRank(r.confidence);
+  if (key === "params") return rowParams(r).toLowerCase();
+  if (["total_profit", "num_trades", "win_rate", "max_drawdown", "score"].includes(key)) {
+    return Number(r[key] || 0);
+  }
+  if (["first_test_bar", "last_test_bar"].includes(key)) {
+    const d = new Date(r[key] || 0);
+    return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  return String(r[key] || "").toLowerCase();
+}
+
+function sortedRows(rows, tableName) {
+  const state = sortState[tableName] || {};
+  if (!state.key) return rows.slice();
+  const direction = state.direction === "asc" ? 1 : -1;
+  return rows
+    .map((row, idx) => ({ row, idx }))
+    .sort((a, b) => {
+      const av = sortValue(a.row, state.key, a.idx);
+      const bv = sortValue(b.row, state.key, b.idx);
+      if (typeof av === "number" && typeof bv === "number") {
+        return (av - bv || a.idx - b.idx) * direction;
+      }
+      return (String(av).localeCompare(String(bv)) || a.idx - b.idx) * direction;
+    })
+    .map(item => item.row);
+}
+
+function updateSortIndicators() {
+  document.querySelectorAll("th.sortable").forEach((th) => {
+    const tableName = th.dataset.table;
+    const state = sortState[tableName] || {};
+    th.classList.toggle("sort-asc", state.key === th.dataset.sort && state.direction === "asc");
+    th.classList.toggle("sort-desc", state.key === th.dataset.sort && state.direction === "desc");
+  });
+}
+
+function renderTables() {
+  const visibleTopRows = sortedRows(topRows, "top");
+  const visibleAlgoRows = sortedRows(algoRows, "algo");
+  latestRows = visibleTopRows;
+  renderRows(visibleTopRows, "topBody", true);
+  renderRows(visibleAlgoRows, "algoBody", false);
+  updateSortIndicators();
+}
+
+function defaultSortDirection(key) {
+  if (["algo_name", "interval", "confidence", "params", "rank", "first_test_bar"].includes(key)) return "asc";
+  return "desc";
+}
+
+function setTableSort(tableName, key) {
+  const current = sortState[tableName] || { key: null, direction: "desc" };
+  const nextDirection = current.key === key
+    ? (current.direction === "desc" ? "asc" : "desc")
+    : defaultSortDirection(key);
+  sortState[tableName] = { key, direction: nextDirection };
+  renderTables();
 }
 
 function replayText(r) {
@@ -313,18 +390,18 @@ function renderRows(rows, targetId, showRank) {
 }
 
 function renderScanResult(data) {
-  latestRows = data.top || [];
+  topRows = data.top || [];
+  algoRows = data.best_by_algo || [];
   const progress = data.symbol_count ? `${data.completed_symbol_count || 0}/${data.symbol_count}` : "-";
   const status = data.batch_status ? ` (${data.batch_status})` : "";
   document.getElementById("summarySymbol").textContent = data.symbol || "-";
   document.getElementById("summaryIntervals").textContent = (data.intervals || []).join(", ") || "-";
   document.getElementById("summaryCombos").textContent = data.symbol_count ? progress : String(data.tested_combinations || 0);
-  document.getElementById("summaryBest").textContent = latestRows[0] ? `${latestRows[0].algo_name} ${latestRows[0].interval}` : "-";
+  document.getElementById("summaryBest").textContent = topRows[0] ? `${topRows[0].algo_name} ${topRows[0].interval}` : "-";
   document.getElementById("summaryMethod").textContent = data.backtest_method_label || data.backtest_method || "-";
   document.getElementById("summaryOos").textContent = data.oos_fraction ? `${pct(data.oos_fraction)} validation+holdout` : "-";
   document.getElementById("summaryMethodNote").textContent = `${data.backtest_explanation || ""}${status}`;
-  renderRows(latestRows, "topBody", true);
-  renderRows(data.best_by_algo || [], "algoBody", false);
+  renderTables();
 
   const errors = data.errors || [];
   document.getElementById("errorsCard").style.display = errors.length ? "block" : "none";
@@ -547,6 +624,9 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
 document.getElementById("latestBtn").addEventListener("click", () => loadLatestCached(true));
 document.getElementById("nextSymbolBtn").addEventListener("click", runNextQqqSymbol);
 document.getElementById("qqqBatchBtn").addEventListener("click", runQqqBatch);
+document.querySelectorAll("th.sortable").forEach((th) => {
+  th.addEventListener("click", () => setTableSort(th.dataset.table, th.dataset.sort));
+});
 loadLatestCached(false);
 </script>
 {% endblock %}
