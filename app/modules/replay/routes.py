@@ -20,12 +20,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import csv
 import sys
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -67,6 +69,12 @@ CHEATSHEET_JOB_TTL_SEC = 60 * 60 * 2
 _cheatsheet_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CHEATSHEET_MAX_WORKERS", "2")))
 _cheatsheet_jobs: dict[str, dict] = {}
 _cheatsheet_jobs_lock = threading.Lock()
+
+REPO_PATH = Path(REPO_ROOT)
+QQQ_LIST_PATH = REPO_PATH / "app" / "scripts" / "qqq_list.csv"
+OPTIMIZER_CACHE_DIR = Path(os.getenv("DATA_DIR", "data")) / "strategy_optimizer"
+OPTIMIZER_LATEST_JSON = OPTIMIZER_CACHE_DIR / "latest_recommendations.json"
+OPTIMIZER_LATEST_CSV = OPTIMIZER_CACHE_DIR / "latest_recommendations.csv"
 
 
 def _cheatsheet_redis_client():
@@ -180,6 +188,213 @@ def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
             _store_cheatsheet_job(job_id, job)
 
 
+def _read_qqq_symbols(limit: int | None = None) -> list[str]:
+    if not QQQ_LIST_PATH.exists():
+        raise FileNotFoundError(f"QQQ symbol list not found: {QQQ_LIST_PATH}")
+
+    symbols: list[str] = []
+    with QQQ_LIST_PATH.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            symbol = str(row.get("Symbol") or "").upper().strip()
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+            if limit and len(symbols) >= limit:
+                break
+    if not symbols:
+        raise ValueError(f"No symbols found in {QQQ_LIST_PATH}")
+    return symbols
+
+
+def _write_optimizer_cache(result: dict) -> None:
+    OPTIMIZER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(result, default=str, indent=2)
+    OPTIMIZER_LATEST_JSON.write_text(payload, encoding="utf-8")
+
+    rows = result.get("best_by_symbol_algo") or result.get("top") or []
+    csv_fields = [
+        "symbol",
+        "interval",
+        "algo_name",
+        "feature_set",
+        "confidence",
+        "total_profit",
+        "num_trades",
+        "win_rate",
+        "max_drawdown",
+        "score",
+        "stop_loss_pct",
+        "trailing_profit_pct",
+        "long_entry_prob",
+        "short_entry_prob",
+        "prob_exit_mode",
+        "prob_trail_drop",
+        "long_fixed_exit_prob",
+        "short_fixed_exit_prob",
+        "first_test_bar",
+        "last_test_bar",
+        "backtest_method",
+    ]
+    with OPTIMIZER_LATEST_CSV.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=csv_fields, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _load_optimizer_cache() -> dict | None:
+    if not OPTIMIZER_LATEST_JSON.exists():
+        return None
+    try:
+        data = json.loads(OPTIMIZER_LATEST_JSON.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        log.warning("[CHEATSHEET] could not read optimizer cache: %s", exc)
+        return None
+
+
+def _filter_optimizer_cache(data: dict, symbol: str | None = None) -> dict:
+    if not symbol:
+        return data
+    wanted = symbol.upper().strip()
+    if not wanted:
+        return data
+
+    filtered = dict(data)
+    top = [r for r in (data.get("top") or []) if str(r.get("symbol") or "").upper() == wanted]
+    all_best = [
+        r
+        for r in (data.get("best_by_symbol_algo") or data.get("best_by_algo") or [])
+        if str(r.get("symbol") or "").upper() == wanted
+    ]
+    if not top:
+        top = sorted(
+            all_best,
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                float(r.get("validation_total_profit") or 0.0),
+                float(r.get("win_rate") or 0.0),
+                -float(r.get("max_drawdown") or 0.0),
+            ),
+            reverse=True,
+        )[:50]
+    filtered["symbol"] = wanted
+    filtered["top"] = top
+    filtered["best_by_algo"] = all_best
+    filtered["best_by_symbol_algo"] = all_best
+    filtered["filtered_from_cache"] = True
+    return filtered
+
+
+def _run_qqq_batch_job(job_id: str, req_template: CheatSheetRequest, *, limit: int | None = None) -> None:
+    try:
+        symbols = _read_qqq_symbols(limit=limit)
+        started_at = datetime.utcnow().isoformat()
+        all_top: list[dict] = []
+        all_best: list[dict] = []
+        errors: list[str] = []
+        tested_combinations = 0
+
+        with _cheatsheet_jobs_lock:
+            job = _cheatsheet_jobs.get(job_id)
+            if job:
+                job["status"] = "running"
+                job["message"] = f"QQQ batch running: 0/{len(symbols)} symbols complete."
+                job["updated_at"] = time.time()
+                _store_cheatsheet_job(job_id, job)
+
+        for idx, symbol in enumerate(symbols, start=1):
+            try:
+                req = CheatSheetRequest(
+                    symbol=symbol,
+                    intervals=req_template.intervals,
+                    trade_size=req_template.trade_size,
+                    builder_days=req_template.builder_days,
+                    k_forward=req_template.k_forward,
+                    profile=req_template.profile,
+                    allow_short=req_template.allow_short,
+                    eod_close=req_template.eod_close,
+                    oos_fraction=req_template.oos_fraction,
+                )
+                result = run_cheatsheet(req)
+                tested_combinations += int(result.get("tested_combinations") or 0)
+                all_top.extend(result.get("top") or [])
+                all_best.extend(result.get("best_by_algo") or [])
+                errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
+            except Exception as exc:
+                log.exception("[CHEATSHEET] QQQ batch failed for symbol=%s", symbol)
+                errors.append(f"{symbol}: {exc}")
+
+            with _cheatsheet_jobs_lock:
+                job = _cheatsheet_jobs.get(job_id)
+                if job:
+                    job["message"] = f"QQQ batch running: {idx}/{len(symbols)} symbols complete."
+                    job["updated_at"] = time.time()
+                    _store_cheatsheet_job(job_id, job)
+
+        all_top.sort(
+            key=lambda r: (
+                float(r.get("score") or 0.0),
+                float(r.get("validation_total_profit") or 0.0),
+                float(r.get("win_rate") or 0.0),
+                -float(r.get("max_drawdown") or 0.0),
+            ),
+            reverse=True,
+        )
+        all_best.sort(
+            key=lambda r: (
+                str(r.get("symbol") or ""),
+                str(r.get("interval") or ""),
+                str(r.get("algo_name") or ""),
+            )
+        )
+
+        result = {
+            "symbol": "QQQ_LIST",
+            "intervals": req_template.intervals,
+            "profile": req_template.profile,
+            "backtest_method": "cached_qqq_batch",
+            "backtest_method_label": "Cached QQQ symbol batch",
+            "backtest_explanation": (
+                "This file is generated by scanning every symbol in app/scripts/qqq_list.csv "
+                "across all supported algos, then saving the latest recommendations so the "
+                "page can load them without rerunning every scan."
+            ),
+            "oos_fraction": float(req_template.oos_fraction),
+            "tested_combinations": tested_combinations,
+            "symbols_scanned": symbols,
+            "symbol_count": len(symbols),
+            "generated_at": datetime.utcnow().isoformat(),
+            "started_at": started_at,
+            "cache_json": str(OPTIMIZER_LATEST_JSON),
+            "cache_csv": str(OPTIMIZER_LATEST_CSV),
+            "top": all_top[:50],
+            "best_by_algo": all_best[:200],
+            "best_by_symbol_algo": all_best,
+            "errors": errors,
+        }
+        _write_optimizer_cache(result)
+
+        with _cheatsheet_jobs_lock:
+            job = _cheatsheet_jobs.get(job_id)
+            if job:
+                job["status"] = "succeeded"
+                job["result"] = result
+                job["message"] = f"QQQ batch complete. Saved {len(all_best)} recommendations."
+                job["updated_at"] = time.time()
+                _store_cheatsheet_job(job_id, job)
+    except Exception as exc:
+        log.exception("[CHEATSHEET] QQQ batch job failed job_id=%s", job_id)
+        with _cheatsheet_jobs_lock:
+            job = _cheatsheet_jobs.get(job_id)
+            if job:
+                job["status"] = "failed"
+                job["error"] = str(exc)
+                job["message"] = "QQQ batch failed."
+                job["updated_at"] = time.time()
+                _store_cheatsheet_job(job_id, job)
+
+
 # Commercial MM replay config: keep aligned with paper_trade_bot.py and
 # app/scripts/stock_algos/Algo1_MM.py / Algo2_MM.py / Algo3_MM.py / Algo4_MM.py / Algo5_MM.py.
 ALLOWED_MM_ALGOS = {
@@ -198,11 +413,13 @@ DEFAULT_REPLAY_MM_CONFIG = {
     "prob_smoothing_bars": 3,
     "prob_trail_drop": 0.05,
     "prob_exit_mode": "trailing",
-    "long_fixed_exit_prob": 0.55,
-    "short_fixed_exit_prob": 0.55,
+    "long_fixed_exit_prob": 0.40,
+    "short_fixed_exit_prob": 0.60,
     "stop_loss_usd": 300.0,
     "hard_stop_usd": 300.0,
     "trailing_profit_usd": 75.0,
+    "stop_loss_pct": 0.02,
+    "trailing_profit_pct": 0.005,
     "force_retrain_each_tick": True,
     "builder_days": 30,
     "k_forward": 3,
@@ -234,6 +451,8 @@ def _build_mm_replay_config(
     allow_short_selling: str | None,
     stop_loss_usd: float | None,
     trailing_profit_usd: float | None,
+    stop_loss_pct: float | None,
+    trailing_profit_pct: float | None,
     prob_trail_drop: float | None,
     prob_exit_mode: str | None,
     long_fixed_exit_prob: float | None,
@@ -313,6 +532,22 @@ def _build_mm_replay_config(
         "trailing_profit_usd": _safe_float_form(
             trailing_profit_usd,
             DEFAULT_REPLAY_MM_CONFIG["trailing_profit_usd"],
+        ),
+        "stop_loss_pct": _safe_float_form(
+            stop_loss_pct,
+            DEFAULT_REPLAY_MM_CONFIG["stop_loss_pct"],
+        ),
+        "per_share_stop_pct": _safe_float_form(
+            stop_loss_pct,
+            DEFAULT_REPLAY_MM_CONFIG["stop_loss_pct"],
+        ),
+        "trailing_profit_pct": _safe_float_form(
+            trailing_profit_pct,
+            DEFAULT_REPLAY_MM_CONFIG["trailing_profit_pct"],
+        ),
+        "per_share_trailing_profit_pct": _safe_float_form(
+            trailing_profit_pct,
+            DEFAULT_REPLAY_MM_CONFIG["trailing_profit_pct"],
         ),
         "eod_close": _checkbox_on(eod_auto_close),
         "allow_short": _checkbox_on(allow_short_selling),
@@ -409,6 +644,15 @@ def _serialize_session(s: ReplaySession) -> dict:
                 cfg.get(
                     "trailing_profit_usd",
                     cfg.get("trailing_stop_distance", cfg.get("trailing_stop_activation", DEFAULT_REPLAY_MM_CONFIG["trailing_profit_usd"])),
+                )
+            ),
+            "stop_loss_pct": float(
+                cfg.get("stop_loss_pct", cfg.get("per_share_stop_pct", DEFAULT_REPLAY_MM_CONFIG["stop_loss_pct"]))
+            ),
+            "trailing_profit_pct": float(
+                cfg.get(
+                    "trailing_profit_pct",
+                    cfg.get("per_share_trailing_profit_pct", DEFAULT_REPLAY_MM_CONFIG["trailing_profit_pct"]),
                 )
             ),
             "long_entry_prob": float(cfg.get("long_entry_prob", DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"])),
@@ -602,6 +846,81 @@ def run_backtest_cheatsheet(
     )
 
 
+@router.get("/analysis/cheatsheet/api/latest")
+@router.get("/analysis/strategy-optimizer/api/latest")
+@router.get("/auth/backtest-cheatsheet/api/latest")
+def latest_backtest_cheatsheet(
+    symbol: str = "",
+    user: User = Depends(get_current_user),
+):
+    data = _load_optimizer_cache()
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail="No cached recommendations found. Run the QQQ batch once first.",
+        )
+    return JSONResponse(_filter_optimizer_cache(data, symbol))
+
+
+@router.post("/analysis/cheatsheet/api/run-qqq-batch")
+@router.post("/analysis/strategy-optimizer/api/run-qqq-batch")
+@router.post("/auth/backtest-cheatsheet/api/run-qqq-batch")
+def run_qqq_backtest_cheatsheet(
+    intervals: str = Form("5min"),
+    trade_size: float = Form(100.0),
+    builder_days: int = Form(DEFAULT_REPLAY_MM_CONFIG["builder_days"]),
+    k_forward: int = Form(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
+    profile: str = Form("quick"),
+    allow_short_selling: str = Form("on"),
+    eod_auto_close: str = Form("on"),
+    limit: int | None = Form(None),
+    user: User = Depends(get_current_user),
+):
+    parsed_intervals = tuple(
+        i.strip().lower()
+        for i in str(intervals or "5min").replace(";", ",").split(",")
+        if i.strip()
+    )
+    allowed_intervals = {"1min", "5min", "10min", "15min", "30min", "1d"}
+    if not parsed_intervals or any(i not in allowed_intervals for i in parsed_intervals):
+        raise HTTPException(status_code=400, detail="Choose one or more supported intervals")
+
+    req = CheatSheetRequest(
+        symbol="QQQ_LIST",
+        intervals=parsed_intervals,
+        trade_size=max(float(trade_size or 1.0), 1.0),
+        builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
+        k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
+        profile=str(profile or "quick").lower(),
+        allow_short=_checkbox_on(allow_short_selling),
+        eod_close=_checkbox_on(eod_auto_close),
+    )
+    safe_limit = max(int(limit or 0), 0) or None
+    _cleanup_cheatsheet_jobs()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _cheatsheet_jobs_lock:
+        _cheatsheet_jobs[job_id] = {
+            "user_id": user.id,
+            "status": "queued",
+            "message": "QQQ batch scan queued.",
+            "result": None,
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
+    _cheatsheet_executor.submit(_run_qqq_batch_job, job_id, req, limit=safe_limit)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "queued",
+            "message": "QQQ batch scan started. Latest recommendations will be saved when it finishes.",
+        },
+    )
+
+
 @router.get("/analysis/cheatsheet/api/status/{job_id}")
 @router.get("/analysis/strategy-optimizer/api/status/{job_id}")
 @router.get("/auth/backtest-cheatsheet/api/status/{job_id}")
@@ -631,6 +950,8 @@ def start_replay(
     trade_size: float = Form(100.0),
     stop_loss_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["stop_loss_usd"]),
     trailing_profit_usd: float = Form(DEFAULT_REPLAY_MM_CONFIG["trailing_profit_usd"]),
+    stop_loss_pct: float = Form(DEFAULT_REPLAY_MM_CONFIG["stop_loss_pct"]),
+    trailing_profit_pct: float = Form(DEFAULT_REPLAY_MM_CONFIG["trailing_profit_pct"]),
     prob_trail_drop: float = Form(DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"]),
     prob_exit_mode: str = Form(DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"]),
     long_fixed_exit_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["long_fixed_exit_prob"]),
@@ -721,6 +1042,8 @@ def start_replay(
                 allow_short_selling=allow_short_selling,
                 stop_loss_usd=stop_loss_usd,
                 trailing_profit_usd=trailing_profit_usd,
+                stop_loss_pct=stop_loss_pct,
+                trailing_profit_pct=trailing_profit_pct,
                 prob_trail_drop=prob_trail_drop,
                 prob_exit_mode=prob_exit_mode,
                 long_fixed_exit_prob=long_fixed_exit_prob,

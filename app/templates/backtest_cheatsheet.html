@@ -89,6 +89,12 @@
         <div>
           <button class="btn btn-primary" id="runBtn" type="submit">Run Scan</button>
         </div>
+        <div>
+          <button class="btn btn-secondary" id="latestBtn" type="button">Load Latest</button>
+        </div>
+        <div>
+          <button class="btn btn-secondary" id="qqqBatchBtn" type="button">Run QQQ Batch</button>
+        </div>
       </div>
       <div class="checks">
         <label><input type="checkbox" name="allow_short_selling" checked> Allow Short</label>
@@ -185,6 +191,8 @@
 <script>
 const API_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run";
 const STATUS_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/status";
+const LATEST_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/latest";
+const BATCH_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-qqq-batch";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 let latestRows = [];
 let activePoll = null;
@@ -340,18 +348,21 @@ async function pollScanJob(jobId) {
       if (!res.ok) {
         setStatus(data.detail || "Could not check scan status.", "error");
         btn.disabled = false;
+        document.getElementById("qqqBatchBtn").disabled = false;
         return;
       }
       if (data.status === "succeeded") {
         activePoll = null;
         renderScanResult(data.result || {});
         btn.disabled = false;
+        document.getElementById("qqqBatchBtn").disabled = false;
         return;
       }
       if (data.status === "failed") {
         activePoll = null;
         setStatus(data.error || "Strategy scan failed.", "error");
         btn.disabled = false;
+        document.getElementById("qqqBatchBtn").disabled = false;
         return;
       }
 
@@ -362,10 +373,74 @@ async function pollScanJob(jobId) {
       activePoll = null;
       setStatus("Network error while checking scan status: " + err, "error");
       btn.disabled = false;
+      document.getElementById("qqqBatchBtn").disabled = false;
     }
   }
 
   activePoll = setTimeout(tick, 1200);
+}
+
+async function loadLatestCached(showMissing = true) {
+  const btn = document.getElementById("latestBtn");
+  const symbol = document.getElementById("f_symbol").value.trim();
+  const url = symbol ? `${LATEST_URL}?symbol=${encodeURIComponent(symbol)}` : LATEST_URL;
+  btn.disabled = true;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (showMissing) setStatus(data.detail || "No cached recommendations found.", "error");
+      return;
+    }
+    renderScanResult(data);
+    const generated = data.generated_at ? ` Generated ${barTime(data.generated_at)}.` : "";
+    setStatus(`Loaded latest cached recommendations.${generated}`, "info");
+  } catch (err) {
+    if (showMissing) setStatus("Network error loading latest recommendations: " + err, "error");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runQqqBatch() {
+  const batchBtn = document.getElementById("qqqBatchBtn");
+  const runBtn = document.getElementById("runBtn");
+  batchBtn.disabled = true;
+  runBtn.disabled = true;
+  if (activePoll) {
+    clearTimeout(activePoll);
+    activePoll = null;
+  }
+  setStatus("Running QQQ batch. This scans every symbol in app/scripts/qqq_list.csv across all algos and saves the latest file.", "info");
+
+  try {
+    const res = await fetch(BATCH_URL, {
+      method: "POST",
+      body: new FormData(document.getElementById("scanForm")),
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(data.detail || "QQQ batch failed to start.", "error");
+      batchBtn.disabled = false;
+      runBtn.disabled = false;
+      return;
+    }
+    setStatus(data.message || "QQQ batch started. Waiting for results.", "info");
+    await pollScanJob(data.job_id);
+  } catch (err) {
+    setStatus("Network error starting QQQ batch: " + err, "error");
+    batchBtn.disabled = false;
+    runBtn.disabled = false;
+  }
 }
 
 document.getElementById("scanForm").addEventListener("submit", async (event) => {
@@ -414,5 +489,9 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
     if (!activePoll) btn.disabled = false;
   }
 });
+
+document.getElementById("latestBtn").addEventListener("click", () => loadLatestCached(true));
+document.getElementById("qqqBatchBtn").addEventListener("click", runQqqBatch);
+loadLatestCached(false);
 </script>
 {% endblock %}
