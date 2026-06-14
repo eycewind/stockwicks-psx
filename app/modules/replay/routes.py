@@ -206,6 +206,82 @@ def _read_qqq_symbols(limit: int | None = None) -> list[str]:
     return symbols
 
 
+def _optimizer_cache_key(req: CheatSheetRequest) -> dict:
+    return {
+        "intervals": list(req.intervals),
+        "trade_size": float(req.trade_size),
+        "builder_days": int(req.builder_days),
+        "k_forward": int(req.k_forward),
+        "profile": str(req.profile),
+        "allow_short": bool(req.allow_short),
+        "eod_close": bool(req.eod_close),
+        "oos_fraction": float(req.oos_fraction),
+    }
+
+
+def _same_optimizer_settings(data: dict | None, req: CheatSheetRequest) -> bool:
+    return bool(data and data.get("settings_key") == _optimizer_cache_key(req))
+
+
+def _sort_optimizer_rows(rows: list[dict]) -> list[dict]:
+    return sorted(
+        rows,
+        key=lambda r: (
+            float(r.get("score") or 0.0),
+            float(r.get("validation_total_profit") or 0.0),
+            float(r.get("win_rate") or 0.0),
+            -float(r.get("max_drawdown") or 0.0),
+        ),
+        reverse=True,
+    )
+
+
+def _build_optimizer_cache_result(
+    *,
+    req_template: CheatSheetRequest,
+    symbols: list[str],
+    all_top: list[dict],
+    all_best: list[dict],
+    errors: list[str],
+    tested_combinations: int,
+    started_at: str,
+    status: str,
+    last_symbol: str | None = None,
+) -> dict:
+    completed_symbols = sorted({str(r.get("symbol") or "").upper() for r in all_best if r.get("symbol")})
+    top_rows = _sort_optimizer_rows(all_top or all_best)
+    return {
+        "symbol": "QQQ_LIST",
+        "intervals": req_template.intervals,
+        "profile": req_template.profile,
+        "settings_key": _optimizer_cache_key(req_template),
+        "backtest_method": "cached_qqq_batch",
+        "backtest_method_label": "Cached QQQ symbol batch",
+        "backtest_explanation": (
+            "This cache is built one symbol at a time from app/scripts/qqq_list.csv "
+            "across all supported algos. Partial results are saved after every symbol, "
+            "so the page can load the latest available recommendations while the batch continues."
+        ),
+        "batch_status": status,
+        "oos_fraction": float(req_template.oos_fraction),
+        "tested_combinations": tested_combinations,
+        "symbols_scanned": completed_symbols,
+        "symbols_requested": symbols,
+        "symbol_count": len(symbols),
+        "completed_symbol_count": len(completed_symbols),
+        "remaining_symbol_count": max(len(symbols) - len(completed_symbols), 0),
+        "last_symbol": last_symbol,
+        "generated_at": datetime.utcnow().isoformat(),
+        "started_at": started_at,
+        "cache_json": str(OPTIMIZER_LATEST_JSON),
+        "cache_csv": str(OPTIMIZER_LATEST_CSV),
+        "top": top_rows[:50],
+        "best_by_algo": _sort_optimizer_rows(all_best)[:200],
+        "best_by_symbol_algo": all_best,
+        "errors": errors,
+    }
+
+
 def _write_optimizer_cache(result: dict) -> None:
     OPTIMIZER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(result, default=str, indent=2)
@@ -286,24 +362,46 @@ def _filter_optimizer_cache(data: dict, symbol: str | None = None) -> dict:
     return filtered
 
 
-def _run_qqq_batch_job(job_id: str, req_template: CheatSheetRequest, *, limit: int | None = None) -> None:
+def _run_qqq_batch_job(
+    job_id: str,
+    req_template: CheatSheetRequest,
+    *,
+    limit: int | None = None,
+    max_new_symbols: int | None = None,
+    resume: bool = True,
+) -> None:
     try:
         symbols = _read_qqq_symbols(limit=limit)
         started_at = datetime.utcnow().isoformat()
-        all_top: list[dict] = []
-        all_best: list[dict] = []
-        errors: list[str] = []
-        tested_combinations = 0
+        existing = _load_optimizer_cache() if resume else None
+        if _same_optimizer_settings(existing, req_template):
+            all_top: list[dict] = list(existing.get("top") or [])
+            all_best: list[dict] = list(existing.get("best_by_symbol_algo") or existing.get("best_by_algo") or [])
+            errors: list[str] = list(existing.get("errors") or [])
+            tested_combinations = int(existing.get("tested_combinations") or 0)
+            started_at = str(existing.get("started_at") or started_at)
+        else:
+            all_top = []
+            all_best = []
+            errors = []
+            tested_combinations = 0
+        completed_symbols = {str(r.get("symbol") or "").upper() for r in all_best if r.get("symbol")}
 
         with _cheatsheet_jobs_lock:
             job = _cheatsheet_jobs.get(job_id)
             if job:
                 job["status"] = "running"
-                job["message"] = f"QQQ batch running: 0/{len(symbols)} symbols complete."
+                job["message"] = f"QQQ batch running: {len(completed_symbols)}/{len(symbols)} symbols complete."
                 job["updated_at"] = time.time()
                 _store_cheatsheet_job(job_id, job)
 
+        new_symbol_count = 0
         for idx, symbol in enumerate(symbols, start=1):
+            if symbol in completed_symbols:
+                continue
+            if max_new_symbols is not None and new_symbol_count >= max_new_symbols:
+                break
+
             try:
                 req = CheatSheetRequest(
                     symbol=symbol,
@@ -321,26 +419,35 @@ def _run_qqq_batch_job(job_id: str, req_template: CheatSheetRequest, *, limit: i
                 all_top.extend(result.get("top") or [])
                 all_best.extend(result.get("best_by_algo") or [])
                 errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
+                completed_symbols.add(symbol)
+                new_symbol_count += 1
             except Exception as exc:
                 log.exception("[CHEATSHEET] QQQ batch failed for symbol=%s", symbol)
                 errors.append(f"{symbol}: {exc}")
 
+            partial_result = _build_optimizer_cache_result(
+                req_template=req_template,
+                symbols=symbols,
+                all_top=all_top,
+                all_best=all_best,
+                errors=errors,
+                tested_combinations=tested_combinations,
+                started_at=started_at,
+                status="running",
+                last_symbol=symbol,
+            )
+            _write_optimizer_cache(partial_result)
             with _cheatsheet_jobs_lock:
                 job = _cheatsheet_jobs.get(job_id)
                 if job:
-                    job["message"] = f"QQQ batch running: {idx}/{len(symbols)} symbols complete."
+                    job["result"] = partial_result
+                    job["message"] = (
+                        f"QQQ batch running: {partial_result['completed_symbol_count']}/{len(symbols)} "
+                        f"symbols complete. Last saved: {symbol}."
+                    )
                     job["updated_at"] = time.time()
                     _store_cheatsheet_job(job_id, job)
 
-        all_top.sort(
-            key=lambda r: (
-                float(r.get("score") or 0.0),
-                float(r.get("validation_total_profit") or 0.0),
-                float(r.get("win_rate") or 0.0),
-                -float(r.get("max_drawdown") or 0.0),
-            ),
-            reverse=True,
-        )
         all_best.sort(
             key=lambda r: (
                 str(r.get("symbol") or ""),
@@ -349,30 +456,17 @@ def _run_qqq_batch_job(job_id: str, req_template: CheatSheetRequest, *, limit: i
             )
         )
 
-        result = {
-            "symbol": "QQQ_LIST",
-            "intervals": req_template.intervals,
-            "profile": req_template.profile,
-            "backtest_method": "cached_qqq_batch",
-            "backtest_method_label": "Cached QQQ symbol batch",
-            "backtest_explanation": (
-                "This file is generated by scanning every symbol in app/scripts/qqq_list.csv "
-                "across all supported algos, then saving the latest recommendations so the "
-                "page can load them without rerunning every scan."
-            ),
-            "oos_fraction": float(req_template.oos_fraction),
-            "tested_combinations": tested_combinations,
-            "symbols_scanned": symbols,
-            "symbol_count": len(symbols),
-            "generated_at": datetime.utcnow().isoformat(),
-            "started_at": started_at,
-            "cache_json": str(OPTIMIZER_LATEST_JSON),
-            "cache_csv": str(OPTIMIZER_LATEST_CSV),
-            "top": all_top[:50],
-            "best_by_algo": all_best[:200],
-            "best_by_symbol_algo": all_best,
-            "errors": errors,
-        }
+        status = "complete" if len(completed_symbols) >= len(symbols) else "partial"
+        result = _build_optimizer_cache_result(
+            req_template=req_template,
+            symbols=symbols,
+            all_top=all_top,
+            all_best=all_best,
+            errors=errors,
+            tested_combinations=tested_combinations,
+            started_at=started_at,
+            status=status,
+        )
         _write_optimizer_cache(result)
 
         with _cheatsheet_jobs_lock:
@@ -380,7 +474,12 @@ def _run_qqq_batch_job(job_id: str, req_template: CheatSheetRequest, *, limit: i
             if job:
                 job["status"] = "succeeded"
                 job["result"] = result
-                job["message"] = f"QQQ batch complete. Saved {len(all_best)} recommendations."
+                if status == "complete":
+                    job["message"] = f"QQQ batch complete. Saved {len(all_best)} recommendations."
+                else:
+                    job["message"] = (
+                        f"QQQ partial run complete. Saved {result['completed_symbol_count']}/{len(symbols)} symbols."
+                    )
                 job["updated_at"] = time.time()
                 _store_cheatsheet_job(job_id, job)
     except Exception as exc:
@@ -917,6 +1016,63 @@ def run_qqq_backtest_cheatsheet(
             "job_id": job_id,
             "status": "queued",
             "message": "QQQ batch scan started. Latest recommendations will be saved when it finishes.",
+        },
+    )
+
+
+@router.post("/analysis/cheatsheet/api/run-next-qqq-symbol")
+@router.post("/analysis/strategy-optimizer/api/run-next-qqq-symbol")
+@router.post("/auth/backtest-cheatsheet/api/run-next-qqq-symbol")
+def run_next_qqq_symbol_cheatsheet(
+    intervals: str = Form("5min"),
+    trade_size: float = Form(100.0),
+    builder_days: int = Form(DEFAULT_REPLAY_MM_CONFIG["builder_days"]),
+    k_forward: int = Form(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
+    profile: str = Form("quick"),
+    allow_short_selling: str = Form("on"),
+    eod_auto_close: str = Form("on"),
+    user: User = Depends(get_current_user),
+):
+    parsed_intervals = tuple(
+        i.strip().lower()
+        for i in str(intervals or "5min").replace(";", ",").split(",")
+        if i.strip()
+    )
+    allowed_intervals = {"1min", "5min", "10min", "15min", "30min", "1d"}
+    if not parsed_intervals or any(i not in allowed_intervals for i in parsed_intervals):
+        raise HTTPException(status_code=400, detail="Choose one or more supported intervals")
+
+    req = CheatSheetRequest(
+        symbol="QQQ_LIST",
+        intervals=parsed_intervals,
+        trade_size=max(float(trade_size or 1.0), 1.0),
+        builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
+        k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
+        profile=str(profile or "quick").lower(),
+        allow_short=_checkbox_on(allow_short_selling),
+        eod_close=_checkbox_on(eod_auto_close),
+    )
+    _cleanup_cheatsheet_jobs()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _cheatsheet_jobs_lock:
+        _cheatsheet_jobs[job_id] = {
+            "user_id": user.id,
+            "status": "queued",
+            "message": "Next QQQ symbol scan queued.",
+            "result": None,
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
+    _cheatsheet_executor.submit(_run_qqq_batch_job, job_id, req, max_new_symbols=1, resume=True)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "queued",
+            "message": "Next missing QQQ symbol scan started. Results will be saved after that symbol finishes.",
         },
     )
 
