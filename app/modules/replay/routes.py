@@ -70,8 +70,8 @@ _cheatsheet_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CHEATSHEET_
 _cheatsheet_jobs: dict[str, dict] = {}
 _cheatsheet_jobs_lock = threading.Lock()
 
-REPO_PATH = Path(REPO_ROOT)
-QQQ_LIST_PATH = REPO_PATH / "app" / "scripts" / "qqq_list.csv"
+APP_PATH = Path(REPO_ROOT)
+QQQ_LIST_PATH = APP_PATH / "scripts" / "qqq_list.csv"
 OPTIMIZER_CACHE_DIR = Path(os.getenv("DATA_DIR", "data")) / "strategy_optimizer"
 OPTIMIZER_LATEST_JSON = OPTIMIZER_CACHE_DIR / "latest_recommendations.json"
 OPTIMIZER_LATEST_CSV = OPTIMIZER_CACHE_DIR / "latest_recommendations.csv"
