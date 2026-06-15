@@ -23,12 +23,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload rollout script
+        run: |
+          RELEASE_ID="rollout-${GITHUB_SHA::8}-$(date +%Y%m%d%H%M%S)"
+          echo "RELEASE_ID=${RELEASE_ID}" >> "$GITHUB_ENV"
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "mkdir -p /tmp/stockwicks-${RELEASE_ID}-deploy"
+
+          rsync -az -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            app/scripts/deploy_rollout.sh \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/stockwicks-${RELEASE_ID}-deploy/deploy_rollout.sh"
 
       - name: Roll out from Ashakil to target clients
         run: |
@@ -48,5 +63,7 @@ jobs:
           fi
 
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "cd '${{ secrets.ASHAKIL_APP_PATH }}' && \
-             ${RUNNER} app/scripts/deploy_rollout.sh ${APPLY_FLAG} ${RESTART_FLAG} ${{ github.event.inputs.targets }}"
+            "chmod +x /tmp/stockwicks-${RELEASE_ID}-deploy/deploy_rollout.sh && \
+             ${RUNNER} /tmp/stockwicks-${RELEASE_ID}-deploy/deploy_rollout.sh \
+               --source '${{ secrets.ASHAKIL_APP_PATH }}' \
+               ${APPLY_FLAG} ${RESTART_FLAG} ${{ github.event.inputs.targets }}"
