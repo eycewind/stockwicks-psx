@@ -27,6 +27,8 @@
   .stat { background:#151533; border:1px solid #2a2a55; border-radius:8px; padding:12px; }
   .stat-label { font-size:.72rem; color:#a7a7c7; text-transform:uppercase; letter-spacing:.4px; }
   .stat-value { margin-top:5px; font-size:1.15rem; font-weight:700; }
+  .cache-card { display:none; }
+  .cache-card.visible { display:block; }
   .method-note { margin-top:12px; color:#c7d2fe; font-size:.9rem; line-height:1.45; }
   .window { color:#c7d2fe; line-height:1.4; white-space:nowrap; }
   table { width:100%; border-collapse:collapse; font-size:.86rem; }
@@ -109,6 +111,36 @@
       </div>
       <div id="status" class="status"></div>
     </form>
+  </div>
+
+  <div class="card cache-card" id="cacheStatusCard">
+    <h2>Cached Batch Status</h2>
+    <div class="summary-grid">
+      <div class="stat">
+        <div class="stat-label">Symbols Done</div>
+        <div class="stat-value" id="cacheSymbolsDone">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Intervals</div>
+        <div class="stat-value" id="cacheIntervals">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Status</div>
+        <div class="stat-value" id="cacheBatchStatus">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Last Symbol</div>
+        <div class="stat-value" id="cacheLastSymbol">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Updated</div>
+        <div class="stat-value" id="cacheGeneratedAt">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Rows</div>
+        <div class="stat-value" id="cacheRows">-</div>
+      </div>
+    </div>
   </div>
 
   <div id="results" style="display:none;">
@@ -362,6 +394,23 @@ function setStatus(msg, kind) {
   el.className = `status ${kind}`;
 }
 
+function updateCacheStatus(data) {
+  if (!data || !data.symbol_count) return;
+  const card = document.getElementById("cacheStatusCard");
+  const completed = Number(data.completed_symbol_count || 0);
+  const total = Number(data.symbol_count || 0);
+  const remaining = Number(data.remaining_symbol_count || Math.max(total - completed, 0));
+  const intervals = (data.intervals || []).join(", ") || "-";
+  const rows = (data.best_by_symbol_algo || data.best_by_algo || []).length;
+  document.getElementById("cacheSymbolsDone").textContent = `${completed}/${total}`;
+  document.getElementById("cacheIntervals").textContent = intervals;
+  document.getElementById("cacheBatchStatus").textContent = `${data.batch_status || "-"} (${remaining} left)`;
+  document.getElementById("cacheLastSymbol").textContent = data.last_symbol || "-";
+  document.getElementById("cacheGeneratedAt").textContent = data.generated_at ? barTime(data.generated_at) : "-";
+  document.getElementById("cacheRows").textContent = String(rows || 0);
+  card.classList.add("visible");
+}
+
 function renderRows(rows, targetId, showRank) {
   const body = document.getElementById(targetId);
   if (!rows.length) {
@@ -390,6 +439,7 @@ function renderRows(rows, targetId, showRank) {
 }
 
 function renderScanResult(data) {
+  updateCacheStatus(data);
   topRows = data.top || [];
   algoRows = data.best_by_algo || [];
   const progress = data.symbol_count ? `${data.completed_symbol_count || 0}/${data.symbol_count}` : "-";
@@ -484,6 +534,7 @@ async function loadLatestCached(showMissing = true) {
       if (showMissing) setStatus(data.detail || "No cached recommendations found.", "error");
       return;
     }
+    updateCacheStatus(data);
     renderScanResult(data);
     const generated = data.generated_at ? ` Generated ${barTime(data.generated_at)}.` : "";
     setStatus(`Loaded latest cached recommendations.${generated}`, "info");
