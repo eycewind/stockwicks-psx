@@ -65,7 +65,7 @@ if not log.handlers:
 log.setLevel(logging.INFO)
 
 
-CHEATSHEET_JOB_TTL_SEC = 60 * 60 * 2
+CHEATSHEET_JOB_TTL_SEC = 60 * 60 * 36
 _cheatsheet_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CHEATSHEET_MAX_WORKERS", "2")))
 _cheatsheet_jobs: dict[str, dict] = {}
 _cheatsheet_jobs_lock = threading.Lock()
@@ -116,6 +116,20 @@ def _load_cheatsheet_job(job_id: str) -> dict | None:
     except Exception as exc:
         log.warning("[CHEATSHEET] could not load job from Redis job_id=%s: %s", job_id, exc)
         return None
+
+
+def _update_cheatsheet_job(job_id: str, **updates) -> None:
+    with _cheatsheet_jobs_lock:
+        job = _cheatsheet_jobs.get(job_id)
+        if not job:
+            job = _load_cheatsheet_job(job_id) or {}
+            if not job:
+                return
+        job.update(updates)
+        job["updated_at"] = time.time()
+        if job_id in _cheatsheet_jobs:
+            _cheatsheet_jobs[job_id] = job
+        _store_cheatsheet_job(job_id, job)
 
 
 def _cleanup_cheatsheet_jobs() -> None:
@@ -282,6 +296,49 @@ def _build_optimizer_cache_result(
     }
 
 
+def _cheatsheet_request_payload(req: CheatSheetRequest) -> dict:
+    return {
+        "symbol": req.symbol,
+        "intervals": list(req.intervals),
+        "trade_size": req.trade_size,
+        "builder_days": req.builder_days,
+        "k_forward": req.k_forward,
+        "profile": req.profile,
+        "allow_short": req.allow_short,
+        "eod_close": req.eod_close,
+        "oos_fraction": req.oos_fraction,
+    }
+
+
+def _queue_qqq_optimizer_job(
+    *,
+    job_id: str,
+    req: CheatSheetRequest,
+    limit: int | None = None,
+    max_new_symbols: int | None = None,
+    resume: bool = True,
+) -> str:
+    try:
+        from app.tasks.optimizer_tasks import run_qqq_optimizer_batch
+
+        run_qqq_optimizer_batch.apply_async(
+            args=(job_id, _cheatsheet_request_payload(req), limit, max_new_symbols, resume),
+            queue="replay",
+        )
+        return "celery"
+    except Exception as exc:
+        log.warning("[CHEATSHEET] Celery optimizer queue failed; falling back to thread: %s", exc)
+        _cheatsheet_executor.submit(
+            _run_qqq_batch_job,
+            job_id,
+            req,
+            limit=limit,
+            max_new_symbols=max_new_symbols,
+            resume=resume,
+        )
+        return "thread"
+
+
 def _write_optimizer_cache(result: dict) -> None:
     OPTIMIZER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(result, default=str, indent=2)
@@ -387,13 +444,11 @@ def _run_qqq_batch_job(
             tested_combinations = 0
         completed_symbols = {str(r.get("symbol") or "").upper() for r in all_best if r.get("symbol")}
 
-        with _cheatsheet_jobs_lock:
-            job = _cheatsheet_jobs.get(job_id)
-            if job:
-                job["status"] = "running"
-                job["message"] = f"QQQ batch running: {len(completed_symbols)}/{len(symbols)} symbols complete."
-                job["updated_at"] = time.time()
-                _store_cheatsheet_job(job_id, job)
+        _update_cheatsheet_job(
+            job_id,
+            status="running",
+            message=f"QQQ batch running: {len(completed_symbols)}/{len(symbols)} symbols complete.",
+        )
 
         new_symbol_count = 0
         for idx, symbol in enumerate(symbols, start=1):
@@ -437,16 +492,14 @@ def _run_qqq_batch_job(
                 last_symbol=symbol,
             )
             _write_optimizer_cache(partial_result)
-            with _cheatsheet_jobs_lock:
-                job = _cheatsheet_jobs.get(job_id)
-                if job:
-                    job["result"] = partial_result
-                    job["message"] = (
-                        f"QQQ batch running: {partial_result['completed_symbol_count']}/{len(symbols)} "
-                        f"symbols complete. Last saved: {symbol}."
-                    )
-                    job["updated_at"] = time.time()
-                    _store_cheatsheet_job(job_id, job)
+            _update_cheatsheet_job(
+                job_id,
+                result=partial_result,
+                message=(
+                    f"QQQ batch running: {partial_result['completed_symbol_count']}/{len(symbols)} "
+                    f"symbols complete. Last saved: {symbol}."
+                ),
+            )
 
         all_best.sort(
             key=lambda r: (
@@ -469,29 +522,25 @@ def _run_qqq_batch_job(
         )
         _write_optimizer_cache(result)
 
-        with _cheatsheet_jobs_lock:
-            job = _cheatsheet_jobs.get(job_id)
-            if job:
-                job["status"] = "succeeded"
-                job["result"] = result
-                if status == "complete":
-                    job["message"] = f"QQQ batch complete. Saved {len(all_best)} recommendations."
-                else:
-                    job["message"] = (
-                        f"QQQ partial run complete. Saved {result['completed_symbol_count']}/{len(symbols)} symbols."
-                    )
-                job["updated_at"] = time.time()
-                _store_cheatsheet_job(job_id, job)
+        message = (
+            f"QQQ batch complete. Saved {len(all_best)} recommendations."
+            if status == "complete"
+            else f"QQQ partial run complete. Saved {result['completed_symbol_count']}/{len(symbols)} symbols."
+        )
+        _update_cheatsheet_job(
+            job_id,
+            status="succeeded",
+            result=result,
+            message=message,
+        )
     except Exception as exc:
         log.exception("[CHEATSHEET] QQQ batch job failed job_id=%s", job_id)
-        with _cheatsheet_jobs_lock:
-            job = _cheatsheet_jobs.get(job_id)
-            if job:
-                job["status"] = "failed"
-                job["error"] = str(exc)
-                job["message"] = "QQQ batch failed."
-                job["updated_at"] = time.time()
-                _store_cheatsheet_job(job_id, job)
+        _update_cheatsheet_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            message="QQQ batch failed.",
+        )
 
 
 # Commercial MM replay config: keep aligned with paper_trade_bot.py and
@@ -1009,13 +1058,14 @@ def run_qqq_backtest_cheatsheet(
             "updated_at": now,
         }
         _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-    _cheatsheet_executor.submit(_run_qqq_batch_job, job_id, req, limit=safe_limit)
+    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, limit=safe_limit, resume=True)
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
-            "message": "QQQ batch scan started. Latest recommendations will be saved when it finishes.",
+            "backend": backend,
+            "message": "QQQ batch scan queued in the backend. Latest recommendations save after each symbol.",
         },
     )
 
@@ -1066,13 +1116,14 @@ def run_next_qqq_symbol_cheatsheet(
             "updated_at": now,
         }
         _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-    _cheatsheet_executor.submit(_run_qqq_batch_job, job_id, req, max_new_symbols=1, resume=True)
+    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, max_new_symbols=1, resume=True)
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
-            "message": "Next missing QQQ symbol scan started. Results will be saved after that symbol finishes.",
+            "backend": backend,
+            "message": "Next missing QQQ symbol scan queued in the backend. Results save after that symbol finishes.",
         },
     )
 
