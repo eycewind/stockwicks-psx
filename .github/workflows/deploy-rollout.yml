@@ -1,0 +1,52 @@
+name: Deploy Rollout
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Space-separated client slugs to update"
+        required: false
+        default: "haithama yzia"
+      restart:
+        description: "Restart target web/celery/beat services"
+        required: true
+        type: boolean
+        default: true
+      dry_run:
+        description: "Preview changes only"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Roll out from Ashakil to target clients
+        run: |
+          APPLY_FLAG="--apply"
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            APPLY_FLAG=""
+          fi
+
+          RESTART_FLAG=""
+          if [[ "${{ github.event.inputs.restart }}" == "true" && "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            RESTART_FLAG="--restart"
+          fi
+
+          RUNNER="bash"
+          if [[ -n "${RESTART_FLAG}" ]]; then
+            RUNNER="sudo bash"
+          fi
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "cd '${{ secrets.ASHAKIL_APP_PATH }}' && \
+             ${RUNNER} app/scripts/deploy_rollout.sh ${APPLY_FLAG} ${RESTART_FLAG} ${{ github.event.inputs.targets }}"
