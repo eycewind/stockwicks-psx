@@ -12,6 +12,7 @@ set -euo pipefail
 #   bash app/scripts/deploy_rollout.sh --source /var/stockwicks/clients/ashakil haithama yzia
 
 CLIENTS_ROOT_DEFAULT="/var/stockwicks/clients"
+RELEASES_ROOT_DEFAULT="/var/stockwicks/releases"
 SOURCE_ROOT=""
 APPLY=0
 RESTART=0
@@ -103,6 +104,19 @@ EXCLUDES=(
   --exclude "celerybeat-schedule*"
 )
 
+BACKUP_EXCLUDES=(
+  --exclude ".git/"
+  --exclude ".env"
+  --exclude "data/"
+  --exclude "logs/"
+  --exclude "venv/"
+  --exclude "__pycache__/"
+  --exclude "*.pyc"
+  --exclude "celerybeat-schedule*"
+)
+
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+
 echo "Source: ${SOURCE_ROOT}"
 echo "Targets: ${TARGET_CLIENTS[*]}"
 if [[ "${APPLY}" -eq 0 ]]; then
@@ -120,6 +134,13 @@ for client in "${TARGET_CLIENTS[@]}"; do
 
   echo
   echo "==> Sync ${SOURCE_SLUG} -> ${client}"
+  if [[ "${APPLY}" -eq 1 ]]; then
+    backup_dir="${RELEASES_ROOT_DEFAULT}/${client}/rollout_backup_${TIMESTAMP}"
+    echo "==> Backup ${client} -> ${backup_dir}"
+    mkdir -p "${backup_dir}"
+    rsync -a "${BACKUP_EXCLUDES[@]}" "${target}/" "${backup_dir}/"
+  fi
+
   rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" "${SOURCE_ROOT}/" "${target}/"
 
   if [[ "${APPLY}" -eq 1 && "${RESTART}" -eq 1 ]]; then
