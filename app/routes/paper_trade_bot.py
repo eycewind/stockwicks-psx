@@ -314,7 +314,8 @@ def paper_trade_bot_dashboard(
     _ensure_live_mirror_history_table(db)
     all_bots = (
         db.query(PaperStockTradeBot)
-        .filter_by(user_id=user.id)
+        .filter(PaperStockTradeBot.user_id == user.id)
+        .filter(PaperStockTradeBot.status != "DELETED")
         .order_by(PaperStockTradeBot.created_at.desc())
         .all()
     )
@@ -330,8 +331,22 @@ def paper_trade_bot_dashboard(
         .all()
     )
 
-    # Attach bot objects for convenience in templates
-    bot_map = {b.id: b for b in all_bots}
+    # Attach bot objects for convenience in templates. Deleted bots stay in the
+    # DB for trade-history foreign keys, so include them for history labels.
+    visible_bot_map = {b.id: b for b in all_bots}
+    history_bot_ids = {t.bot_id for t in open_trades + closed_trades if t.bot_id}
+    bot_map = dict(visible_bot_map)
+    missing_bot_ids = history_bot_ids - set(bot_map)
+    if missing_bot_ids:
+        hidden_bots = (
+            db.query(PaperStockTradeBot)
+            .filter(
+                PaperStockTradeBot.user_id == user.id,
+                PaperStockTradeBot.id.in_(missing_bot_ids),
+            )
+            .all()
+        )
+        bot_map.update({b.id: b for b in hidden_bots})
     for b in all_bots:
         b.runtime_config = _read_bot_config(b)
     for t in open_trades + closed_trades:
@@ -501,7 +516,9 @@ def cancel_paper_trade_bot(
     db.query(PaperStockBotOpenTrade).filter_by(bot_id=bot_id, user_id=user.id).delete(
         synchronize_session=False
     )
-    db.delete(bot)
+    bot.is_active = False
+    bot.status = "DELETED"
+    bot.updated_at = datetime.utcnow()
     db.commit()
     logging.info(f"❌ Canceled & deleted bot #{bot_id} for {user.email}")
     return RedirectResponse(url=prefixed_url(request, "/auth/papertradebot"), status_code=302)
