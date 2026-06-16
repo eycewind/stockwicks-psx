@@ -70,7 +70,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(CLIENT_ROOT, "models"))
 
 # ---------- DEFAULTS (TUNED FOR LIVE) ----------
 DEFAULTS = {
-    "builder_days": 10,               # 30 days training data
+    "builder_days": 30,
     "long_threshold": 0.60,
     "short_threshold": 0.40,
     "long_exit_threshold": 0.55,      # hard floor for longs
@@ -936,7 +936,7 @@ def _load_or_train_model(
         clf = HistGradientBoostingClassifier(
             max_depth=4,
             learning_rate=0.06,
-            max_iter=400,
+            max_iter=250,
             l2_regularization=1.0,
         )
         clf.fit(X, y, sample_weight=w)

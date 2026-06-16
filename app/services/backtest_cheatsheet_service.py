@@ -434,12 +434,51 @@ def _selection_score(validation_metrics: dict[str, float]) -> float:
     return validation_score - trade_penalty
 
 
-def _confidence(metrics: dict[str, float]) -> str:
-    if metrics["num_trades"] < 3:
+def _deployment_score(
+    *,
+    validation_score: float,
+    validation_total_profit: float,
+    validation_num_trades: float,
+    validation_win_rate: float,
+    holdout_metrics: dict[str, float],
+) -> float:
+    holdout_score = _score(holdout_metrics)
+    score = min(float(validation_score), float(holdout_score))
+
+    holdout_trades = float(holdout_metrics["num_trades"])
+    holdout_profit = float(holdout_metrics["total_profit"])
+    holdout_win_rate = float(holdout_metrics["win_rate"])
+
+    if validation_total_profit <= 0:
+        score -= 5000.0 + abs(float(validation_total_profit))
+    if holdout_profit <= 0:
+        score -= 10000.0 + abs(holdout_profit)
+    if validation_num_trades < 5:
+        score -= (5.0 - float(validation_num_trades)) * 500.0
+    if holdout_trades < 8:
+        score -= (8.0 - holdout_trades) * 750.0
+    if validation_win_rate < 0.50:
+        score -= (0.50 - float(validation_win_rate)) * 2000.0
+    if holdout_win_rate < 0.50:
+        score -= (0.50 - holdout_win_rate) * 3000.0
+    if validation_win_rate - holdout_win_rate > 0.25:
+        score -= (float(validation_win_rate) - holdout_win_rate) * 2000.0
+    return float(score)
+
+
+def _confidence(metrics: dict[str, float], validation_metrics: dict[str, float] | None = None) -> str:
+    if metrics["num_trades"] < 8:
         return "Low"
-    if metrics["total_profit"] > 0 and metrics["win_rate"] >= 0.55 and metrics["profit_factor"] >= 1.25:
+    validation_ok = True
+    if validation_metrics is not None:
+        validation_ok = (
+            validation_metrics["total_profit"] > 0
+            and validation_metrics["num_trades"] >= 5
+            and validation_metrics["win_rate"] >= 0.50
+        )
+    if validation_ok and metrics["total_profit"] > 0 and metrics["win_rate"] >= 0.55 and metrics["profit_factor"] >= 1.25:
         return "High"
-    if metrics["total_profit"] > 0 and metrics["win_rate"] >= 0.45:
+    if validation_ok and metrics["total_profit"] > 0 and metrics["win_rate"] >= 0.50:
         return "Medium"
     return "Low"
 
@@ -483,16 +522,24 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                         params=params,
                     )
                     tested_combinations += 1
+                    validation_score = _score(metrics)
+                    deployment_score = _deployment_score(
+                        validation_score=validation_score,
+                        validation_total_profit=metrics["total_profit"],
+                        validation_num_trades=metrics["num_trades"],
+                        validation_win_rate=metrics["win_rate"],
+                        holdout_metrics=metrics,
+                    )
                     row = {
                         "symbol": symbol,
                         "interval": interval,
                         "algo_name": algo_name,
                         "feature_set": feature_set,
-                        "score": _score(metrics),
-                        "selection_score": _score(metrics),
-                        "validation_score": _score(metrics),
-                        "holdout_score": _score(metrics),
-                        "confidence": _confidence(metrics),
+                        "score": deployment_score,
+                        "selection_score": validation_score,
+                        "validation_score": validation_score,
+                        "holdout_score": validation_score,
+                        "confidence": _confidence(metrics, metrics),
                         "backtest_method": "indicator_only_holdout",
                         "backtest_method_label": "Indicator-only holdout scan",
                         "backtest_notes": (
@@ -686,16 +733,28 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     eod_close=req.eod_close,
                 )
                 holdout_score = _score(holdout_metrics)
+                deployment_score = _deployment_score(
+                    validation_score=candidate["validation_score"],
+                    validation_total_profit=candidate["validation_total_profit"],
+                    validation_num_trades=candidate["validation_num_trades"],
+                    validation_win_rate=candidate["validation_win_rate"],
+                    holdout_metrics=holdout_metrics,
+                )
+                validation_metrics_for_confidence = {
+                    "total_profit": candidate["validation_total_profit"],
+                    "num_trades": candidate["validation_num_trades"],
+                    "win_rate": candidate["validation_win_rate"],
+                }
                 row = {
                     "symbol": symbol,
                     "interval": interval,
                     "algo_name": algo_name,
                     "feature_set": feature_set,
-                    "score": candidate["selection_score"],
+                    "score": deployment_score,
                     "selection_score": candidate["selection_score"],
                     "validation_score": candidate["validation_score"],
                     "holdout_score": holdout_score,
-                    "confidence": _confidence(holdout_metrics),
+                    "confidence": _confidence(holdout_metrics, validation_metrics_for_confidence),
                     "backtest_method": "validation_picked_holdout",
                     "backtest_method_label": "Validation-picked holdout scan",
                     "backtest_notes": (
@@ -754,9 +813,9 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "backtest_explanation": (
             "The optimizer fetches recent history, trains one model per algo/interval "
             "using only pre-split candles, tests parameters on validation bars and "
-            "runs later holdout bars for the strongest validation candidates, then ranks only by validation performance. The "
-            "displayed P/L and win rate are holdout results, so the holdout is not "
-            "used to pick winners. Training labels are rebuilt from the pre-split "
+            "runs later holdout bars for the strongest validation candidates, then ranks by a deployment score that requires "
+            "both validation and holdout confirmation. The displayed P/L and win rate are holdout results. "
+            "Training labels are rebuilt from the pre-split "
             "frame so they cannot use future validation candles. The parameter "
             "grid is limited to replay-supported exits, with percent stop loss, "
             "percent trailing profit, and probability trail values for volatile moves."

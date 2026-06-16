@@ -65,7 +65,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(CLIENT_ROOT, "models"))
 
 
 DEFAULTS = {
-    "builder_days": 10,
+    "builder_days": 30,
     "k_forward": 3,
     "model_max_age_hours": 0.25,
 
@@ -404,7 +404,7 @@ def _load_or_train_model(
     clf = HistGradientBoostingClassifier(
         max_depth=4,
         learning_rate=0.06,
-        max_iter=400,
+        max_iter=250,
         l2_regularization=1.0,
     )
     clf.fit(X, y, sample_weight=w)

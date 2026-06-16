@@ -78,6 +78,9 @@ ALLOWED_MM_ALGOS = {
 }
 
 DEFAULT_BOT_CONFIG = {
+    "builder_days": 30,
+    "k_forward": 3,
+    "model_max_age_hours": 0.25,
     "long_entry_prob": 0.60,
     "short_entry_prob": 0.40,
     "prob_smoothing_bars": 3,
@@ -146,6 +149,9 @@ def _bot_config_json(
     return {
         "algo_name": algo_name,
         "feature_set": ALLOWED_MM_ALGOS[algo_name],
+        "builder_days": DEFAULT_BOT_CONFIG["builder_days"],
+        "k_forward": DEFAULT_BOT_CONFIG["k_forward"],
+        "model_max_age_hours": DEFAULT_BOT_CONFIG["model_max_age_hours"],
 
         # Backward-compatible aliases for older config readers.
         "long_threshold": _safe_float_form(
