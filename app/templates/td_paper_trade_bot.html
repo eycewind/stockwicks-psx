@@ -89,6 +89,13 @@
   .btn-close-all{ background:#f59e0b; color:#000; } .btn-close-all:hover{ filter:brightness(0.95); }
   .btn-restart{ background:#4fd1c5; color:#000; }
   .btn-restart:hover{ background:#38b2ac; }
+  .btn-small{ min-width:auto; padding:5px 9px; font-size:12px; }
+  .param-details{ text-align:left; max-width:260px; color:#d7d7f0; }
+  .param-details summary{ cursor:pointer; color:#4fd1c5; font-weight:700; }
+  .param-grid{ display:grid; grid-template-columns:1fr 1fr; gap:4px 10px; margin-top:8px; font-size:12px; }
+  .param-grid span:nth-child(odd){ color:#a7a7c7; }
+  .history-actions{ width:90%; margin:10px auto -8px; display:flex; gap:10px; justify-content:flex-end; align-items:center; }
+  .mirror-pill{ color:#5eead4; font-weight:700; font-size:12px; }
   /* 📊 Summary card */
   .summary-card {
     width: 90%;
@@ -393,7 +400,7 @@
   <table class="trade-table">
     <thead>
       <tr>
-        <th>ID</th><th>Symbol</th><th>Interval</th><th>Algo</th><th>Size</th><th>Status</th><th>Updated (ET)</th><th>Mirror Trade</th><th>EOD Auto Close</th><th>Actions</th>
+        <th>ID</th><th>Symbol</th><th>Interval</th><th>Algo</th><th>Size</th><th>Status</th><th>Updated (ET)</th><th>Mirror Trade</th><th>EOD Auto Close</th><th>Parameters</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -436,6 +443,27 @@
             {{ "On" if b.eod_auto_close else "Off" }}
           </label>
         </td>
+        <td>
+          {% set cfg = b.runtime_config if b.runtime_config is defined else {} %}
+          <details class="param-details" {% if b.is_active and b.status == "RUNNING" %}open{% endif %}>
+            <summary>View</summary>
+            <div class="param-grid">
+              <span>Qty</span><strong>{{ b.trade_size }}</strong>
+              <span>Stop $</span><strong>{{ cfg.get("stop_loss_usd", b.stop_loss_usd or "N/A") }}</strong>
+              <span>Trail $</span><strong>{{ cfg.get("trailing_profit_usd", "N/A") }}</strong>
+              <span>Stop %</span><strong>{{ cfg.get("stop_loss_pct", "N/A") }}</strong>
+              <span>Trail %</span><strong>{{ cfg.get("trailing_profit_pct", "N/A") }}</strong>
+              <span>Prob mode</span><strong>{{ cfg.get("prob_exit_mode", "N/A") }}</strong>
+              <span>Prob drop</span><strong>{{ cfg.get("prob_trail_drop", "N/A") }}</strong>
+              <span>Long entry</span><strong>{{ cfg.get("long_entry_prob", "N/A") }}</strong>
+              <span>Short entry</span><strong>{{ cfg.get("short_entry_prob", "N/A") }}</strong>
+              <span>Long exit</span><strong>{{ cfg.get("long_fixed_exit_prob", "N/A") }}</strong>
+              <span>Short exit</span><strong>{{ cfg.get("short_fixed_exit_prob", "N/A") }}</strong>
+              <span>Email</span><strong>{{ "On" if b.notify_email else "Off" }}</strong>
+              <span>Shorts</span><strong>{{ "On" if b.allow_short_selling else "Off" }}</strong>
+            </div>
+          </details>
+        </td>
 <td>
   {% if b.is_active and b.status == "RUNNING" %}
     <!-- Running: show Stop + Delete -->
@@ -461,7 +489,7 @@
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="10" class="no-trades">No bots found</td></tr>
+      <tr><td colspan="11" class="no-trades">No bots found</td></tr>
     {% endif %}
     </tbody>
   </table>
@@ -803,13 +831,17 @@
 </div>
   <!-- Closed Trades -->
   <h2 class="section-title">📜 Bot Trade History</h2>
+  <div class="history-actions">
+    <button type="button" class="btn btn-delete btn-small" id="deleteSelectedTradesBtn">Delete Selected</button>
+  </div>
   <table class="trade-table" id="history-table">
     <thead>
       <tr>
+        <th><input type="checkbox" id="selectAllHistory" aria-label="Select all visible history trades"></th>
         <th>Bot</th><th>Symbol</th><th>Side</th><th>Qty</th>
 <th>Entry</th><th>Entry Time (ET)</th>
 <th>Exit</th><th>Exit Time (ET)</th>
-<th>P/L</th>
+<th>P/L</th><th>Mirror</th>
       </tr>
     </thead>
     <tbody id="history-body">
@@ -820,6 +852,7 @@
     data-symbol="{{ t.symbol }}"
     data-bot="{{ t.bot_id }}"
     data-pl="{{ '%.2f'|format(pl) }}">
+  <td><input type="checkbox" class="history-check" value="{{ t.id }}"></td>
   <td>#{{ t.bot_id }} ({{ t.bot.algo_name if t.bot else "" }})</td>
   <td>{{ t.symbol }}</td>
   <td>{{ t.position_side|capitalize }}</td>
@@ -835,15 +868,29 @@
       <span style="color:red;">-${{ "%.2f"|format(-pl) }}</span>
     {% endif %}
   </td>
+  <td></td>
 </tr>
 
 
-        <td>{{ t.exit_time.strftime("%Y-%m-%d %H:%M:%S") if t.exit_time else "N/A" }}</td>
-      </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="8" class="no-trades">No trade history yet.</td></tr>
+      <tr><td colspan="11" class="no-trades">No trade history yet.</td></tr>
     {% endif %}
+    </tbody>
+  </table>
+  <h2 class="section-title">Schwab Mirrored Bot Trades</h2>
+  <div class="history-actions">
+    <button type="button" class="btn btn-restart btn-small" id="loadMirrorTradesBtn">Pull Mirrored Trades</button>
+  </div>
+  <table class="trade-table" id="mirror-history-table">
+    <thead>
+      <tr>
+        <th>Bot</th><th>History ID</th><th>Symbol</th><th>Side</th><th>Qty</th>
+        <th>Entry</th><th>Exit</th><th>P/L</th><th>Exit Time (ET)</th><th>Schwab Order</th><th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="mirror-history-body">
+      <tr><td colspan="11" class="no-trades">Click Pull Mirrored Trades to load Schwab mirrored bot history.</td></tr>
     </tbody>
   </table>
 </div>
@@ -851,6 +898,10 @@
 (function () {
   // --- Elements -------------------------------------------------------------
   const histBody   = document.getElementById('history-body');
+  const selectAllHistory = document.getElementById('selectAllHistory');
+  const deleteSelectedTradesBtn = document.getElementById('deleteSelectedTradesBtn');
+  const loadMirrorTradesBtn = document.getElementById('loadMirrorTradesBtn');
+  const mirrorHistoryBody = document.getElementById('mirror-history-body');
   const symSel     = document.getElementById('symbolFilter');
   const botSel     = document.getElementById('botFilter');
   const dateFrom   = document.getElementById('dateFrom');
@@ -906,7 +957,7 @@
     histBody.innerHTML = '';
     if (!rows || rows.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="8" class="no-trades">No trade history yet.</td>`;
+      tr.innerHTML = `<td colspan="11" class="no-trades">No trade history yet.</td>`;
       histBody.appendChild(tr);
       return;
     }
@@ -922,8 +973,12 @@
       const plHTML = plNum >= 0
         ? `<span style="color:limegreen;">${fmtMoneySigned(plNum)}</span>`
         : `<span style="color:red;">${fmtMoneySigned(plNum)}</span>`;
+      const mirrorHTML = r.mirror_live
+        ? `<span class="mirror-pill">Schwab${r.schwab_order_id ? ' #' + r.schwab_order_id : ''}</span>`
+        : '';
 
       tr.innerHTML = `
+        <td><input type="checkbox" class="history-check" value="${r.id}"></td>
         <td>#${r.bot_id} ${(r.algo_name ? '('+r.algo_name+')' : '')}</td>
         <td>${r.symbol}</td>
         <td>${side}</td>
@@ -933,10 +988,12 @@
         <td>$${Number(r.exit || 0).toFixed(2)}</td>
         <td>${r.exit_time ? r.exit_time.replace('T', ' ') : 'N/A'}</td>
         <td>${plHTML}</td>
+        <td>${mirrorHTML}</td>
       `;
 
       histBody.appendChild(tr);
     }
+    if (selectAllHistory) selectAllHistory.checked = false;
   }
 
   function setText(id, text) {
@@ -1258,6 +1315,68 @@
     const daily = aggregateDaily(rows);
     renderWinRateLine(winRateSVG, daily);
     renderNetPlBars(netPlSVG, daily);
+  }
+
+  function selectedHistoryIds() {
+    return Array.from(document.querySelectorAll('.history-check:checked'))
+      .map(el => Number(el.value))
+      .filter(Number.isFinite);
+  }
+
+  async function deleteSelectedHistoryTrades() {
+    const ids = selectedHistoryIds();
+    if (ids.length === 0) {
+      alert('Select at least one history trade to delete.');
+      return;
+    }
+    if (!confirm(`Delete ${ids.length} selected trade${ids.length === 1 ? '' : 's'} from history?`)) return;
+    const res = await fetch(window.stockwicksUrl('/auth/papertradebot/trades_json'), {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.detail || `HTTP ${res.status}`);
+    }
+    await refreshForBot();
+    if (mirrorHistoryBody) await loadMirrorTrades();
+  }
+
+  function renderMirrorRows(rows) {
+    if (!mirrorHistoryBody) return;
+    mirrorHistoryBody.innerHTML = '';
+    if (!rows || rows.length === 0) {
+      mirrorHistoryBody.innerHTML = '<tr><td colspan="11" class="no-trades">No Schwab mirrored bot trades found.</td></tr>';
+      return;
+    }
+    for (const r of rows) {
+      const plNum = Number(r.profit_loss || 0);
+      const plHTML = plNum >= 0
+        ? `<span style="color:limegreen;">${fmtMoneySigned(plNum)}</span>`
+        : `<span style="color:red;">${fmtMoneySigned(plNum)}</span>`;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>#${r.bot_id}</td>
+        <td>#${r.history_trade_id}</td>
+        <td>${r.symbol}</td>
+        <td>${r.side ? r.side[0].toUpperCase() + r.side.slice(1) : ''}</td>
+        <td>${Number(r.quantity || 0)}</td>
+        <td>$${Number(r.entry_price || 0).toFixed(2)}</td>
+        <td>$${Number(r.exit_price || 0).toFixed(2)}</td>
+        <td>${plHTML}</td>
+        <td>${r.exit_time || 'N/A'}</td>
+        <td>${r.schwab_order_id || 'N/A'}</td>
+        <td>${r.mirror_status || 'requested'}</td>
+      `;
+      mirrorHistoryBody.appendChild(tr);
+    }
+  }
+
+  async function loadMirrorTrades() {
+    const data = await fetchJSON(window.stockwicksUrl('/auth/papertradebot/live_mirror_trades_json'));
+    renderMirrorRows((data && Array.isArray(data.trades)) ? data.trades : []);
   }
 
   // === Algo1_MM / Algo2_MM / Algo3_MM probability chart =============================================
@@ -1611,6 +1730,21 @@ probSvg.appendChild(legend);
   if (botSel)   botSel.addEventListener('change', refreshForBot);
   if (dateFrom) dateFrom.addEventListener('change', recomputeAndRender);
   if (dateTo)   dateTo.addEventListener('change', recomputeAndRender);
+  if (selectAllHistory) {
+    selectAllHistory.addEventListener('change', () => {
+      document.querySelectorAll('.history-check').forEach(cb => { cb.checked = selectAllHistory.checked; });
+    });
+  }
+  if (deleteSelectedTradesBtn) {
+    deleteSelectedTradesBtn.addEventListener('click', () => {
+      deleteSelectedHistoryTrades().catch(err => alert(`Delete failed: ${err.message || err}`));
+    });
+  }
+  if (loadMirrorTradesBtn) {
+    loadMirrorTradesBtn.addEventListener('click', () => {
+      loadMirrorTrades().catch(err => alert(`Load mirrored trades failed: ${err.message || err}`));
+    });
+  }
     if (probZoomButtons && probZoomButtons.length > 0) {
     probZoomButtons.forEach(btn => {
       btn.addEventListener('click', () => {

@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional
+from sqlalchemy import text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
@@ -99,6 +100,32 @@ def _commercial_live_trading_allowed() -> bool:
     - LIVE_TRADING_ENABLED=true
     """
     return _env_bool("TRADING_ENABLED", False) and _env_bool("LIVE_TRADING_ENABLED", False)
+
+
+def _ensure_live_mirror_history_table(db: Session) -> None:
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS paper_stock_bot_live_mirror_history (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            history_trade_id INTEGER NOT NULL,
+            symbol VARCHAR(50) NOT NULL,
+            side VARCHAR(20) NOT NULL,
+            quantity DOUBLE PRECISION NOT NULL,
+            entry_price DOUBLE PRECISION,
+            exit_price DOUBLE PRECISION,
+            profit_loss DOUBLE PRECISION,
+            entry_time TIMESTAMP NULL,
+            exit_time TIMESTAMP NULL,
+            schwab_order_id VARCHAR(120),
+            mirror_status VARCHAR(40) NOT NULL DEFAULT 'requested',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """))
+    db.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_live_mirror_user_trade
+        ON paper_stock_bot_live_mirror_history (user_id, history_trade_id)
+    """))
 
 
 def _mirror_live_equity_order(
@@ -439,13 +466,48 @@ def close_position(db: Session, trade: PaperStockBotOpenTrade, price: float) -> 
 
         # live mirror (account id resolved in _mirror_live_equity_order via submit_equity_order path)
         if bot and getattr(bot, "mirror_live", False):
-            _mirror_live_equity_order(
+            schwab_order_id = _mirror_live_equity_order(
                 db,
                 user_id=bot.user_id,
                 symbol=hist.symbol,
                 qty=qty,
                 instruction=exit_instr,
             )
+            try:
+                _ensure_live_mirror_history_table(db)
+                db.execute(
+                    text("""
+                        INSERT INTO paper_stock_bot_live_mirror_history (
+                            user_id, bot_id, history_trade_id, symbol, side, quantity,
+                            entry_price, exit_price, profit_loss, entry_time, exit_time,
+                            schwab_order_id, mirror_status
+                        )
+                        VALUES (
+                            :user_id, :bot_id, :history_trade_id, :symbol, :side, :quantity,
+                            :entry_price, :exit_price, :profit_loss, :entry_time, :exit_time,
+                            :schwab_order_id, :mirror_status
+                        )
+                    """),
+                    {
+                        "user_id": hist.user_id,
+                        "bot_id": hist.bot_id,
+                        "history_trade_id": hist.id,
+                        "symbol": hist.symbol,
+                        "side": side,
+                        "quantity": qty,
+                        "entry_price": ep,
+                        "exit_price": xp,
+                        "profit_loss": pnl_val,
+                        "entry_time": getattr(hist, "entry_time", None),
+                        "exit_time": getattr(hist, "exit_time", None),
+                        "schwab_order_id": schwab_order_id,
+                        "mirror_status": "submitted" if schwab_order_id else "requested",
+                    },
+                )
+                db.commit()
+            except Exception as mirror_exc:
+                db.rollback()
+                log.error("[LIVE] Failed to record mirrored history for hist_id=%s: %s", getattr(hist, "id", "?"), mirror_exc, exc_info=True)
 
         return hist
 
@@ -453,4 +515,3 @@ def close_position(db: Session, trade: PaperStockBotOpenTrade, price: float) -> 
         db.rollback()
         log.error(f"[CLOSE] Failed to close trade #{getattr(trade,'id','?')}: {e}", exc_info=True)
         return None
-

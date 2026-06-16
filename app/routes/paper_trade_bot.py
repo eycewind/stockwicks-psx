@@ -8,6 +8,7 @@ import pytz
 from fastapi import APIRouter, Depends, Request, Form, HTTPException, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -256,6 +257,32 @@ def _write_bot_config(bot: PaperStockTradeBot, cfg: dict) -> None:
         bot.config_json = json.dumps(cfg, separators=(",", ":"), sort_keys=True)
 
 
+def _ensure_live_mirror_history_table(db: Session) -> None:
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS paper_stock_bot_live_mirror_history (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            bot_id INTEGER NOT NULL,
+            history_trade_id INTEGER NOT NULL,
+            symbol VARCHAR(50) NOT NULL,
+            side VARCHAR(20) NOT NULL,
+            quantity DOUBLE PRECISION NOT NULL,
+            entry_price DOUBLE PRECISION,
+            exit_price DOUBLE PRECISION,
+            profit_loss DOUBLE PRECISION,
+            entry_time TIMESTAMP NULL,
+            exit_time TIMESTAMP NULL,
+            schwab_order_id VARCHAR(120),
+            mirror_status VARCHAR(40) NOT NULL DEFAULT 'requested',
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """))
+    db.execute(text("""
+        CREATE INDEX IF NOT EXISTS ix_live_mirror_user_trade
+        ON paper_stock_bot_live_mirror_history (user_id, history_trade_id)
+    """))
+
+
 def pick_template(user: User, default_template: str, td_template: str) -> str:
     return td_template if getattr(user, "schwab_allowed", "N") == "Y" else default_template
 
@@ -284,6 +311,7 @@ def paper_trade_bot_dashboard(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    _ensure_live_mirror_history_table(db)
     all_bots = (
         db.query(PaperStockTradeBot)
         .filter_by(user_id=user.id)
@@ -304,6 +332,8 @@ def paper_trade_bot_dashboard(
 
     # Attach bot objects for convenience in templates
     bot_map = {b.id: b for b in all_bots}
+    for b in all_bots:
+        b.runtime_config = _read_bot_config(b)
     for t in open_trades + closed_trades:
         t.bot = bot_map.get(t.bot_id)
 
@@ -471,9 +501,6 @@ def cancel_paper_trade_bot(
     db.query(PaperStockBotOpenTrade).filter_by(bot_id=bot_id, user_id=user.id).delete(
         synchronize_session=False
     )
-    db.query(PaperStockBotTradeHistory).filter_by(bot_id=bot_id, user_id=user.id).delete(
-        synchronize_session=False
-    )
     db.delete(bot)
     db.commit()
     logging.info(f"❌ Canceled & deleted bot #{bot_id} for {user.email}")
@@ -625,8 +652,11 @@ def _fmt_money(d: Decimal) -> str:
 
 def _serialize_hist_row(row) -> dict:
     pl = _row_pl_value(row)
+    bot = getattr(row, "bot", None)
     return {
+        "id": row.id,
         "bot_id": row.bot_id,
+        "algo_name": getattr(bot, "algo_name", None),
         "symbol": row.symbol,
         "side": (row.position_side or "").lower(),
         "qty": float(Decimal(str(row.quantity or 0))),
@@ -707,6 +737,7 @@ def trades_json(
     """
     Returns filtered closed-trade history and a summary for the user (optionally a specific bot).
     """
+    _ensure_live_mirror_history_table(db)
     q = db.query(PaperStockBotTradeHistory).filter_by(user_id=user.id)
     if bot_id != "ALL":
         try:
@@ -714,10 +745,101 @@ def trades_json(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid bot_id")
     rows = q.order_by(PaperStockBotTradeHistory.id.desc()).limit(limit).all()
+    bot_ids = {r.bot_id for r in rows}
+    bot_map = {}
+    if bot_ids:
+        bots = (
+            db.query(PaperStockTradeBot)
+            .filter(PaperStockTradeBot.user_id == user.id, PaperStockTradeBot.id.in_(bot_ids))
+            .all()
+        )
+        bot_map = {b.id: b for b in bots}
+        for r in rows:
+            r.bot = bot_map.get(r.bot_id)
 
     summary = _summarize_rows(rows)
     payload = [_serialize_hist_row(r) for r in rows]
+    if payload:
+        mirror_rows = db.execute(
+            text("""
+                SELECT history_trade_id, schwab_order_id, mirror_status
+                FROM paper_stock_bot_live_mirror_history
+                WHERE user_id = :user_id
+                  AND history_trade_id = ANY(:trade_ids)
+            """),
+            {"user_id": user.id, "trade_ids": [p["id"] for p in payload]},
+        ).mappings().all()
+        mirror_map = {int(r["history_trade_id"]): r for r in mirror_rows}
+        for item in payload:
+            mirror = mirror_map.get(int(item["id"]))
+            item["mirror_live"] = bool(mirror)
+            item["schwab_order_id"] = mirror["schwab_order_id"] if mirror else None
+            item["mirror_status"] = mirror["mirror_status"] if mirror else None
     return JSONResponse({"summary": summary, "trades": payload})
+
+
+@router.delete("/auth/papertradebot/trades_json")
+async def delete_history_trades(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _ensure_live_mirror_history_table(db)
+    body = await request.json()
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="Provide at least one trade id.")
+    try:
+        trade_ids = [int(v) for v in ids]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid trade id list.")
+
+    db.execute(
+        text("""
+            DELETE FROM paper_stock_bot_live_mirror_history
+            WHERE user_id = :user_id AND history_trade_id = ANY(:trade_ids)
+        """),
+        {"user_id": user.id, "trade_ids": trade_ids},
+    )
+    deleted = (
+        db.query(PaperStockBotTradeHistory)
+        .filter(
+            PaperStockBotTradeHistory.user_id == user.id,
+            PaperStockBotTradeHistory.id.in_(trade_ids),
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return JSONResponse({"ok": True, "deleted": int(deleted or 0)})
+
+
+@router.get("/auth/papertradebot/live_mirror_trades_json")
+def live_mirror_trades_json(
+    limit: int = Query(1000, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _ensure_live_mirror_history_table(db)
+    rows = db.execute(
+        text("""
+            SELECT id, bot_id, history_trade_id, symbol, side, quantity, entry_price,
+                   exit_price, profit_loss, entry_time, exit_time, schwab_order_id,
+                   mirror_status, created_at
+            FROM paper_stock_bot_live_mirror_history
+            WHERE user_id = :user_id
+            ORDER BY id DESC
+            LIMIT :limit
+        """),
+        {"user_id": user.id, "limit": limit},
+    ).mappings().all()
+    payload = []
+    for r in rows:
+        item = dict(r)
+        for key in ("entry_time", "exit_time", "created_at"):
+            if item.get(key) is not None:
+                item[key] = item[key].strftime("%Y-%m-%d %H:%M:%S")
+        payload.append(item)
+    return JSONResponse({"trades": payload})
 
 @router.get("/auth/papertradebot/open_positions_json")
 def open_positions_json(
@@ -1459,6 +1581,82 @@ def _parse_bot_candles(log_path: Path, max_candles: int = 500) -> dict:
     }
 
 
+def _history_trade_markers(db: Session, bot: PaperStockTradeBot) -> list[dict]:
+    markers = []
+    rows = (
+        db.query(PaperStockBotTradeHistory)
+        .filter_by(user_id=bot.user_id, bot_id=bot.id)
+        .order_by(PaperStockBotTradeHistory.entry_time.asc())
+        .limit(200)
+        .all()
+    )
+    for t in rows:
+        side = (t.position_side or "").lower()
+        if t.entry_time:
+            markers.append({
+                "time": int(t.entry_time.timestamp()),
+                "type": "ENTRY",
+                "side": side,
+                "price": float(t.entry_price),
+                "reason": "history",
+            })
+        if t.exit_time:
+            markers.append({
+                "time": int(t.exit_time.timestamp()),
+                "type": "EXIT",
+                "side": side,
+                "price": float(t.exit_price),
+                "reason": "history",
+            })
+    open_trade = (
+        db.query(PaperStockBotOpenTrade)
+        .filter_by(user_id=bot.user_id, bot_id=bot.id)
+        .order_by(PaperStockBotOpenTrade.entry_time.desc())
+        .first()
+    )
+    if open_trade and open_trade.entry_time:
+        markers.append({
+            "time": int(open_trade.entry_time.timestamp()),
+            "type": "ENTRY",
+            "side": (open_trade.position_side or "").lower(),
+            "price": float(open_trade.entry_price),
+            "reason": "open",
+        })
+    return sorted(markers, key=lambda t: t["time"])
+
+
+def _fetch_market_candles_for_chart(symbol: str, interval: str, max_candles: int = 500) -> list[dict]:
+    try:
+        from app.utils.stock.schwab_price_history import get_schwab_intraday_multi_day, get_schwab_daily
+
+        if str(interval).lower() == "1d":
+            df = get_schwab_daily(symbol, period=12)
+        else:
+            df = get_schwab_intraday_multi_day(symbol, interval, num_days=5)
+        if df is None or df.empty:
+            return []
+        df = df.tail(max_candles)
+        candles = []
+        for idx, row in df.iterrows():
+            ts = idx
+            if hasattr(ts, "timestamp"):
+                epoch = int(ts.timestamp())
+            else:
+                epoch = int(datetime.fromisoformat(str(ts)).timestamp())
+            candles.append({
+                "time": epoch,
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": int(row.get("volume", 0) or 0),
+            })
+        return candles
+    except Exception as exc:
+        logging.warning("[CHART] market candle fallback failed for %s %s: %s", symbol, interval, exc)
+        return []
+
+
 @router.get("/auth/papertradebot/bot_candles_json")
 def bot_candles_json(
     bot_id: int = Query(...),
@@ -1498,6 +1696,18 @@ def bot_candles_json(
         pretty_candles = parse_pretty_bot_log_candles(log_path)
         if pretty_candles:
             data["candles"] = pretty_candles
+
+    if not data.get("candles"):
+        data["candles"] = _fetch_market_candles_for_chart(bot.symbol, bot.interval)
+
+    history_markers = _history_trade_markers(db, bot)
+    if history_markers:
+        existing = {(t.get("time"), t.get("type"), t.get("price")) for t in data.get("trades", [])}
+        for marker in history_markers:
+            key = (marker.get("time"), marker.get("type"), marker.get("price"))
+            if key not in existing:
+                data.setdefault("trades", []).append(marker)
+        data["trades"] = sorted(data.get("trades", []), key=lambda t: t["time"])
 
     # Also get thresholds from config
     try:
