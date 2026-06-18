@@ -48,6 +48,13 @@ from app.scripts.stock_algos.base_wiring import (
 from app.scripts.research import Featureset_4 as mm2
 build_features = mm2.build_features
 from app.scripts.ml.mm_live_helpers import predict_probability
+from app.scripts.ml.model_refresh_policy import (
+    DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+    DEFAULT_MODEL_MAX_AGE_MINUTES,
+    DEFAULT_MODEL_REFRESH_MODE,
+    load_or_train_model_with_policy,
+    normalize_model_refresh_mode,
+)
 # IMPORTANT: use same flow as algo1_runner
 from app.services.paper_trade_service import open_position, close_position
 from app.services.mm_core_engine import (
@@ -86,7 +93,10 @@ DEFAULTS = {
     "once_per_bar": True,
     "cooldown_sec": 0,
     "k_forward": 3,                   # predict 15 min ahead (TREND not noise)
-    "model_max_age_hours": 0.25,         # retrain every hour (fresh model)
+    "model_refresh_mode": DEFAULT_MODEL_REFRESH_MODE,
+    "model_max_age_minutes": DEFAULT_MODEL_MAX_AGE_MINUTES,
+    "model_max_age_hours": DEFAULT_MODEL_MAX_AGE_MINUTES / 60.0,
+    "min_new_bars_before_retrain": DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
     "daily_loss_limit_usd": 500.0,
     "take_profit_percent": 1,
     "atr_multiplier": 1.0,
@@ -118,7 +128,10 @@ class BotConfig:
     once_per_bar: bool = DEFAULTS["once_per_bar"]
     cooldown_sec: int = DEFAULTS["cooldown_sec"]
     k_forward: int = DEFAULTS["k_forward"]
-    model_max_age_hours: int = DEFAULTS["model_max_age_hours"]
+    model_refresh_mode: str = DEFAULTS["model_refresh_mode"]
+    model_max_age_minutes: float = DEFAULTS["model_max_age_minutes"]
+    model_max_age_hours: float = DEFAULTS["model_max_age_hours"]
+    min_new_bars_before_retrain: int = DEFAULTS["min_new_bars_before_retrain"]
     daily_loss_limit_usd: float = DEFAULTS["daily_loss_limit_usd"]
     take_profit_percent: float = DEFAULTS["take_profit_percent"]
     atr_multiplier: float = DEFAULTS["atr_multiplier"]
@@ -779,6 +792,21 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             cfg.once_per_bar = _safe_bool(js.get("once_per_bar", cfg.once_per_bar), cfg.once_per_bar)
             cfg.cooldown_sec = _safe_int(js.get("cooldown_sec", cfg.cooldown_sec), cfg.cooldown_sec)
             cfg.k_forward = _safe_int(js.get("k_forward", cfg.k_forward), cfg.k_forward)
+            cfg.model_refresh_mode = normalize_model_refresh_mode(js.get("model_refresh_mode", cfg.model_refresh_mode))
+            cfg.model_max_age_minutes = _safe_float(
+                js.get("model_max_age_minutes", cfg.model_max_age_minutes),
+                cfg.model_max_age_minutes,
+            )
+            cfg.model_max_age_hours = _safe_float(js.get("model_max_age_hours", cfg.model_max_age_hours), cfg.model_max_age_hours)
+            if "model_max_age_minutes" not in js and "model_max_age_hours" in js:
+                cfg.model_max_age_minutes = max(0.0, cfg.model_max_age_hours * 60.0)
+            cfg.min_new_bars_before_retrain = max(
+                0,
+                _safe_int(
+                    js.get("min_new_bars_before_retrain", cfg.min_new_bars_before_retrain),
+                    cfg.min_new_bars_before_retrain,
+                ),
+            )
             cfg.prob_trail_drop = _safe_float(js.get("prob_trail_drop", cfg.prob_trail_drop), cfg.prob_trail_drop)
             cfg.prob_exit_mode = str(js.get("prob_exit_mode", cfg.prob_exit_mode) or cfg.prob_exit_mode).strip().lower()
             if cfg.prob_exit_mode not in {"trailing", "fixed"}:
@@ -904,51 +932,17 @@ def _load_or_train_model(
     by retraining the model and overwriting the old file.
     """
     try:
-        if cfg is not None and bool(getattr(cfg, "replay_force_retrain_each_bar", False)):
-            force_retrain = True
-
-        # You want to retrain on every run -> ignore existing model when force_retrain=True
-        if os.path.exists(model_path) and not force_retrain:
-            try:
-                pack = joblib.load(model_path)
-                logger.info(f"[AlgoMM] Loaded model from {model_path}")
-                return pack["model"], pack.get("features", feat_names)
-            except Exception as e:
-                logger.warning(
-                    "[AlgoMM] Failed to load existing model %s (%s). "
-                    "Will retrain a fresh model.",
-                    model_path,
-                    e,
-                    exc_info=True,
-                )
-                try:
-                    os.remove(model_path)
-                except Exception:
-                    pass
-
-        logger.info(f"[AlgoMM] Training new model for {symbol} ({interval})...")
-        from sklearn.ensemble import HistGradientBoostingClassifier
-
-        X = _prepare_X(feat_df, feat_names)
-        y = feat_df.loc[X.index, "y"].astype(int).values
-        w = feat_df.loc[X.index, "w"].astype(float).values
-
-        clf = HistGradientBoostingClassifier(
-            max_depth=4,
-            learning_rate=0.06,
-            max_iter=250,
-            l2_regularization=1.0,
+        return load_or_train_model_with_policy(
+            model_path=model_path,
+            symbol=symbol,
+            interval=interval,
+            feat_df=feat_df,
+            feat_names=feat_names,
+            cfg=cfg,
+            prepare_X=_prepare_X,
+            logger=logger,
+            force_retrain=force_retrain,
         )
-        clf.fit(X, y, sample_weight=w)
-
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        joblib.dump(
-            {"model": clf, "features": feat_names, "interval": interval, "symbol": symbol},
-            model_path,
-        )
-        logger.info(f"[AlgoMM] Trained and saved new model to {model_path}")
-        return clf, feat_names
-
     except Exception as e:
         logger.error(f"[AlgoMM] Error in _load_or_train_model: {e}", exc_info=True)
         raise
@@ -1180,14 +1174,13 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
             f"mm4_{bot.symbol}_{bot.interval}_k{cfg.k_forward}.joblib",
         )
 
-        # You want to retrain every run:
         model, feat_names = _load_or_train_model(
             model_path=model_path,
             symbol=bot.symbol,
             interval=(bot.interval or "1min"),
             feat_df=feat_df,
             feat_names=default_feat_names,
-            force_retrain=True,
+            cfg=cfg,
         )
 
         X = _prepare_X(feat_df, feat_names)

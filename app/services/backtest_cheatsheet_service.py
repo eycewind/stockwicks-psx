@@ -16,6 +16,12 @@ from app.services.mm_core_engine import (
     evaluate_entry,
     evaluate_exit,
 )
+from app.scripts.ml.model_refresh_policy import (
+    DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+    DEFAULT_MODEL_MAX_AGE_MINUTES,
+    DEFAULT_MODEL_REFRESH_MODE,
+    normalize_model_refresh_mode,
+)
 
 
 ALGO_FEATURE_SETS = {
@@ -42,6 +48,9 @@ class CheatSheetRequest:
     allow_short: bool = True
     eod_close: bool = True
     oos_fraction: float = 0.35
+    model_refresh_mode: str = DEFAULT_MODEL_REFRESH_MODE
+    model_max_age_minutes: float = DEFAULT_MODEL_MAX_AGE_MINUTES
+    min_new_bars_before_retrain: int = DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN
 
 
 def _safe_float(value: Any, default: float) -> float:
@@ -83,6 +92,126 @@ def _predict_probability(model, X: pd.DataFrame) -> np.ndarray:
 
 def _load_feature_module(feature_set: str):
     return importlib.import_module(f"app.scripts.research.{feature_set}")
+
+
+def _fit_probability_model(
+    *,
+    feature_module: Any,
+    feature_set: str,
+    symbol: str,
+    interval: str,
+    price_source: pd.DataFrame,
+    feat_names: list[str],
+    k_forward: int,
+):
+    train_feat = feature_module.build_training_features_from_df(
+        df=price_source,
+        symbol=symbol,
+        interval=interval,
+        k_forward=k_forward,
+        feature_set=feature_set,
+    )
+    if train_feat is None or train_feat.empty:
+        raise ValueError("training labels are empty")
+    if "y" not in train_feat or "w" not in train_feat or train_feat["y"].nunique() < 2:
+        raise ValueError("training labels are not usable")
+
+    X_train = _prepare_X(train_feat, list(feat_names))
+    y_train = train_feat.loc[X_train.index, "y"].astype(int).values
+    w_train = train_feat.loc[X_train.index, "w"].astype(float).values
+    if len(set(y_train)) < 2:
+        raise ValueError("train split left only one training class")
+
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    model = HistGradientBoostingClassifier(
+        max_depth=4,
+        learning_rate=0.06,
+        max_iter=250,
+        l2_regularization=1.0,
+    )
+    model.fit(X_train, y_train, sample_weight=w_train)
+    return model, int(len(X_train)), train_feat
+
+
+def _adaptive_policy_probabilities(
+    *,
+    feature_module: Any,
+    feature_set: str,
+    symbol: str,
+    interval: str,
+    price_df: pd.DataFrame,
+    infer_feat: pd.DataFrame,
+    feat_names: list[str],
+    train_end: int,
+    k_forward: int,
+    req: CheatSheetRequest,
+) -> tuple[pd.Series, dict[str, Any]]:
+    mode = normalize_model_refresh_mode(req.model_refresh_mode)
+    max_age_minutes = max(0.0, float(req.model_max_age_minutes or 0.0))
+    min_new_bars = max(0, int(req.min_new_bars_before_retrain or 0))
+    n = len(price_df)
+    cursor = max(30, int(train_end))
+    probs = pd.Series(index=infer_feat.index, dtype=float, name="prob_up")
+    train_events = 0
+    first_train_bars = 0
+    last_train_bars = 0
+    first_train_bar = None
+    last_train_bar = None
+
+    while cursor < n:
+        price_source = price_df.iloc[:cursor].copy()
+        model, train_bars, train_feat = _fit_probability_model(
+            feature_module=feature_module,
+            feature_set=feature_set,
+            symbol=symbol,
+            interval=interval,
+            price_source=price_source,
+            feat_names=feat_names,
+            k_forward=k_forward,
+        )
+        train_events += 1
+        if train_events == 1:
+            first_train_bars = train_bars
+            first_train_bar = _ts_iso(train_feat.index, 0)
+        last_train_bars = train_bars
+        last_train_bar = _ts_iso(train_feat.index, -1)
+
+        if mode == "every_bar":
+            next_cursor = cursor + 1
+        elif mode == "fixed":
+            next_cursor = n
+        else:
+            next_by_bars = n if min_new_bars <= 0 else cursor + min_new_bars
+            next_by_time = n
+            if max_age_minutes > 0:
+                start_ts = pd.Timestamp(price_df.index[cursor - 1])
+                for pos in range(cursor + 1, n + 1):
+                    try:
+                        elapsed = (pd.Timestamp(price_df.index[pos - 1]) - start_ts).total_seconds() / 60.0
+                    except Exception:
+                        elapsed = 0.0
+                    if elapsed >= max_age_minutes:
+                        next_by_time = pos
+                        break
+            next_cursor = max(cursor + 1, min(n, min(next_by_bars, next_by_time)))
+
+        X_seg = _prepare_X(infer_feat.iloc[cursor:next_cursor], list(feat_names))
+        if not X_seg.empty:
+            probs.loc[X_seg.index] = _predict_probability(model, X_seg)
+        cursor = next_cursor
+
+    meta = {
+        "train_events": train_events,
+        "train_bars": first_train_bars,
+        "last_train_bars": last_train_bars,
+        "first_train_bar": first_train_bar,
+        "last_train_bar": last_train_bar,
+        "model_refresh_mode": mode,
+        "model_max_age_minutes": max_age_minutes,
+        "min_new_bars_before_retrain": min_new_bars,
+    }
+    return probs.dropna(), meta
 
 
 def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.DataFrame:
@@ -617,51 +746,25 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                 errors.append(f"{algo_name} {interval}: validation/holdout split too small")
                 continue
 
-            # Build labels from the pre-split price frame only. Building labels
-            # on the full frame would let the last training rows see forward
-            # validation candles through y/w.
-            train_price_source = price_df.loc[train_index].copy()
-            train_feat_safe = feature_module.build_training_features_from_df(
-                df=train_price_source,
-                symbol=symbol,
-                interval=interval,
-                k_forward=req.k_forward,
-                feature_set=feature_set,
-            )
-            if train_feat_safe is None or train_feat_safe.empty:
-                errors.append(f"{algo_name} {interval}: safe training labels are empty")
-                continue
-            train_feat_safe = train_feat_safe.loc[train_feat_safe.index.intersection(train_index)].copy()
-            if "y" not in train_feat_safe or "w" not in train_feat_safe or train_feat_safe["y"].nunique() < 2:
-                errors.append(f"{algo_name} {interval}: safe training labels are not usable")
-                continue
-
-            X_train = _prepare_X(train_feat_safe, list(feat_names))
-            y_train = train_feat_safe.loc[X_train.index, "y"].astype(int).values
-            w_train = train_feat_safe.loc[X_train.index, "w"].astype(float).values
-            if len(set(y_train)) < 2:
-                errors.append(f"{algo_name} {interval}: safe train split left only one training class")
-                continue
-
             try:
-                from sklearn.ensemble import HistGradientBoostingClassifier
-
-                model = HistGradientBoostingClassifier(
-                    max_depth=4,
-                    learning_rate=0.06,
-                    max_iter=250,
-                    l2_regularization=1.0,
+                prob_all, refresh_meta = _adaptive_policy_probabilities(
+                    feature_module=feature_module,
+                    feature_set=feature_set,
+                    symbol=symbol,
+                    interval=interval,
+                    price_df=price_df,
+                    infer_feat=infer_feat,
+                    feat_names=list(feat_names),
+                    train_end=train_end,
+                    k_forward=req.k_forward,
+                    req=req,
                 )
-                model.fit(X_train, y_train, sample_weight=w_train)
-                X_all = _prepare_X(infer_feat, list(feat_names))
-                probs = _predict_probability(model, X_all)
             except Exception as exc:
                 errors.append(f"{algo_name} {interval}: model training failed: {exc}")
                 continue
 
             validation_price = price_df.loc[validation_index]
             holdout_price = price_df.loc[holdout_index]
-            prob_all = pd.Series(probs, index=X_all.index, name="prob_up")
             validation_prob = prob_all.loc[validation_index]
             holdout_prob = prob_all.loc[holdout_index]
 
@@ -756,26 +859,32 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
                     "holdout_score": holdout_score,
                     "confidence": _confidence(holdout_metrics, validation_metrics_for_confidence),
                     "backtest_method": "validation_picked_holdout",
-                    "backtest_method_label": "Validation-picked holdout scan",
+                    "backtest_method_label": "Adaptive-refresh validation/holdout scan",
                     "backtest_notes": (
-                        "Trains one model on pre-split history, selects parameters "
-                        "on validation bars, then reports P/L on later holdout bars. "
-                        "Training labels are rebuilt from pre-split candles only. "
+                        "Uses the same model refresh policy as replay/live: predict every bar, "
+                        "then retrain only when the configured refresh mode says to. "
+                        "Parameters are selected on validation bars and reported on later holdout bars. "
+                        "Each retrain rebuilds labels from candles visible at that point only. "
                         "The parameter sweep matches replay-supported exits: percent SL, "
                         "percent trailing profit, probability trail drop, and long/short "
                         "probability thresholds."
                     ),
                     "history_bars": int(len(common_idx)),
-                    "train_bars": int(len(X_train)),
+                    "train_bars": int(refresh_meta["train_bars"]),
+                    "last_train_bars": int(refresh_meta["last_train_bars"]),
+                    "train_events": int(refresh_meta["train_events"]),
                     "validation_bars": int(len(validation_index)),
                     "test_bars": int(len(holdout_index)),
-                    "first_train_bar": _ts_iso(train_index, 0),
-                    "last_train_bar": _ts_iso(train_index, -1),
+                    "first_train_bar": refresh_meta["first_train_bar"],
+                    "last_train_bar": refresh_meta["last_train_bar"],
                     "first_validation_bar": _ts_iso(validation_index, 0),
                     "last_validation_bar": _ts_iso(validation_index, -1),
                     "first_test_bar": _ts_iso(holdout_price.index, 0),
                     "last_test_bar": _ts_iso(holdout_price.index, -1),
                     "oos_fraction": float(req.oos_fraction),
+                    "model_refresh_mode": refresh_meta["model_refresh_mode"],
+                    "model_max_age_minutes": refresh_meta["model_max_age_minutes"],
+                    "min_new_bars_before_retrain": refresh_meta["min_new_bars_before_retrain"],
                     "validation_total_profit": candidate["validation_total_profit"],
                     "validation_num_trades": candidate["validation_num_trades"],
                     "validation_win_rate": candidate["validation_win_rate"],
@@ -808,19 +917,22 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
         "symbol": symbol,
         "intervals": intervals,
         "profile": req.profile,
-        "backtest_method": "validation_picked_holdout",
-        "backtest_method_label": "Validation-picked holdout scan",
+        "backtest_method": "adaptive_refresh_validation_picked_holdout",
+        "backtest_method_label": "Adaptive-refresh validation-picked holdout scan",
         "backtest_explanation": (
-            "The optimizer fetches recent history, trains one model per algo/interval "
-            "using only pre-split candles, tests parameters on validation bars and "
+            "The optimizer fetches recent history, uses the same model refresh "
+            "policy as replay/live, tests parameters on validation bars and "
             "runs later holdout bars for the strongest validation candidates, then ranks by a deployment score that requires "
             "both validation and holdout confirmation. The displayed P/L and win rate are holdout results. "
-            "Training labels are rebuilt from the pre-split "
-            "frame so they cannot use future validation candles. The parameter "
+            "Training labels are rebuilt only from candles visible at each refresh point, "
+            "so they cannot use future validation/holdout candles. The parameter "
             "grid is limited to replay-supported exits, with percent stop loss, "
             "percent trailing profit, and probability trail values for volatile moves."
         ),
         "oos_fraction": float(req.oos_fraction),
+        "model_refresh_mode": normalize_model_refresh_mode(req.model_refresh_mode),
+        "model_max_age_minutes": float(req.model_max_age_minutes),
+        "min_new_bars_before_retrain": int(req.min_new_bars_before_retrain),
         "tested_combinations": tested_combinations,
         "top": top_rows,
         "best_by_algo": best_by_algo,

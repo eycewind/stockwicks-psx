@@ -40,6 +40,11 @@ from app.routes.auth import get_current_user
 from app.routes import auth as auth_routes
 from app.scripts.replay.data_ingest import fetch_and_save, get_data_paths
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
+from app.scripts.ml.model_refresh_policy import (
+    DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+    DEFAULT_MODEL_MAX_AGE_MINUTES,
+    DEFAULT_MODEL_REFRESH_MODE,
+)
 from app.services.replay_process import (
     pid_is_alive,
     purge_old_sessions,
@@ -85,7 +90,10 @@ DEFAULT_REPLAY_MM_CONFIG = {
     "trailing_profit_pct": 0.005,
     "builder_days": 10,
     "k_forward": 3,
-    "model_max_age_hours": 0.25,
+    "model_refresh_mode": DEFAULT_MODEL_REFRESH_MODE,
+    "model_max_age_minutes": DEFAULT_MODEL_MAX_AGE_MINUTES,
+    "model_max_age_hours": DEFAULT_MODEL_MAX_AGE_MINUTES / 60.0,
+    "min_new_bars_before_retrain": DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
     "daily_loss_limit_usd": 5000.0,
 }
 REPLAY_TRAIN_MIN_ROWS = 30
@@ -179,7 +187,10 @@ def _build_mm_replay_config(
         ),
         "builder_days": DEFAULT_REPLAY_MM_CONFIG["builder_days"],
         "k_forward": DEFAULT_REPLAY_MM_CONFIG["k_forward"],
+        "model_refresh_mode": DEFAULT_REPLAY_MM_CONFIG["model_refresh_mode"],
+        "model_max_age_minutes": DEFAULT_REPLAY_MM_CONFIG["model_max_age_minutes"],
         "model_max_age_hours": DEFAULT_REPLAY_MM_CONFIG["model_max_age_hours"],
+        "min_new_bars_before_retrain": DEFAULT_REPLAY_MM_CONFIG["min_new_bars_before_retrain"],
 
         # Same user-set guardrails as production paper bot.
         "stop_loss_usd": _safe_float_form(

@@ -24,6 +24,11 @@ from app.models.paper_trading_bot import (
     PaperStockBotTradeHistory,
 )
 from app.utils.stock.market_price import get_live_price
+from app.scripts.ml.model_refresh_policy import (
+    DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+    DEFAULT_MODEL_MAX_AGE_MINUTES,
+    DEFAULT_MODEL_REFRESH_MODE,
+)
 
 
 def client_prefix(request: Request) -> str:
@@ -81,7 +86,10 @@ ALLOWED_MM_ALGOS = {
 DEFAULT_BOT_CONFIG = {
     "builder_days": 30,
     "k_forward": 3,
-    "model_max_age_hours": 0.25,
+    "model_refresh_mode": DEFAULT_MODEL_REFRESH_MODE,
+    "model_max_age_minutes": DEFAULT_MODEL_MAX_AGE_MINUTES,
+    "model_max_age_hours": DEFAULT_MODEL_MAX_AGE_MINUTES / 60.0,
+    "min_new_bars_before_retrain": DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
     "long_entry_prob": 0.60,
     "short_entry_prob": 0.40,
     "prob_smoothing_bars": 3,
@@ -94,7 +102,7 @@ DEFAULT_BOT_CONFIG = {
     "trailing_profit_usd": 75.0,
     "stop_loss_pct": 0.02,
     "trailing_profit_pct": 0.005,
-    "force_retrain_each_tick": True,
+    "force_retrain_each_tick": False,
 }
 
 
@@ -152,7 +160,10 @@ def _bot_config_json(
         "feature_set": ALLOWED_MM_ALGOS[algo_name],
         "builder_days": DEFAULT_BOT_CONFIG["builder_days"],
         "k_forward": DEFAULT_BOT_CONFIG["k_forward"],
+        "model_refresh_mode": DEFAULT_BOT_CONFIG["model_refresh_mode"],
+        "model_max_age_minutes": DEFAULT_BOT_CONFIG["model_max_age_minutes"],
         "model_max_age_hours": DEFAULT_BOT_CONFIG["model_max_age_hours"],
+        "min_new_bars_before_retrain": DEFAULT_BOT_CONFIG["min_new_bars_before_retrain"],
 
         # Backward-compatible aliases for older config readers.
         "long_threshold": _safe_float_form(
@@ -222,7 +233,7 @@ def _bot_config_json(
             trailing_profit_pct,
             DEFAULT_BOT_CONFIG["trailing_profit_pct"],
         ),
-        "force_retrain_each_tick": True,
+        "force_retrain_each_tick": False,
 
         # User toggle.
         "eod_close": eod_auto_close == "on",

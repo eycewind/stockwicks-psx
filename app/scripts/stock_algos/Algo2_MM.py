@@ -44,6 +44,13 @@ from app.models.paper_trading_bot import (
 from app.scripts.stock_algos.base_wiring import StockBaseRunner, _ET
 from app.scripts.research import Featureset_2 as mm2
 from app.scripts.ml.mm_live_helpers import predict_probability
+from app.scripts.ml.model_refresh_policy import (
+    DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+    DEFAULT_MODEL_MAX_AGE_MINUTES,
+    DEFAULT_MODEL_REFRESH_MODE,
+    load_or_train_model_with_policy,
+    normalize_model_refresh_mode,
+)
 from app.services.paper_trade_service import open_position, close_position
 from app.services.mm_core_engine import (
     MMCorePosition,
@@ -67,7 +74,10 @@ MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(CLIENT_ROOT, "models"))
 DEFAULTS = {
     "builder_days": 30,
     "k_forward": 3,
-    "model_max_age_hours": 0.25,
+    "model_refresh_mode": DEFAULT_MODEL_REFRESH_MODE,
+    "model_max_age_minutes": DEFAULT_MODEL_MAX_AGE_MINUTES,
+    "model_max_age_hours": DEFAULT_MODEL_MAX_AGE_MINUTES / 60.0,
+    "min_new_bars_before_retrain": DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
 
     # Simple probability engine.
     # Uses avg of latest probability + previous 2 probabilities.
@@ -104,7 +114,10 @@ class BotConfig:
 
     builder_days: int = DEFAULTS["builder_days"]
     k_forward: int = DEFAULTS["k_forward"]
+    model_refresh_mode: str = DEFAULTS["model_refresh_mode"]
+    model_max_age_minutes: float = DEFAULTS["model_max_age_minutes"]
     model_max_age_hours: float = DEFAULTS["model_max_age_hours"]
+    min_new_bars_before_retrain: int = DEFAULTS["min_new_bars_before_retrain"]
 
     # Simple probability engine.
     long_entry_prob: float = DEFAULTS["long_entry_prob"]
@@ -266,7 +279,21 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
 
     cfg.builder_days = _safe_int(js.get("builder_days", cfg.builder_days), cfg.builder_days)
     cfg.k_forward = _safe_int(js.get("k_forward", cfg.k_forward), cfg.k_forward)
+    cfg.model_refresh_mode = normalize_model_refresh_mode(js.get("model_refresh_mode", cfg.model_refresh_mode))
+    cfg.model_max_age_minutes = _safe_float(
+        js.get("model_max_age_minutes", cfg.model_max_age_minutes),
+        cfg.model_max_age_minutes,
+    )
     cfg.model_max_age_hours = _safe_float(js.get("model_max_age_hours", cfg.model_max_age_hours), cfg.model_max_age_hours)
+    if "model_max_age_minutes" not in js and "model_max_age_hours" in js:
+        cfg.model_max_age_minutes = max(0.0, cfg.model_max_age_hours * 60.0)
+    cfg.min_new_bars_before_retrain = max(
+        0,
+        _safe_int(
+            js.get("min_new_bars_before_retrain", cfg.min_new_bars_before_retrain),
+            cfg.min_new_bars_before_retrain,
+        ),
+    )
 
     cfg.long_entry_prob = _safe_float(
         js.get("long_entry_prob", js.get("entry_prob_long", cfg.long_entry_prob)),
@@ -341,7 +368,8 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             "[LIVE CONFIG APPLIED] bot_id=%s algo=%s long_entry_prob=%.3f "
             "short_entry_prob=%.3f prob_exit_mode=%s prob_trail_drop=%.3f "
             "long_fixed_exit_prob=%.3f short_fixed_exit_prob=%.3f hard_stop_usd=%.2f "
-            "trailing_stop_activation=%.2f trailing_stop_distance=%.2f",
+            "trailing_stop_activation=%.2f trailing_stop_distance=%.2f "
+            "model_refresh_mode=%s model_max_age_minutes=%.1f min_new_bars_before_retrain=%s",
             bot_id,
             cfg.algo_name,
             float(cfg.long_entry_prob or 0.0),
@@ -353,6 +381,9 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             float(cfg.hard_stop_usd or 0.0),
             float(cfg.trailing_stop_activation or 0.0),
             float(cfg.trailing_stop_distance or 0.0),
+            cfg.model_refresh_mode,
+            float(cfg.model_max_age_minutes or 0.0),
+            int(cfg.min_new_bars_before_retrain or 0),
         )
 
     return cfg
@@ -393,43 +424,16 @@ def _load_or_train_model(
     feat_names: List[str],
     cfg: BotConfig,
 ):
-    # Always retrain model on every bot/replay tick.
-    # This keeps live and replay decisions based on the newest available
-    # candles instead of reusing a cached joblib model.
-    logger.warning(
-        "[AlgoMM] FORCE TRAIN EVERY TICK enabled; training %s/%s model for %s %s using %s features",
-        cfg.algo_name, cfg.feature_set, symbol, interval, len(feat_names),
+    return load_or_train_model_with_policy(
+        model_path=model_path,
+        symbol=symbol,
+        interval=interval,
+        feat_df=feat_df,
+        feat_names=feat_names,
+        cfg=cfg,
+        prepare_X=_prepare_X,
+        logger=logger,
     )
-
-    from sklearn.ensemble import HistGradientBoostingClassifier
-
-    X = _prepare_X(feat_df, feat_names)
-    y = feat_df.loc[X.index, "y"].astype(int).values
-    w = feat_df.loc[X.index, "w"].astype(float).values
-
-    clf = HistGradientBoostingClassifier(
-        max_depth=4,
-        learning_rate=0.06,
-        max_iter=250,
-        l2_regularization=1.0,
-    )
-    clf.fit(X, y, sample_weight=w)
-
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    joblib.dump(
-        {
-            "model": clf,
-            "features": feat_names,
-            "interval": interval,
-            "symbol": symbol,
-            "algo_name": cfg.algo_name,
-            "feature_set": cfg.feature_set,
-            "trained_at": datetime.now().isoformat(),
-        },
-        model_path,
-    )
-    logger.info("[AlgoMM] Trained and saved model to %s", model_path)
-    return clf, feat_names
 
 
 # -------------------- Logging --------------------

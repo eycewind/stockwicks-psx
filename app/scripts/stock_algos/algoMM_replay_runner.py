@@ -58,6 +58,12 @@ from app.services.mm_core_engine import (
 )
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.scripts.stock_algos.base_wiring import _ET
+from app.scripts.ml.model_refresh_policy import (
+    DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+    DEFAULT_MODEL_MAX_AGE_MINUTES,
+    DEFAULT_MODEL_REFRESH_MODE,
+    normalize_model_refresh_mode,
+)
 
 logger = logging.getLogger("AlgoMM_Replay")
 if not logger.handlers:
@@ -262,7 +268,10 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
     for key, caster in [
         ("builder_days", _safe_int),
         ("k_forward", _safe_int),
+        ("model_refresh_mode", lambda v, d: normalize_model_refresh_mode(v, d)),
+        ("model_max_age_minutes", _safe_float),
         ("model_max_age_hours", _safe_float),
+        ("min_new_bars_before_retrain", _safe_int),
         ("long_entry_prob", _safe_float),
         ("short_entry_prob", _safe_float),
         ("prob_smoothing_bars", _safe_int),
@@ -361,6 +370,36 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         if hasattr(cfg, "short_fixed_exit_prob") and "short_fixed_exit_prob" not in js:
             cfg.short_fixed_exit_prob = _safe_float(js.get("prob_fixed_exit_prob"), cfg.short_fixed_exit_prob)
     cfg.prediction_strategy = "model_only"
+    if not hasattr(cfg, "model_refresh_mode"):
+        cfg.model_refresh_mode = DEFAULT_MODEL_REFRESH_MODE
+    if "model_refresh_mode" in js:
+        cfg.model_refresh_mode = normalize_model_refresh_mode(js.get("model_refresh_mode"), DEFAULT_MODEL_REFRESH_MODE)
+    elif _safe_bool(js.get("replay_force_retrain_each_bar", js.get("force_retrain_each_tick", False)), False):
+        cfg.model_refresh_mode = "every_bar"
+    else:
+        cfg.model_refresh_mode = normalize_model_refresh_mode(getattr(cfg, "model_refresh_mode", DEFAULT_MODEL_REFRESH_MODE))
+
+    if not hasattr(cfg, "model_max_age_minutes"):
+        cfg.model_max_age_minutes = DEFAULT_MODEL_MAX_AGE_MINUTES
+    cfg.model_max_age_minutes = _safe_float(
+        js.get("model_max_age_minutes", getattr(cfg, "model_max_age_minutes", DEFAULT_MODEL_MAX_AGE_MINUTES)),
+        DEFAULT_MODEL_MAX_AGE_MINUTES,
+    )
+    if "model_max_age_minutes" not in js and "model_max_age_hours" in js:
+        cfg.model_max_age_minutes = max(
+            0.0,
+            _safe_float(js.get("model_max_age_hours"), DEFAULT_MODEL_MAX_AGE_MINUTES / 60.0) * 60.0,
+        )
+    cfg.model_max_age_hours = cfg.model_max_age_minutes / 60.0
+    if not hasattr(cfg, "min_new_bars_before_retrain"):
+        cfg.min_new_bars_before_retrain = DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN
+    cfg.min_new_bars_before_retrain = max(
+        0,
+        _safe_int(
+            js.get("min_new_bars_before_retrain", cfg.min_new_bars_before_retrain),
+            DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
+        ),
+    )
 
     session_id = int(getattr(session, "id", 0) or 0)
     if session_id not in _CONFIG_LOGGED_SESSION_IDS:
@@ -371,7 +410,8 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
             "long_fixed_exit_prob=%.3f short_fixed_exit_prob=%.3f stop_loss_usd=%.2f "
             "trailing_profit_usd=%.2f "
             "long_threshold=%.3f short_threshold=%.3f min_prob_advantage=%.3f "
-            "min_volume_multiplier=%.3f cooldown_sec=%s obv_slope_threshold=%.3f",
+            "min_volume_multiplier=%.3f cooldown_sec=%s obv_slope_threshold=%.3f "
+            "model_refresh_mode=%s model_max_age_minutes=%.1f min_new_bars_before_retrain=%s",
             session_id,
             cfg.algo_name,
             float(getattr(cfg, "long_entry_prob", 0.0) or 0.0),
@@ -388,6 +428,9 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
             float(getattr(cfg, "min_volume_multiplier", 0.0) or 0.0),
             getattr(cfg, "cooldown_sec", None),
             float(getattr(cfg, "obv_slope_threshold", 0.0) or 0.0),
+            getattr(cfg, "model_refresh_mode", DEFAULT_MODEL_REFRESH_MODE),
+            float(getattr(cfg, "model_max_age_minutes", 0.0) or 0.0),
+            int(getattr(cfg, "min_new_bars_before_retrain", 0) or 0),
         )
 
     # Replay-only controls. They do not alter production decision rules.
@@ -399,7 +442,7 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         ),
     )
     cfg.replay_train_min_rows = _safe_int(js.get("replay_train_min_rows", 30), 30)
-    cfg.replay_force_retrain_each_bar = _safe_bool(js.get("replay_force_retrain_each_bar", True), True)
+    cfg.replay_force_retrain_each_bar = cfg.model_refresh_mode == "every_bar"
 
     return live, cfg, js
 
