@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -218,7 +218,12 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.Data
     from app.scripts.stock_algos.base_wiring import StockBaseRunner
 
     runner = StockBaseRunner()
-    raw = runner.fetch_source_bars(symbol, interval=interval, lookback_days=builder_days)
+    raw = runner.fetch_source_bars(
+        symbol,
+        interval=interval,
+        lookback_days=builder_days,
+        raise_on_empty=True,
+    )
     if raw is None or raw.empty:
         raise RuntimeError(f"No price data returned for {symbol} {interval}")
 
@@ -230,12 +235,21 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.Data
 
 def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
     is_algo4 = str(algo_name or "") == "Algo4_MM"
-    long_entries = [0.50, 0.55, 0.60, 0.65]
-    short_entries = [0.30, 0.35, 0.40, 0.45]
-    prob_trail_drops = [round(x / 100.0, 2) for x in range(5, 66, 5)]
-    stop_loss_pcts = [0.01, 0.02, 0.03]
-    trailing_profit_pcts = [0.005, 0.01]
-    prob_exit_modes = ["trailing", "fixed"]
+    is_deep = str(profile or "quick").lower() == "deep"
+    if is_deep:
+        long_entries = [0.50, 0.55, 0.60, 0.65]
+        short_entries = [0.30, 0.35, 0.40, 0.45]
+        prob_trail_drops = [round(x / 100.0, 2) for x in range(5, 66, 5)]
+        stop_loss_pcts = [0.01, 0.02, 0.03]
+        trailing_profit_pcts = [0.005, 0.01]
+        prob_exit_modes = ["trailing", "fixed"]
+    else:
+        long_entries = [0.55, 0.60]
+        short_entries = [0.35, 0.40]
+        prob_trail_drops = [0.10, 0.20, 0.35]
+        stop_loss_pcts = [0.01, 0.02]
+        trailing_profit_pcts = [0.005]
+        prob_exit_modes = ["trailing"]
     long_fixed_exit_probs = [0.40]
     short_fixed_exit_probs = [0.60]
 
@@ -612,7 +626,10 @@ def _confidence(metrics: dict[str, float], validation_metrics: dict[str, float] 
     return "Low"
 
 
-def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
+def run_cheatsheet(
+    req: CheatSheetRequest,
+    price_frames: Mapping[str, pd.DataFrame] | None = None,
+) -> dict[str, Any]:
     symbol = req.symbol.upper().strip()
     if not symbol:
         raise ValueError("Symbol is required")
@@ -627,7 +644,13 @@ def run_cheatsheet(req: CheatSheetRequest) -> dict[str, Any]:
 
     for interval in intervals:
         try:
-            price_full = _fetch_price_frame(symbol, interval, req.builder_days)
+            if price_frames is not None:
+                cached = price_frames.get(interval)
+                if cached is None or cached.empty:
+                    raise RuntimeError(f"No prefetched price data available for {symbol} {interval}")
+                price_full = cached.copy()
+            else:
+                price_full = _fetch_price_frame(symbol, interval, req.builder_days)
         except Exception as exc:
             errors.append(f"{symbol} {interval}: {exc}")
             continue

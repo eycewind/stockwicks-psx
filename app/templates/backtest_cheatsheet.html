@@ -10,6 +10,8 @@
   h2 { margin:0 0 14px; color:#4fd1c5; font-size:1.25rem; }
   .muted { color:#a7a7c7; }
   .card { background:#1b1b3a; border:1px solid #2a2a55; border-radius:8px; padding:18px; margin:16px 0; box-shadow:0 4px 10px rgba(0,0,0,.28); }
+  .control-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:16px; align-items:start; margin:16px 0; }
+  .control-grid .card { margin:0; }
   .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; align-items:end; }
   label { display:block; font-size:.82rem; color:#a7a7c7; margin-bottom:5px; }
   input, select { width:100%; box-sizing:border-box; border:1px solid #2a2a55; border-radius:6px; background:#27274c; color:#fff; padding:10px; font-size:.95rem; }
@@ -61,63 +63,101 @@
     Enter a symbol, scan algo and parameter combinations, then try the best settings in Replay.
   </p>
 
-  <div class="card">
-    <h2>Scan Settings</h2>
-    <form id="scanForm" autocomplete="off">
-      <div class="form-grid">
-        <div>
-          <label>Symbol</label>
-          <input name="symbol" id="f_symbol" value="AAPL" required>
+  <div class="control-grid">
+    <div class="card">
+      <h2>Single Symbol Evaluation</h2>
+      <form id="normalScanForm" autocomplete="off">
+        <div class="form-grid">
+          <div>
+            <label>Symbol</label>
+            <input name="symbol" id="f_symbol" value="AAPL" required>
+          </div>
+          <div>
+            <label>Intervals</label>
+            <input name="intervals" id="f_intervals" value="5min" placeholder="1min,5min,15min">
+          </div>
+          <div>
+            <label>Trade Size</label>
+            <input type="number" min="1" step="1" name="trade_size" value="100">
+          </div>
+          <div>
+            <label>History Days</label>
+            <input type="number" min="10" max="90" step="1" name="builder_days" value="30">
+          </div>
+          <div>
+            <label>K Forward</label>
+            <input type="number" min="1" max="10" step="1" name="k_forward" value="3">
+          </div>
+          <div>
+            <label>Search Depth</label>
+            <select name="profile">
+              <option value="quick" selected>Quick</option>
+              <option value="deep">Deep</option>
+            </select>
+          </div>
+          <div>
+            <button class="btn btn-primary" id="runBtn" type="submit">Run Scan</button>
+          </div>
         </div>
-        <div>
-          <label>Intervals</label>
-          <input name="intervals" id="f_intervals" value="5min" placeholder="1min,5min,15min">
+        <div class="checks">
+          <label><input type="checkbox" name="allow_short_selling" checked> Allow Short</label>
+          <label><input type="checkbox" name="eod_auto_close" checked> Close EOD</label>
         </div>
-        <div>
-          <label>Trade Size</label>
-          <input type="number" min="1" step="1" name="trade_size" value="100">
+        <div id="normalStatus" class="status"></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>QQQ List Batch</h2>
+      <form id="qqqBatchForm" autocomplete="off">
+        <div class="form-grid">
+          <div>
+            <label>Intervals</label>
+            <input name="intervals" id="q_intervals" value="5min" placeholder="1min,5min,15min">
+          </div>
+          <div>
+            <label>Trade Size</label>
+            <input type="number" min="1" step="1" name="trade_size" value="100">
+          </div>
+          <div>
+            <label>History Days</label>
+            <input type="number" min="10" max="90" step="1" name="builder_days" value="30">
+          </div>
+          <div>
+            <label>K Forward</label>
+            <input type="number" min="1" max="10" step="1" name="k_forward" value="3">
+          </div>
+          <div>
+            <label>Search Depth</label>
+            <select name="profile">
+              <option value="quick" selected>Quick</option>
+              <option value="deep">Deep</option>
+            </select>
+          </div>
+          <div>
+            <button class="btn btn-secondary" id="latestBtn" type="button" title="Load the saved QQQ-list recommendation cache">Load Cache</button>
+          </div>
+          <div>
+            <button class="btn btn-secondary" id="nextSymbolBtn" type="button" title="Scan only the next unattempted symbol from app/scripts/qqq_list.csv">Next QQQ Symbol</button>
+          </div>
+          <div>
+            <button class="btn btn-primary" id="qqqBatchBtn" type="button" title="Resume the full app/scripts/qqq_list.csv batch and save results after every symbol">Resume QQQ Batch</button>
+          </div>
         </div>
-        <div>
-          <label>History Days</label>
-          <input type="number" min="10" max="90" step="1" name="builder_days" value="30">
+        <div class="checks">
+          <label><input type="checkbox" name="allow_short_selling" checked> Allow Short</label>
+          <label><input type="checkbox" name="eod_auto_close" checked> Close EOD</label>
         </div>
-        <div>
-          <label>K Forward</label>
-          <input type="number" min="1" max="10" step="1" name="k_forward" value="3">
-        </div>
-        <div>
-          <label>Search Depth</label>
-          <select name="profile">
-            <option value="quick" selected>Quick</option>
-            <option value="deep">Deep</option>
-          </select>
-        </div>
-        <div>
-          <button class="btn btn-primary" id="runBtn" type="submit">Run Scan</button>
-        </div>
-        <div>
-          <button class="btn btn-secondary" id="latestBtn" type="button">Load Latest</button>
-        </div>
-        <div>
-          <button class="btn btn-secondary" id="nextSymbolBtn" type="button">Run Next Symbol</button>
-        </div>
-        <div>
-          <button class="btn btn-secondary" id="qqqBatchBtn" type="button">Run QQQ Batch</button>
-        </div>
-      </div>
-      <div class="checks">
-        <label><input type="checkbox" name="allow_short_selling" checked> Allow Short</label>
-        <label><input type="checkbox" name="eod_auto_close" checked> Close EOD</label>
-      </div>
-      <div id="status" class="status"></div>
-    </form>
+        <div id="qqqStatus" class="status"></div>
+      </form>
+    </div>
   </div>
 
   <div class="card cache-card" id="cacheStatusCard">
     <h2>Cached Batch Status</h2>
     <div class="summary-grid">
       <div class="stat">
-        <div class="stat-label">Symbols Done</div>
+        <div class="stat-label">Symbols Attempted</div>
         <div class="stat-value" id="cacheSymbolsDone">-</div>
       </div>
       <div class="stat">
@@ -137,7 +177,7 @@
         <div class="stat-value" id="cacheGeneratedAt">-</div>
       </div>
       <div class="stat">
-        <div class="stat-label">Rows</div>
+        <div class="stat-label">Recommendation Rows</div>
         <div class="stat-value" id="cacheRows">-</div>
       </div>
     </div>
@@ -156,7 +196,7 @@
           <div class="stat-value" id="summaryIntervals">-</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Combos Tested</div>
+          <div class="stat-label" id="summaryCombosLabel">Combos Tested</div>
           <div class="stat-value" id="summaryCombos">0</div>
         </div>
         <div class="stat">
@@ -241,7 +281,10 @@ let sortState = {
   top: { key: null, direction: "desc" },
   algo: { key: null, direction: "desc" }
 };
-let activePoll = null;
+let activePolls = {
+  normal: null,
+  qqq: null
+};
 
 function money(v) {
   const n = Number(v || 0);
@@ -358,11 +401,12 @@ function setTableSort(tableName, key) {
 }
 
 function replayText(r) {
+  const tradeSizeInput = document.querySelector("#normalScanForm [name='trade_size']");
   return [
     `Symbol: ${r.symbol}`,
     `Interval: ${r.interval}`,
     `Algo: ${r.algo_name}`,
-    `Trade Size: ${document.querySelector("[name='trade_size']").value || "100"}`,
+    `Trade Size: ${tradeSizeInput?.value || "100"}`,
     `Stop Loss: ${r.stop_loss_usd || r.hard_stop_usd}`,
     `Trailing Profit: ${r.trailing_profit_usd}`,
     `Stop Loss %: ${r.stop_loss_pct || r.per_share_stop_pct}`,
@@ -381,15 +425,16 @@ async function copySettings(idx) {
   const row = latestRows[idx];
   if (!row) return;
   await navigator.clipboard.writeText(replayText(row));
-  setStatus("Settings copied. Open Replay and paste/use these values.", "info");
+  setStatus("normalStatus", "Settings copied. Open Replay and paste/use these values.", "info");
 }
 
 function openReplay() {
   window.location.href = REPLAY_URL;
 }
 
-function setStatus(msg, kind) {
-  const el = document.getElementById("status");
+function setStatus(targetId, msg, kind) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
   el.textContent = msg;
   el.className = `status ${kind}`;
 }
@@ -400,11 +445,13 @@ function updateCacheStatus(data) {
   const completed = Number(data.completed_symbol_count || 0);
   const total = Number(data.symbol_count || 0);
   const remaining = Number(data.remaining_symbol_count || Math.max(total - completed, 0));
+  const failed = Number(data.failed_symbol_count || 0);
+  const withRows = Number(data.symbols_with_recommendations_count || 0);
   const intervals = (data.intervals || []).join(", ") || "-";
   const rows = (data.best_by_symbol_algo || data.best_by_algo || []).length;
   document.getElementById("cacheSymbolsDone").textContent = `${completed}/${total}`;
   document.getElementById("cacheIntervals").textContent = intervals;
-  document.getElementById("cacheBatchStatus").textContent = `${data.batch_status || "-"} (${remaining} left)`;
+  document.getElementById("cacheBatchStatus").textContent = `${data.batch_status || "-"} (${remaining} left, ${failed} failed, ${withRows} with rows)`;
   document.getElementById("cacheLastSymbol").textContent = data.last_symbol || "-";
   document.getElementById("cacheGeneratedAt").textContent = data.generated_at ? barTime(data.generated_at) : "-";
   document.getElementById("cacheRows").textContent = String(rows || 0);
@@ -438,12 +485,13 @@ function renderRows(rows, targetId, showRank) {
   }).join("");
 }
 
-function renderScanResult(data) {
+function renderScanResult(data, statusId = "normalStatus") {
   updateCacheStatus(data);
   topRows = data.top || [];
   algoRows = data.best_by_algo || [];
   const progress = data.symbol_count ? `${data.completed_symbol_count || 0}/${data.symbol_count}` : "-";
   const status = data.batch_status ? ` (${data.batch_status})` : "";
+  document.getElementById("summaryCombosLabel").textContent = data.symbol_count ? "Symbols Attempted" : "Combos Tested";
   document.getElementById("summarySymbol").textContent = data.symbol || "-";
   document.getElementById("summaryIntervals").textContent = (data.intervals || []).join(", ") || "-";
   document.getElementById("summaryCombos").textContent = data.symbol_count ? progress : String(data.tested_combinations || 0);
@@ -457,15 +505,23 @@ function renderScanResult(data) {
   document.getElementById("errorsCard").style.display = errors.length ? "block" : "none";
   document.getElementById("errorsList").innerHTML = errors.map(e => `<div>${e}</div>`).join("");
   document.getElementById("results").style.display = "block";
-  setStatus("Scan complete.", "info");
+  if (!topRows.length && errors.length) {
+    setStatus(statusId, "Scan finished with no recommendations. Check Skipped Items for the data or training failure.", "error");
+  } else if (!topRows.length) {
+    setStatus(statusId, "Scan finished, but no parameter set produced a recommendation.", "error");
+  } else {
+    setStatus(statusId, "Scan complete.", "info");
+  }
 }
 
-async function pollScanJob(jobId) {
-  const btn = document.getElementById("runBtn");
+async function pollScanJob(jobId, options = {}) {
+  const pollKey = options.pollKey || "normal";
+  const statusId = options.statusId || "normalStatus";
+  const buttons = options.buttons || [];
   let attempts = 0;
-  if (activePoll) {
-    clearTimeout(activePoll);
-    activePoll = null;
+  if (activePolls[pollKey]) {
+    clearTimeout(activePolls[pollKey]);
+    activePolls[pollKey] = null;
   }
 
   async function tick() {
@@ -479,42 +535,34 @@ async function pollScanJob(jobId) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setStatus(data.detail || "Could not check scan status.", "error");
-        btn.disabled = false;
-        document.getElementById("nextSymbolBtn").disabled = false;
-        document.getElementById("qqqBatchBtn").disabled = false;
+        setStatus(statusId, data.detail || "Could not check scan status.", "error");
+        buttons.forEach((button) => { button.disabled = false; });
         return;
       }
       if (data.status === "succeeded") {
-        activePoll = null;
-        renderScanResult(data.result || {});
-        btn.disabled = false;
-        document.getElementById("nextSymbolBtn").disabled = false;
-        document.getElementById("qqqBatchBtn").disabled = false;
+        activePolls[pollKey] = null;
+        renderScanResult(data.result || {}, statusId);
+        buttons.forEach((button) => { button.disabled = false; });
         return;
       }
       if (data.status === "failed") {
-        activePoll = null;
-        setStatus(data.error || "Strategy scan failed.", "error");
-        btn.disabled = false;
-        document.getElementById("nextSymbolBtn").disabled = false;
-        document.getElementById("qqqBatchBtn").disabled = false;
+        activePolls[pollKey] = null;
+        setStatus(statusId, data.error || "Strategy scan failed.", "error");
+        buttons.forEach((button) => { button.disabled = false; });
         return;
       }
 
-      if (data.result) renderScanResult(data.result);
-      setStatus(`${data.message || "Strategy scan is running."} Checking again in a few seconds.`, "info");
-      activePoll = setTimeout(tick, 2500);
+      if (data.result) renderScanResult(data.result, statusId);
+      setStatus(statusId, `${data.message || "Strategy scan is running."} Checking again in a few seconds.`, "info");
+      activePolls[pollKey] = setTimeout(tick, 2500);
     } catch (err) {
-      activePoll = null;
-      setStatus("Network error while checking scan status: " + err, "error");
-      btn.disabled = false;
-      document.getElementById("nextSymbolBtn").disabled = false;
-      document.getElementById("qqqBatchBtn").disabled = false;
+      activePolls[pollKey] = null;
+      setStatus(statusId, "Network error while checking scan status: " + err, "error");
+      buttons.forEach((button) => { button.disabled = false; });
     }
   }
 
-  activePoll = setTimeout(tick, 1200);
+  activePolls[pollKey] = setTimeout(tick, 1200);
 }
 
 async function loadLatestCached(showMissing = true) {
@@ -531,15 +579,15 @@ async function loadLatestCached(showMissing = true) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (showMissing) setStatus(data.detail || "No cached recommendations found.", "error");
+      if (showMissing) setStatus("qqqStatus", data.detail || "No cached recommendations found.", "error");
       return;
     }
     updateCacheStatus(data);
-    renderScanResult(data);
+    renderScanResult(data, "qqqStatus");
     const generated = data.generated_at ? ` Generated ${barTime(data.generated_at)}.` : "";
-    setStatus(`Loaded latest cached recommendations.${generated}`, "info");
+    setStatus("qqqStatus", `Loaded latest cached recommendations.${generated}`, "info");
   } catch (err) {
-    if (showMissing) setStatus("Network error loading latest recommendations: " + err, "error");
+    if (showMissing) setStatus("qqqStatus", "Network error loading latest recommendations: " + err, "error");
   } finally {
     btn.disabled = false;
   }
@@ -548,20 +596,20 @@ async function loadLatestCached(showMissing = true) {
 async function runQqqBatch() {
   const batchBtn = document.getElementById("qqqBatchBtn");
   const nextBtn = document.getElementById("nextSymbolBtn");
-  const runBtn = document.getElementById("runBtn");
+  const latestBtn = document.getElementById("latestBtn");
   batchBtn.disabled = true;
   nextBtn.disabled = true;
-  runBtn.disabled = true;
-  if (activePoll) {
-    clearTimeout(activePoll);
-    activePoll = null;
+  latestBtn.disabled = true;
+  if (activePolls.qqq) {
+    clearTimeout(activePolls.qqq);
+    activePolls.qqq = null;
   }
-  setStatus("Running QQQ batch. This scans every symbol in app/scripts/qqq_list.csv across all algos and saves the latest file.", "info");
+  setStatus("qqqStatus", "Resuming QQQ batch. This scans app/scripts/qqq_list.csv, skips already-attempted symbols, and saves after each symbol.", "info");
 
   try {
     const res = await fetch(BATCH_URL, {
       method: "POST",
-      body: new FormData(document.getElementById("scanForm")),
+      body: new FormData(document.getElementById("qqqBatchForm")),
       headers: {
         "Accept": "application/json",
         "X-Requested-With": "XMLHttpRequest"
@@ -569,39 +617,43 @@ async function runQqqBatch() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setStatus(data.detail || "QQQ batch failed to start.", "error");
+      setStatus("qqqStatus", data.detail || "QQQ batch failed to start.", "error");
       batchBtn.disabled = false;
       nextBtn.disabled = false;
-      runBtn.disabled = false;
+      latestBtn.disabled = false;
       return;
     }
-    setStatus(data.message || "QQQ batch started. Waiting for results.", "info");
-    await pollScanJob(data.job_id);
+    setStatus("qqqStatus", data.message || "QQQ batch started. Waiting for results.", "info");
+    await pollScanJob(data.job_id, {
+      pollKey: "qqq",
+      statusId: "qqqStatus",
+      buttons: [batchBtn, nextBtn, latestBtn]
+    });
   } catch (err) {
-    setStatus("Network error starting QQQ batch: " + err, "error");
+    setStatus("qqqStatus", "Network error starting QQQ batch: " + err, "error");
     batchBtn.disabled = false;
     nextBtn.disabled = false;
-    runBtn.disabled = false;
+    latestBtn.disabled = false;
   }
 }
 
 async function runNextQqqSymbol() {
   const nextBtn = document.getElementById("nextSymbolBtn");
   const batchBtn = document.getElementById("qqqBatchBtn");
-  const runBtn = document.getElementById("runBtn");
+  const latestBtn = document.getElementById("latestBtn");
   nextBtn.disabled = true;
   batchBtn.disabled = true;
-  runBtn.disabled = true;
-  if (activePoll) {
-    clearTimeout(activePoll);
-    activePoll = null;
+  latestBtn.disabled = true;
+  if (activePolls.qqq) {
+    clearTimeout(activePolls.qqq);
+    activePolls.qqq = null;
   }
-  setStatus("Running the next missing QQQ symbol. The cache will update when that one symbol finishes.", "info");
+  setStatus("qqqStatus", "Running the next missing QQQ symbol. The cache will update when that one symbol finishes.", "info");
 
   try {
     const res = await fetch(NEXT_SYMBOL_URL, {
       method: "POST",
-      body: new FormData(document.getElementById("scanForm")),
+      body: new FormData(document.getElementById("qqqBatchForm")),
       headers: {
         "Accept": "application/json",
         "X-Requested-With": "XMLHttpRequest"
@@ -609,31 +661,35 @@ async function runNextQqqSymbol() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setStatus(data.detail || "Next symbol failed to start.", "error");
+      setStatus("qqqStatus", data.detail || "Next symbol failed to start.", "error");
       nextBtn.disabled = false;
       batchBtn.disabled = false;
-      runBtn.disabled = false;
+      latestBtn.disabled = false;
       return;
     }
-    setStatus(data.message || "Next symbol started. Waiting for saved results.", "info");
-    await pollScanJob(data.job_id);
+    setStatus("qqqStatus", data.message || "Next symbol started. Waiting for saved results.", "info");
+    await pollScanJob(data.job_id, {
+      pollKey: "qqq",
+      statusId: "qqqStatus",
+      buttons: [nextBtn, batchBtn, latestBtn]
+    });
   } catch (err) {
-    setStatus("Network error starting next symbol: " + err, "error");
+    setStatus("qqqStatus", "Network error starting next symbol: " + err, "error");
     nextBtn.disabled = false;
     batchBtn.disabled = false;
-    runBtn.disabled = false;
+    latestBtn.disabled = false;
   }
 }
 
-document.getElementById("scanForm").addEventListener("submit", async (event) => {
+document.getElementById("normalScanForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const btn = document.getElementById("runBtn");
   btn.disabled = true;
-  if (activePoll) {
-    clearTimeout(activePoll);
-    activePoll = null;
+  if (activePolls.normal) {
+    clearTimeout(activePolls.normal);
+    activePolls.normal = null;
   }
-  setStatus("Running scan. This can take a bit because models are trained per algo and interval.", "info");
+  setStatus("normalStatus", "Running scan. This can take a bit because models are trained per algo and interval.", "info");
   document.getElementById("results").style.display = "none";
 
   try {
@@ -651,24 +707,28 @@ document.getElementById("scanForm").addEventListener("submit", async (event) => 
       data = raw ? JSON.parse(raw) : {};
     } catch (parseErr) {
       const plain = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 220);
-      setStatus(`Server returned ${res.status || "non-JSON"} instead of JSON. ${plain || "Try again."}`, "error");
+      setStatus("normalStatus", `Server returned ${res.status || "non-JSON"} instead of JSON. ${plain || "Try again."}`, "error");
       return;
     }
     if (!res.ok) {
-      setStatus(data.detail || "Scan failed", "error");
+      setStatus("normalStatus", data.detail || "Scan failed", "error");
       return;
     }
     if (res.status === 202 && data.job_id) {
-      setStatus(data.message || "Strategy scan started. Waiting for results.", "info");
-      await pollScanJob(data.job_id);
+      setStatus("normalStatus", data.message || "Strategy scan started. Waiting for results.", "info");
+      await pollScanJob(data.job_id, {
+        pollKey: "normal",
+        statusId: "normalStatus",
+        buttons: [btn]
+      });
       return;
     }
 
-    renderScanResult(data);
+    renderScanResult(data, "normalStatus");
   } catch (err) {
-    setStatus("Network error: " + err, "error");
+    setStatus("normalStatus", "Network error: " + err, "error");
   } finally {
-    if (!activePoll) btn.disabled = false;
+    if (!activePolls.normal) btn.disabled = false;
   }
 });
 

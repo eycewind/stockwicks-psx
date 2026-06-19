@@ -25,7 +25,7 @@ import sys
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -46,7 +46,7 @@ from app.routes.auth import get_current_user
 from app.routes import auth as auth_routes
 from app.scripts.replay.data_ingest import fetch_and_save, get_data_paths
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
-from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
+from app.services.backtest_cheatsheet_service import CheatSheetRequest, _fetch_price_frame, run_cheatsheet
 from app.scripts.ml.model_refresh_policy import (
     DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
     DEFAULT_MODEL_MAX_AGE_MINUTES,
@@ -72,6 +72,7 @@ log.setLevel(logging.INFO)
 
 CHEATSHEET_JOB_TTL_SEC = 60 * 60 * 36
 _cheatsheet_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CHEATSHEET_MAX_WORKERS", "2")))
+_cheatsheet_batch_executor = ThreadPoolExecutor(max_workers=int(os.getenv("CHEATSHEET_BATCH_MAX_WORKERS", "1")))
 _cheatsheet_jobs: dict[str, dict] = {}
 _cheatsheet_jobs_lock = threading.Lock()
 
@@ -255,6 +256,44 @@ def _sort_optimizer_rows(rows: list[dict]) -> list[dict]:
     )
 
 
+def _symbol_from_error(error: str) -> str | None:
+    prefix = str(error or "").split(":", 1)[0].strip().upper()
+    return prefix or None
+
+
+def _attempted_symbols_from_cache(data: dict | None) -> list[str]:
+    if not data:
+        return []
+    if "symbols_attempted" not in data:
+        return [
+            str(s or "").upper().strip()
+            for s in (data.get("symbols_scanned") or [])
+            if str(s or "").strip()
+        ]
+    attempted = [
+        str(s or "").upper().strip()
+        for s in (data.get("symbols_attempted") or [])
+        if str(s or "").strip()
+    ]
+    for err in data.get("errors") or []:
+        symbol = _symbol_from_error(err)
+        if symbol and symbol not in attempted:
+            attempted.append(symbol)
+    return attempted
+
+
+def _dedupe_optimizer_errors(errors: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        text = str(error or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return deduped
+
+
 def _build_optimizer_cache_result(
     *,
     req_template: CheatSheetRequest,
@@ -266,8 +305,20 @@ def _build_optimizer_cache_result(
     started_at: str,
     status: str,
     last_symbol: str | None = None,
+    attempted_symbols: list[str] | None = None,
 ) -> dict:
-    completed_symbols = sorted({str(r.get("symbol") or "").upper() for r in all_best if r.get("symbol")})
+    errors = _dedupe_optimizer_errors(errors)
+    symbols_with_rows = sorted({str(r.get("symbol") or "").upper() for r in all_best if r.get("symbol")})
+    attempted_set = {
+        str(s or "").upper().strip()
+        for s in (attempted_symbols or symbols_with_rows)
+        if str(s or "").strip()
+    }
+    for err in errors:
+        symbol = _symbol_from_error(err)
+        if symbol:
+            attempted_set.add(symbol)
+    attempted = [s for s in symbols if s in attempted_set]
     top_rows = _sort_optimizer_rows(all_top or all_best)
     return {
         "symbol": "QQQ_LIST",
@@ -284,11 +335,14 @@ def _build_optimizer_cache_result(
         "batch_status": status,
         "oos_fraction": float(req_template.oos_fraction),
         "tested_combinations": tested_combinations,
-        "symbols_scanned": completed_symbols,
+        "symbols_scanned": symbols_with_rows,
+        "symbols_attempted": attempted,
         "symbols_requested": symbols,
         "symbol_count": len(symbols),
-        "completed_symbol_count": len(completed_symbols),
-        "remaining_symbol_count": max(len(symbols) - len(completed_symbols), 0),
+        "completed_symbol_count": len(attempted),
+        "symbols_with_recommendations_count": len(symbols_with_rows),
+        "failed_symbol_count": max(len(attempted) - len(symbols_with_rows), 0),
+        "remaining_symbol_count": max(len(symbols) - len(attempted), 0),
         "last_symbol": last_symbol,
         "generated_at": datetime.utcnow().isoformat(),
         "started_at": started_at,
@@ -333,7 +387,7 @@ def _queue_qqq_optimizer_job(
         return "celery"
     except Exception as exc:
         log.warning("[CHEATSHEET] Celery optimizer queue failed; falling back to thread: %s", exc)
-        _cheatsheet_executor.submit(
+        _cheatsheet_batch_executor.submit(
             _run_qqq_batch_job,
             job_id,
             req,
@@ -424,6 +478,47 @@ def _filter_optimizer_cache(data: dict, symbol: str | None = None) -> dict:
     return filtered
 
 
+def _optimizer_worker_count(env_name: str, default: int, cap: int) -> int:
+    try:
+        value = int(os.getenv(env_name, str(default)) or default)
+    except Exception:
+        value = default
+    return max(1, min(value, cap))
+
+
+def _prefetch_optimizer_symbol_data(
+    symbol: str,
+    req_template: CheatSheetRequest,
+) -> tuple[str, dict[str, object], list[str]]:
+    frames: dict[str, object] = {}
+    errors: list[str] = []
+    for interval in req_template.intervals:
+        try:
+            frames[interval] = _fetch_price_frame(symbol, interval, req_template.builder_days)
+        except Exception as exc:
+            errors.append(f"{symbol} {interval}: {exc}")
+    return symbol, frames, errors
+
+
+def _run_prefetched_optimizer_symbol(
+    symbol: str,
+    req_template: CheatSheetRequest,
+    price_frames: dict[str, object],
+) -> tuple[str, dict]:
+    req = CheatSheetRequest(
+        symbol=symbol,
+        intervals=req_template.intervals,
+        trade_size=req_template.trade_size,
+        builder_days=req_template.builder_days,
+        k_forward=req_template.k_forward,
+        profile=req_template.profile,
+        allow_short=req_template.allow_short,
+        eod_close=req_template.eod_close,
+        oos_fraction=req_template.oos_fraction,
+    )
+    return symbol, run_cheatsheet(req, price_frames=price_frames)
+
+
 def _run_qqq_batch_job(
     job_id: str,
     req_template: CheatSheetRequest,
@@ -442,69 +537,136 @@ def _run_qqq_batch_job(
             errors: list[str] = list(existing.get("errors") or [])
             tested_combinations = int(existing.get("tested_combinations") or 0)
             started_at = str(existing.get("started_at") or started_at)
+            attempted_symbols = _attempted_symbols_from_cache(existing)
         else:
             all_top = []
             all_best = []
             errors = []
             tested_combinations = 0
-        completed_symbols = {str(r.get("symbol") or "").upper() for r in all_best if r.get("symbol")}
+            attempted_symbols = []
+        attempted_symbol_set = {s.upper() for s in attempted_symbols}
 
         _update_cheatsheet_job(
             job_id,
             status="running",
-            message=f"QQQ batch running: {len(completed_symbols)}/{len(symbols)} symbols complete.",
+            message=f"QQQ batch preparing: {len(attempted_symbol_set)}/{len(symbols)} symbols already attempted.",
         )
 
-        new_symbol_count = 0
-        for idx, symbol in enumerate(symbols, start=1):
-            if symbol in completed_symbols:
-                continue
-            if max_new_symbols is not None and new_symbol_count >= max_new_symbols:
-                break
+        pending_symbols = [symbol for symbol in symbols if symbol not in attempted_symbol_set]
+        if max_new_symbols is not None:
+            pending_symbols = pending_symbols[:max(0, max_new_symbols)]
 
-            try:
-                req = CheatSheetRequest(
-                    symbol=symbol,
-                    intervals=req_template.intervals,
-                    trade_size=req_template.trade_size,
-                    builder_days=req_template.builder_days,
-                    k_forward=req_template.k_forward,
-                    profile=req_template.profile,
-                    allow_short=req_template.allow_short,
-                    eod_close=req_template.eod_close,
-                    oos_fraction=req_template.oos_fraction,
-                )
-                result = run_cheatsheet(req)
-                tested_combinations += int(result.get("tested_combinations") or 0)
-                all_top.extend(result.get("top") or [])
-                all_best.extend(result.get("best_by_algo") or [])
-                errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
-                completed_symbols.add(symbol)
-                new_symbol_count += 1
-            except Exception as exc:
-                log.exception("[CHEATSHEET] QQQ batch failed for symbol=%s", symbol)
-                errors.append(f"{symbol}: {exc}")
+        prefetch_workers = _optimizer_worker_count("OPTIMIZER_PREFETCH_WORKERS", 50, 100)
+        backtest_workers = _optimizer_worker_count("OPTIMIZER_BACKTEST_WORKERS", 30, 50)
+        prefetched_frames: dict[str, dict[str, object]] = {}
 
-            partial_result = _build_optimizer_cache_result(
-                req_template=req_template,
-                symbols=symbols,
-                all_top=all_top,
-                all_best=all_best,
-                errors=errors,
-                tested_combinations=tested_combinations,
-                started_at=started_at,
-                status="running",
-                last_symbol=symbol,
-            )
-            _write_optimizer_cache(partial_result)
+        if pending_symbols:
             _update_cheatsheet_job(
                 job_id,
-                result=partial_result,
+                status="running",
                 message=(
-                    f"QQQ batch running: {partial_result['completed_symbol_count']}/{len(symbols)} "
-                    f"symbols complete. Last saved: {symbol}."
+                    f"QQQ batch downloading price data for {len(pending_symbols)} symbols "
+                    f"with up to {prefetch_workers} workers."
                 ),
             )
+
+        downloaded_count = 0
+        with ThreadPoolExecutor(max_workers=prefetch_workers) as prefetch_pool:
+            future_map = {
+                prefetch_pool.submit(_prefetch_optimizer_symbol_data, symbol, req_template): symbol
+                for symbol in pending_symbols
+            }
+            for future in as_completed(future_map):
+                symbol = future_map[future]
+                downloaded_count += 1
+                try:
+                    _, frames, symbol_errors = future.result()
+                except Exception as exc:
+                    frames = {}
+                    symbol_errors = [f"{symbol}: {exc}"]
+                    log.exception("[CHEATSHEET] QQQ prefetch failed for symbol=%s", symbol)
+
+                if symbol_errors:
+                    errors.extend(f"{symbol}: {err}" for err in symbol_errors)
+                if frames:
+                    prefetched_frames[symbol] = frames
+                else:
+                    attempted_symbol_set.add(symbol)
+
+                if downloaded_count == len(pending_symbols) or downloaded_count % 5 == 0:
+                    partial_result = _build_optimizer_cache_result(
+                        req_template=req_template,
+                        symbols=symbols,
+                        all_top=all_top,
+                        all_best=all_best,
+                        errors=errors,
+                        tested_combinations=tested_combinations,
+                        started_at=started_at,
+                        status="downloading",
+                        last_symbol=symbol,
+                        attempted_symbols=sorted(attempted_symbol_set),
+                    )
+                    _write_optimizer_cache(partial_result)
+                    _update_cheatsheet_job(
+                        job_id,
+                        result=partial_result,
+                        message=(
+                            f"QQQ batch downloading: {downloaded_count}/{len(pending_symbols)} "
+                            f"symbols fetched. {len(prefetched_frames)} ready for backtest."
+                        ),
+                    )
+
+        if prefetched_frames:
+            _update_cheatsheet_job(
+                job_id,
+                message=(
+                    f"QQQ batch backtesting {len(prefetched_frames)} prefetched symbols "
+                    f"with up to {backtest_workers} workers."
+                ),
+            )
+
+        completed_backtests = 0
+        with ThreadPoolExecutor(max_workers=backtest_workers) as backtest_pool:
+            future_map = {
+                backtest_pool.submit(_run_prefetched_optimizer_symbol, symbol, req_template, frames): symbol
+                for symbol, frames in prefetched_frames.items()
+            }
+            for future in as_completed(future_map):
+                symbol = future_map[future]
+                completed_backtests += 1
+                try:
+                    _, result = future.result()
+                    tested_combinations += int(result.get("tested_combinations") or 0)
+                    all_top.extend(result.get("top") or [])
+                    all_best.extend(result.get("best_by_algo") or [])
+                    errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
+                except Exception as exc:
+                    log.exception("[CHEATSHEET] QQQ batch failed for symbol=%s", symbol)
+                    errors.append(f"{symbol}: {exc}")
+
+                attempted_symbol_set.add(symbol)
+                partial_result = _build_optimizer_cache_result(
+                    req_template=req_template,
+                    symbols=symbols,
+                    all_top=all_top,
+                    all_best=all_best,
+                    errors=errors,
+                    tested_combinations=tested_combinations,
+                    started_at=started_at,
+                    status="running",
+                    last_symbol=symbol,
+                    attempted_symbols=sorted(attempted_symbol_set),
+                )
+                _write_optimizer_cache(partial_result)
+                _update_cheatsheet_job(
+                    job_id,
+                    result=partial_result,
+                    message=(
+                        f"QQQ batch backtesting: {completed_backtests}/{len(prefetched_frames)} "
+                        f"prefetched symbols complete. Total attempted: "
+                        f"{partial_result['completed_symbol_count']}/{len(symbols)}."
+                    ),
+                )
 
         all_best.sort(
             key=lambda r: (
@@ -514,7 +676,7 @@ def _run_qqq_batch_job(
             )
         )
 
-        status = "complete" if len(completed_symbols) >= len(symbols) else "partial"
+        status = "complete" if len(attempted_symbol_set) >= len(symbols) else "partial"
         result = _build_optimizer_cache_result(
             req_template=req_template,
             symbols=symbols,
@@ -524,13 +686,14 @@ def _run_qqq_batch_job(
             tested_combinations=tested_combinations,
             started_at=started_at,
             status=status,
+            attempted_symbols=sorted(attempted_symbol_set),
         )
         _write_optimizer_cache(result)
 
         message = (
             f"QQQ batch complete. Saved {len(all_best)} recommendations."
             if status == "complete"
-            else f"QQQ partial run complete. Saved {result['completed_symbol_count']}/{len(symbols)} symbols."
+            else f"QQQ partial run complete. Attempted {result['completed_symbol_count']}/{len(symbols)} symbols."
         )
         _update_cheatsheet_job(
             job_id,

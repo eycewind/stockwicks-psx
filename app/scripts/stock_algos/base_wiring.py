@@ -15,7 +15,9 @@ Changes vs old version:
 
 import logging
 import os
+import threading
 import time
+from collections import deque
 from datetime import datetime, timedelta, time as dtime
 from typing import Optional
 
@@ -128,6 +130,8 @@ def process_interval(df: pd.DataFrame, interval: str, symbol: str):
 
 _MINUTE_FREQS     = {"1min": 1, "5min": 5, "10min": 10, "15min": 15, "30min": 30}
 _SUPPORTED_INTERVALS = {"1min", "5min", "10min", "15min", "30min", "1h", "1d", "1wk"}
+_SCHWAB_RATE_LOCK = threading.Lock()
+_SCHWAB_REQUEST_TIMES: deque[float] = deque()
 
 
 def _caller_stack_if_enabled() -> Optional[str]:
@@ -135,6 +139,24 @@ def _caller_stack_if_enabled() -> Optional[str]:
         return None
     import traceback
     return "".join(traceback.format_stack(limit=25))
+
+
+def _throttle_schwab_pricehistory() -> None:
+    max_tps = float(os.getenv("SCHWAB_PRICEHISTORY_MAX_TPS", "50") or 0)
+    if max_tps <= 0:
+        return
+
+    while True:
+        wait_sec = 0.0
+        now = time.monotonic()
+        with _SCHWAB_RATE_LOCK:
+            while _SCHWAB_REQUEST_TIMES and now - _SCHWAB_REQUEST_TIMES[0] >= 1.0:
+                _SCHWAB_REQUEST_TIMES.popleft()
+            if len(_SCHWAB_REQUEST_TIMES) < max_tps:
+                _SCHWAB_REQUEST_TIMES.append(now)
+                return
+            wait_sec = max(0.001, 1.0 - (now - _SCHWAB_REQUEST_TIMES[0]))
+        time.sleep(wait_sec)
 
 
 def _fetch_schwab_pricehistory(
@@ -161,6 +183,7 @@ def _fetch_schwab_pricehistory(
         "needExtendedHoursData": "true" if need_extended_hours else "false",
     }
     headers = {"Authorization": f"Bearer {access_token}"}
+    _throttle_schwab_pricehistory()
     resp = requests.get(url, headers=headers, params=params, timeout=timeout_sec)
     if resp.status_code == 400:
         return []
@@ -176,6 +199,7 @@ def get_schwab_history(
     lookback_days: int = 7,
     debug_stack_on_error: bool = False,
     need_extended_hours: bool = False,
+    raise_on_empty: bool = False,
 ) -> pd.DataFrame:
     """
     Fetch Schwab price history for the given interval.
@@ -209,6 +233,8 @@ def get_schwab_history(
 
     eastern = _ET
     all_dfs: list[pd.DataFrame] = []
+    errors: list[str] = []
+    empty_days = 0
     today = pd.Timestamp.now(tz=eastern).date()
     max_scan_days = int(max(lookback_days, 7) * 1.8)
 
@@ -234,6 +260,7 @@ def get_schwab_history(
                 need_extended_hours=need_extended_hours,
             )
             if not candles:
+                empty_days += 1
                 continue
 
             day_df = pd.DataFrame(candles)
@@ -249,12 +276,15 @@ def get_schwab_history(
                 continue
 
             all_dfs.append(day_df[["open", "high", "low", "close", "volume"]])
-            time.sleep(0.15)
+            day_sleep = float(os.getenv("SCHWAB_HISTORY_DAY_SLEEP_SEC", "0") or 0)
+            if day_sleep > 0:
+                time.sleep(day_sleep)
 
             if len(all_dfs) >= lookback_days:
                 break
 
         except Exception as e:
+            errors.append(str(e))
             logging.warning("[SCHWAB] fetch error %s@%s: %s", symbol, fetch_interval, e)
             if debug_stack_on_error:
                 stack = _caller_stack_if_enabled()
@@ -263,6 +293,22 @@ def get_schwab_history(
             continue
 
     if not all_dfs:
+        if raise_on_empty:
+            unique_errors = []
+            for err in errors:
+                if err not in unique_errors:
+                    unique_errors.append(err)
+            details = "; ".join(unique_errors[:3])
+            if details:
+                raise RuntimeError(
+                    f"No Schwab candles for {symbol.upper()} {interval} after scanning "
+                    f"{max_scan_days} calendar days ({empty_days} empty responses). Last errors: {details}"
+                )
+            raise RuntimeError(
+                f"No Schwab candles for {symbol.upper()} {interval} after scanning "
+                f"{max_scan_days} calendar days ({empty_days} empty responses). "
+                "Check Schwab market-data access, token freshness, symbol support, or reduce History Days."
+            )
         return pd.DataFrame()
 
     df_all = pd.concat(all_dfs).sort_index()
@@ -298,6 +344,7 @@ class StockBaseRunner:
         symbol: str,
         interval: str = "1min",
         lookback_days: Optional[int] = None,
+        raise_on_empty: bool = False,
     ) -> pd.DataFrame:
         """
         Fetch OHLCV bars from Schwab.
@@ -317,6 +364,7 @@ class StockBaseRunner:
             lookback_days=lookback_days,
             debug_stack_on_error=debug_stack,
             need_extended_hours=False,
+            raise_on_empty=raise_on_empty,
         )
 
     def csv_fallback(self, user_id: int, symbol: str, interval: str) -> Optional[pd.DataFrame]:
