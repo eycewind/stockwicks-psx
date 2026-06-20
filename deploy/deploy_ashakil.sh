@@ -95,6 +95,19 @@ sudo systemctl is-active stockwicks-ashakil-celery
 sudo systemctl is-active stockwicks-ashakil-beat
 
 echo "Checking local web health"
-curl -fsS --max-time 20 http://127.0.0.1:8101/healthz
+for attempt in {1..30}; do
+  if curl -fsS --max-time 2 http://127.0.0.1:8101/healthz; then
+    echo
+    echo "Local web health ok"
+    break
+  fi
+  if [[ "${attempt}" -eq 30 ]]; then
+    echo "ERROR: local web health failed after ${attempt} attempts"
+    sudo systemctl status --no-pager stockwicks-ashakil-web || true
+    sudo journalctl -u stockwicks-ashakil-web -n 80 --no-pager || true
+    exit 1
+  fi
+  sleep 1
+done
 
 echo "Deploy complete: ${TIMESTAMP}"
