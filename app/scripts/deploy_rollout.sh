@@ -18,6 +18,14 @@ APPLY=0
 RESTART=0
 TARGET_CLIENTS=()
 
+REQUIRED_FILES=(
+  "app/main.py"
+  "app/celery_worker.py"
+  "app/database/connection.py"
+  "app/models/__init__.py"
+  "app/models/user.py"
+)
+
 die() {
   echo "ERROR: $*" >&2
   exit 1
@@ -87,6 +95,9 @@ SOURCE_SLUG="$(basename "${SOURCE_ROOT}")"
 
 [[ -d "${SOURCE_ROOT}/app" ]] || die "Source does not look like a StockWicks client root: ${SOURCE_ROOT}"
 command -v rsync >/dev/null 2>&1 || die "rsync is required. Install with: sudo apt install -y rsync"
+for required_file in "${REQUIRED_FILES[@]}"; do
+  [[ -f "${SOURCE_ROOT}/${required_file}" ]] || die "Source is missing required file: ${SOURCE_ROOT}/${required_file}"
+done
 
 RSYNC_FLAGS=(-avc --delete)
 if [[ "${APPLY}" -eq 0 ]]; then
@@ -142,6 +153,23 @@ for client in "${TARGET_CLIENTS[@]}"; do
   fi
 
   rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" "${SOURCE_ROOT}/" "${target}/"
+
+  if [[ "${APPLY}" -eq 1 ]]; then
+    for required_file in "${REQUIRED_FILES[@]}"; do
+      [[ -f "${target}/${required_file}" ]] || die "Target ${client} is missing required file after rsync: ${target}/${required_file}"
+    done
+
+    if [[ -x "${target}/venv/bin/python" ]]; then
+      echo "==> Validate ${client} imports"
+      (
+        cd "${target}"
+        "${target}/venv/bin/python" -c "import app.main; print('web import ok')"
+        "${target}/venv/bin/python" -c "from app.celery_worker import celery; print('celery import ok')"
+      )
+    else
+      die "Target ${client} is missing executable venv python: ${target}/venv/bin/python"
+    fi
+  fi
 
   if [[ "${APPLY}" -eq 1 && "${RESTART}" -eq 1 ]]; then
     [[ "${EUID}" -eq 0 ]] || die "--restart requires sudo/root"
