@@ -14,11 +14,16 @@ Important:
 
 import logging
 import os
+import json
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from celery import shared_task
 
 log = logging.getLogger("schwab_tasks")
+DEFAULT_REFRESH_SAFETY_SECONDS = 5 * 60
+DEFAULT_BACKOFF_SECONDS = 60 * 60
 
 
 def _client_root() -> str:
@@ -70,6 +75,101 @@ def _token_file_status(user_id: int) -> dict:
     }
 
 
+def _token_payload(path: str | Path) -> dict:
+    try:
+        return json.loads(Path(path).read_text())
+    except Exception:
+        return {}
+
+
+def _token_expires_at(payload: dict) -> datetime | None:
+    try:
+        expires_in = int(payload.get("expires_in", 1800))
+    except Exception:
+        expires_in = 1800
+
+    issued = (
+        payload.get("token_time")
+        or payload.get("created_at_epoch")
+        or payload.get("created_at")
+    )
+    if issued is not None:
+        try:
+            return datetime.utcfromtimestamp(int(float(issued))) + timedelta(seconds=expires_in)
+        except Exception:
+            pass
+
+    updated_at = payload.get("updated_at")
+    if updated_at:
+        try:
+            return datetime.fromisoformat(str(updated_at).replace("Z", "+00:00")).replace(tzinfo=None) + timedelta(seconds=expires_in)
+        except Exception:
+            pass
+
+    return None
+
+
+def _token_needs_refresh(path: str | Path) -> bool:
+    payload = _token_payload(path)
+    if not payload.get("refresh_token"):
+        return False
+    if not payload.get("access_token"):
+        return True
+
+    expires_at = _token_expires_at(payload)
+    if not expires_at:
+        return True
+
+    safety = int(os.getenv("SCHWAB_REFRESH_SAFETY_SECONDS", str(DEFAULT_REFRESH_SAFETY_SECONDS)))
+    return datetime.utcnow() >= expires_at - timedelta(seconds=safety)
+
+
+def _backoff_path(user_id: int, kind: str) -> Path:
+    return Path(_data_dir()) / str(user_id) / f".schwab_{kind}_refresh_backoff.json"
+
+
+def _backoff_active(user_id: int, kind: str) -> bool:
+    path = _backoff_path(user_id, kind)
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text())
+        until = float(payload.get("until_epoch", 0))
+    except Exception:
+        return False
+    if time.time() < until:
+        log.warning("[AUTO-REFRESH] Skipping %s token refresh for user_id=%s due to cooldown until=%s", kind, user_id, until)
+        return True
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return False
+
+
+def _set_backoff(user_id: int, kind: str, reason: str) -> None:
+    seconds = int(os.getenv("SCHWAB_REFRESH_BACKOFF_SECONDS", str(DEFAULT_BACKOFF_SECONDS)))
+    path = _backoff_path(user_id, kind)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "reason": reason[:200],
+        "created_epoch": int(time.time()),
+        "until_epoch": int(time.time() + seconds),
+        "backoff_seconds": seconds,
+    }
+    try:
+        path.write_text(json.dumps(payload, indent=2))
+    except Exception:
+        log.warning("[AUTO-REFRESH] Could not write Schwab %s backoff marker for user_id=%s", kind, user_id, exc_info=True)
+
+
+def _clear_backoff(user_id: int, kind: str) -> None:
+    try:
+        _backoff_path(user_id, kind).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _token_user_ids() -> list[int]:
     """
     Discover token-owning users from this client's data directory.
@@ -119,6 +219,7 @@ def auto_refresh_user_token(self, user_id: int | None = None):
         from app.utils.stock.schwab_trade_token import refresh_user_trade_token
 
         results = []
+        failures = []
         for uid in users:
             _force_commercial_env(uid)
             before = _token_file_status(uid)
@@ -140,12 +241,34 @@ def auto_refresh_user_token(self, user_id: int | None = None):
             trade_result = None
 
             if before["market_exists"]:
-                log.info("[AUTO-REFRESH] Refreshing market token for user_id=%s", uid)
-                market_result = refresh_market_token(uid)
+                if _backoff_active(uid, "market"):
+                    market_result = "skipped_backoff"
+                elif not _token_needs_refresh(before["market_path"]):
+                    market_result = "skipped_not_due"
+                    log.info("[AUTO-REFRESH] Market token not due for refresh user_id=%s", uid)
+                else:
+                    log.info("[AUTO-REFRESH] Refreshing market token for user_id=%s", uid)
+                    market_result = refresh_market_token(uid)
+                    if market_result is None:
+                        failures.append({"user_id": uid, "kind": "market", "path": before["market_path"]})
+                        _set_backoff(uid, "market", "refresh returned None")
+                    else:
+                        _clear_backoff(uid, "market")
 
             if before["trade_exists"]:
-                log.info("[AUTO-REFRESH] Refreshing trade token for user_id=%s", uid)
-                trade_result = refresh_user_trade_token(uid)
+                if _backoff_active(uid, "trade"):
+                    trade_result = "skipped_backoff"
+                elif not _token_needs_refresh(before["trade_path"]):
+                    trade_result = "skipped_not_due"
+                    log.info("[AUTO-REFRESH] Trade token not due for refresh user_id=%s", uid)
+                else:
+                    log.info("[AUTO-REFRESH] Refreshing trade token for user_id=%s", uid)
+                    trade_result = refresh_user_trade_token(uid)
+                    if trade_result is None:
+                        failures.append({"user_id": uid, "kind": "trade", "path": before["trade_path"]})
+                        _set_backoff(uid, "trade", "refresh returned None")
+                    else:
+                        _clear_backoff(uid, "trade")
 
             after = _token_file_status(uid)
 
@@ -175,7 +298,11 @@ def auto_refresh_user_token(self, user_id: int | None = None):
                 }
             )
 
-        return {"ok": True, "users": users, "data_dir": _data_dir(), "results": results}
+        ok = not failures
+        if failures:
+            log.error("[AUTO-REFRESH] Schwab token refresh failures: %s", failures)
+
+        return {"ok": ok, "users": users, "data_dir": _data_dir(), "results": results, "failures": failures}
 
     except Exception as exc:
         log.exception("[AUTO-REFRESH] Failed refreshing Schwab tokens for users=%s", users)

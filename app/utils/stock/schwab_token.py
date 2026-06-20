@@ -48,8 +48,9 @@ def _token_is_expired(token_data: dict, safety_seconds: int = 120) -> bool:
     """
     Return True if token is missing/expired/near expiry.
 
-    Supports both:
-    - created_at_epoch + expires_in
+    Supports:
+    - token_time + expires_in
+    - created_at_epoch / created_at + expires_in
     - access_token_expires_at_epoch
     """
     now = int(time.time())
@@ -61,7 +62,7 @@ def _token_is_expired(token_data: dict, safety_seconds: int = 120) -> bool:
         except Exception:
             pass
 
-    created = token_data.get("created_at_epoch") or token_data.get("created_at")
+    created = token_data.get("token_time") or token_data.get("created_at_epoch") or token_data.get("created_at")
     expires_in = token_data.get("expires_in")
 
     if created and expires_in:

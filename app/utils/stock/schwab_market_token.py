@@ -18,6 +18,11 @@ TOKEN_PATH = DATA_DIR / str(SCHWAB_REFRESH_USER_ID) / "schwab_market_token.json"
 CLIENT_ID = os.getenv("SCHWAB_MARKET_CLIENT_ID", "").strip()
 CLIENT_SECRET = os.getenv("SCHWAB_MARKET_CLIENT_SECRET", "").strip()
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
+TOKEN_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Accept": "application/json",
+    "User-Agent": "StockWicks/1.0",
+}
 REDIRECT_URI = os.getenv(
     "SCHWAB_MARKET_REDIRECT_URI",
     f"https://www.stockwicks.com/clients/{os.getenv('CLIENT_SLUG', Path(CLIENT_ROOT).name)}/auth/schwab/callback",
@@ -45,6 +50,14 @@ def save_token(tok: dict, user_id: int | None = None):
     log.info(f"[MARKET TOKEN] saved -> {path}")
 
 
+def _post_token(headers: dict, data: dict, timeout: int = 15):
+    merged_headers = dict(TOKEN_HEADERS)
+    merged_headers.update(headers)
+    session = requests.Session()
+    session.trust_env = os.getenv("SCHWAB_TRUST_ENV_PROXIES", "0").strip().lower() in {"1", "true", "yes"}
+    return session.post(TOKEN_URL, headers=merged_headers, data=data, timeout=timeout)
+
+
 def refresh_market_token(user_id: int | None = None):
     old = load_token(user_id)
     if not old or "refresh_token" not in old:
@@ -58,18 +71,16 @@ def refresh_market_token(user_id: int | None = None):
     b64 = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
     headers = {
         "Authorization": f"Basic {b64}",
-        "Content-Type": "application/x-www-form-urlencoded"
     }
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "redirect_uri": REDIRECT_URI,
     }
 
-    r = requests.post(TOKEN_URL, headers=headers, data=data, timeout=15)
+    r = _post_token(headers=headers, data=data, timeout=15)
     log.info("[MARKET TOKEN] refresh status=%s", r.status_code)
     if r.status_code != 200:
-        log.error(f"[MARKET TOKEN] refresh failed ({r.status_code})")
+        log.error("[MARKET TOKEN] refresh failed (%s): %s", r.status_code, r.text[:300])
         return None
 
     new = r.json()

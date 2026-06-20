@@ -777,8 +777,8 @@
     loadCandles();
   });
  
-  // Auto-refresh every 30 seconds (live bot ticks every 5 min on 5min interval)
-  autoRefreshTimer = setInterval(loadCandles, 30000);
+  // Auto-refresh every 60 seconds to keep API traffic conservative.
+  autoRefreshTimer = setInterval(loadCandles, 60000);
  
   // Clean up on page leave
   window.addEventListener('beforeunload', () => {
@@ -1775,7 +1775,7 @@ probSvg.appendChild(legend);
   // Start live probability updates (15s)
   if (probBotSel && probBotSel.value) {
     refreshProbChart();
-    setInterval(refreshProbChart, 15000);
+    setInterval(refreshProbChart, 60000);
   }
 })();  // end IIFE
 

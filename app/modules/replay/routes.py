@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import csv
+import re
 import sys
 import threading
 import time
@@ -77,10 +78,12 @@ _cheatsheet_jobs: dict[str, dict] = {}
 _cheatsheet_jobs_lock = threading.Lock()
 
 APP_PATH = Path(REPO_ROOT)
-QQQ_LIST_PATH = APP_PATH / "scripts" / "qqq_list.csv"
 OPTIMIZER_CACHE_DIR = Path(os.getenv("DATA_DIR", "data")) / "strategy_optimizer"
 OPTIMIZER_LATEST_JSON = OPTIMIZER_CACHE_DIR / "latest_recommendations.json"
 OPTIMIZER_LATEST_CSV = OPTIMIZER_CACHE_DIR / "latest_recommendations.csv"
+OPTIMIZER_MAX_BATCH_SYMBOLS = 10
+_optimizer_schwab_lock = threading.Lock()
+_optimizer_last_schwab_call = 0.0
 
 
 def _cheatsheet_redis_client():
@@ -208,22 +211,43 @@ def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
             _store_cheatsheet_job(job_id, job)
 
 
-def _read_qqq_symbols(limit: int | None = None) -> list[str]:
-    if not QQQ_LIST_PATH.exists():
-        raise FileNotFoundError(f"QQQ symbol list not found: {QQQ_LIST_PATH}")
-
+def _parse_optimizer_symbols(symbols_text: str, max_symbols: int = OPTIMIZER_MAX_BATCH_SYMBOLS) -> list[str]:
+    raw_symbols = [
+        token.upper().strip()
+        for token in re.split(r"[\s,;]+", symbols_text or "")
+        if token.strip()
+    ]
     symbols: list[str] = []
-    with QQQ_LIST_PATH.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            symbol = str(row.get("Symbol") or "").upper().strip()
-            if symbol and symbol not in symbols:
-                symbols.append(symbol)
-            if limit and len(symbols) >= limit:
-                break
+    for symbol in raw_symbols:
+        if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", symbol):
+            raise HTTPException(status_code=400, detail=f"Invalid symbol: {symbol}")
+        if symbol not in symbols:
+            symbols.append(symbol)
+        if len(symbols) > max_symbols:
+            raise HTTPException(status_code=400, detail=f"Enter at most {max_symbols} symbols per batch.")
     if not symbols:
-        raise ValueError(f"No symbols found in {QQQ_LIST_PATH}")
+        raise HTTPException(status_code=400, detail="Enter 1 to 10 comma-separated symbols.")
     return symbols
+
+
+def _optimizer_schwab_delay_seconds() -> float:
+    try:
+        configured = float(os.getenv("OPTIMIZER_SCHWAB_REQUEST_DELAY_SECONDS", "60"))
+    except Exception:
+        configured = 60.0
+    return max(60.0, configured)
+
+
+def _rate_limit_optimizer_schwab_call() -> None:
+    global _optimizer_last_schwab_call
+    delay = _optimizer_schwab_delay_seconds()
+    with _optimizer_schwab_lock:
+        now = time.time()
+        wait_for = (_optimizer_last_schwab_call + delay) - now
+        if wait_for > 0:
+            log.info("[CHEATSHEET] Waiting %.1fs before next Schwab optimizer data call", wait_for)
+            time.sleep(wait_for)
+        _optimizer_last_schwab_call = time.time()
 
 
 def _optimizer_cache_key(req: CheatSheetRequest) -> dict:
@@ -321,16 +345,16 @@ def _build_optimizer_cache_result(
     attempted = [s for s in symbols if s in attempted_set]
     top_rows = _sort_optimizer_rows(all_top or all_best)
     return {
-        "symbol": "QQQ_LIST",
+        "symbol": "CUSTOM_LIST",
         "intervals": req_template.intervals,
         "profile": req_template.profile,
         "settings_key": _optimizer_cache_key(req_template),
-        "backtest_method": "cached_qqq_batch",
-        "backtest_method_label": "Cached QQQ symbol batch",
+        "backtest_method": "cached_custom_symbol_batch",
+        "backtest_method_label": "Cached custom symbol batch",
         "backtest_explanation": (
-            "This cache is built one symbol at a time from app/scripts/qqq_list.csv "
-            "across all supported algos. Partial results are saved after every symbol, "
-            "so the page can load the latest available recommendations while the batch continues."
+            "This cache is built from the user-provided symbol list, capped at 10 symbols. "
+            "Partial results are saved after every symbol, and Schwab data requests are "
+            "spaced by at least 60 seconds."
         ),
         "batch_status": status,
         "oos_fraction": float(req_template.oos_fraction),
@@ -373,6 +397,7 @@ def _queue_qqq_optimizer_job(
     *,
     job_id: str,
     req: CheatSheetRequest,
+    symbols: list[str],
     limit: int | None = None,
     max_new_symbols: int | None = None,
     resume: bool = True,
@@ -381,7 +406,7 @@ def _queue_qqq_optimizer_job(
         from app.tasks.optimizer_tasks import run_qqq_optimizer_batch
 
         run_qqq_optimizer_batch.apply_async(
-            args=(job_id, _cheatsheet_request_payload(req), limit, max_new_symbols, resume),
+            args=(job_id, _cheatsheet_request_payload(req), symbols, limit, max_new_symbols, resume),
             queue="replay",
         )
         return "celery"
@@ -391,6 +416,7 @@ def _queue_qqq_optimizer_job(
             _run_qqq_batch_job,
             job_id,
             req,
+            symbols,
             limit=limit,
             max_new_symbols=max_new_symbols,
             resume=resume,
@@ -494,6 +520,7 @@ def _prefetch_optimizer_symbol_data(
     errors: list[str] = []
     for interval in req_template.intervals:
         try:
+            _rate_limit_optimizer_schwab_call()
             frames[interval] = _fetch_price_frame(symbol, interval, req_template.builder_days)
         except Exception as exc:
             errors.append(f"{symbol} {interval}: {exc}")
@@ -522,13 +549,18 @@ def _run_prefetched_optimizer_symbol(
 def _run_qqq_batch_job(
     job_id: str,
     req_template: CheatSheetRequest,
+    symbols: list[str],
     *,
     limit: int | None = None,
     max_new_symbols: int | None = None,
     resume: bool = True,
 ) -> None:
     try:
-        symbols = _read_qqq_symbols(limit=limit)
+        symbols = list(symbols or [])
+        if limit:
+            symbols = symbols[:limit]
+        if len(symbols) > OPTIMIZER_MAX_BATCH_SYMBOLS:
+            raise ValueError(f"Optimizer batch is capped at {OPTIMIZER_MAX_BATCH_SYMBOLS} symbols.")
         started_at = datetime.utcnow().isoformat()
         existing = _load_optimizer_cache() if resume else None
         if _same_optimizer_settings(existing, req_template):
@@ -549,15 +581,15 @@ def _run_qqq_batch_job(
         _update_cheatsheet_job(
             job_id,
             status="running",
-            message=f"QQQ batch preparing: {len(attempted_symbol_set)}/{len(symbols)} symbols already attempted.",
+            message=f"Custom batch preparing: {len(attempted_symbol_set)}/{len(symbols)} symbols already attempted.",
         )
 
         pending_symbols = [symbol for symbol in symbols if symbol not in attempted_symbol_set]
         if max_new_symbols is not None:
             pending_symbols = pending_symbols[:max(0, max_new_symbols)]
 
-        prefetch_workers = _optimizer_worker_count("OPTIMIZER_PREFETCH_WORKERS", 50, 100)
-        backtest_workers = _optimizer_worker_count("OPTIMIZER_BACKTEST_WORKERS", 30, 50)
+        prefetch_workers = _optimizer_worker_count("OPTIMIZER_PREFETCH_WORKERS", 1, 1)
+        backtest_workers = _optimizer_worker_count("OPTIMIZER_BACKTEST_WORKERS", 1, 2)
         prefetched_frames: dict[str, dict[str, object]] = {}
 
         if pending_symbols:
@@ -565,8 +597,8 @@ def _run_qqq_batch_job(
                 job_id,
                 status="running",
                 message=(
-                    f"QQQ batch downloading price data for {len(pending_symbols)} symbols "
-                    f"with up to {prefetch_workers} workers."
+                    f"Custom batch downloading price data for {len(pending_symbols)} symbols "
+                    f"with {prefetch_workers} worker and at least 60 seconds between Schwab data calls."
                 ),
             )
 
@@ -584,7 +616,7 @@ def _run_qqq_batch_job(
                 except Exception as exc:
                     frames = {}
                     symbol_errors = [f"{symbol}: {exc}"]
-                    log.exception("[CHEATSHEET] QQQ prefetch failed for symbol=%s", symbol)
+                    log.exception("[CHEATSHEET] Custom batch prefetch failed for symbol=%s", symbol)
 
                 if symbol_errors:
                     errors.extend(f"{symbol}: {err}" for err in symbol_errors)
@@ -611,7 +643,7 @@ def _run_qqq_batch_job(
                         job_id,
                         result=partial_result,
                         message=(
-                            f"QQQ batch downloading: {downloaded_count}/{len(pending_symbols)} "
+                            f"Custom batch downloading: {downloaded_count}/{len(pending_symbols)} "
                             f"symbols fetched. {len(prefetched_frames)} ready for backtest."
                         ),
                     )
@@ -620,7 +652,7 @@ def _run_qqq_batch_job(
             _update_cheatsheet_job(
                 job_id,
                 message=(
-                    f"QQQ batch backtesting {len(prefetched_frames)} prefetched symbols "
+                    f"Custom batch backtesting {len(prefetched_frames)} prefetched symbols "
                     f"with up to {backtest_workers} workers."
                 ),
             )
@@ -641,7 +673,7 @@ def _run_qqq_batch_job(
                     all_best.extend(result.get("best_by_algo") or [])
                     errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
                 except Exception as exc:
-                    log.exception("[CHEATSHEET] QQQ batch failed for symbol=%s", symbol)
+                    log.exception("[CHEATSHEET] Custom batch failed for symbol=%s", symbol)
                     errors.append(f"{symbol}: {exc}")
 
                 attempted_symbol_set.add(symbol)
@@ -659,10 +691,10 @@ def _run_qqq_batch_job(
                 )
                 _write_optimizer_cache(partial_result)
                 _update_cheatsheet_job(
-                    job_id,
-                    result=partial_result,
-                    message=(
-                        f"QQQ batch backtesting: {completed_backtests}/{len(prefetched_frames)} "
+                        job_id,
+                        result=partial_result,
+                        message=(
+                        f"Custom batch backtesting: {completed_backtests}/{len(prefetched_frames)} "
                         f"prefetched symbols complete. Total attempted: "
                         f"{partial_result['completed_symbol_count']}/{len(symbols)}."
                     ),
@@ -691,9 +723,9 @@ def _run_qqq_batch_job(
         _write_optimizer_cache(result)
 
         message = (
-            f"QQQ batch complete. Saved {len(all_best)} recommendations."
+            f"Custom batch complete. Saved {len(all_best)} recommendations."
             if status == "complete"
-            else f"QQQ partial run complete. Attempted {result['completed_symbol_count']}/{len(symbols)} symbols."
+            else f"Custom partial run complete. Attempted {result['completed_symbol_count']}/{len(symbols)} symbols."
         )
         _update_cheatsheet_job(
             job_id,
@@ -702,12 +734,12 @@ def _run_qqq_batch_job(
             message=message,
         )
     except Exception as exc:
-        log.exception("[CHEATSHEET] QQQ batch job failed job_id=%s", job_id)
+        log.exception("[CHEATSHEET] Custom batch job failed job_id=%s", job_id)
         _update_cheatsheet_job(
             job_id,
             status="failed",
             error=str(exc),
-            message="QQQ batch failed.",
+            message="Custom batch failed.",
         )
 
 
@@ -1179,7 +1211,7 @@ def latest_backtest_cheatsheet(
     if not data:
         raise HTTPException(
             status_code=404,
-            detail="No cached recommendations found. Run the QQQ batch once first.",
+            detail="No cached recommendations found. Run a custom symbol batch first.",
         )
     return JSONResponse(_filter_optimizer_cache(data, symbol))
 
@@ -1188,6 +1220,7 @@ def latest_backtest_cheatsheet(
 @router.post("/analysis/strategy-optimizer/api/run-qqq-batch")
 @router.post("/auth/backtest-cheatsheet/api/run-qqq-batch")
 def run_qqq_backtest_cheatsheet(
+    symbols: str = Form(...),
     intervals: str = Form("5min"),
     trade_size: float = Form(100.0),
     builder_days: int = Form(DEFAULT_REPLAY_MM_CONFIG["builder_days"]),
@@ -1195,9 +1228,9 @@ def run_qqq_backtest_cheatsheet(
     profile: str = Form("quick"),
     allow_short_selling: str = Form("on"),
     eod_auto_close: str = Form("on"),
-    limit: int | None = Form(None),
     user: User = Depends(get_current_user),
 ):
+    parsed_symbols = _parse_optimizer_symbols(symbols)
     parsed_intervals = tuple(
         i.strip().lower()
         for i in str(intervals or "5min").replace(";", ",").split(",")
@@ -1208,7 +1241,7 @@ def run_qqq_backtest_cheatsheet(
         raise HTTPException(status_code=400, detail="Choose one or more supported intervals")
 
     req = CheatSheetRequest(
-        symbol="QQQ_LIST",
+        symbol="CUSTOM_LIST",
         intervals=parsed_intervals,
         trade_size=max(float(trade_size or 1.0), 1.0),
         builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
@@ -1217,7 +1250,6 @@ def run_qqq_backtest_cheatsheet(
         allow_short=_checkbox_on(allow_short_selling),
         eod_close=_checkbox_on(eod_auto_close),
     )
-    safe_limit = max(int(limit or 0), 0) or None
     _cleanup_cheatsheet_jobs()
     job_id = uuid.uuid4().hex
     now = time.time()
@@ -1225,21 +1257,21 @@ def run_qqq_backtest_cheatsheet(
         _cheatsheet_jobs[job_id] = {
             "user_id": user.id,
             "status": "queued",
-            "message": "QQQ batch scan queued.",
+            "message": "Custom symbol batch scan queued.",
             "result": None,
             "error": None,
             "created_at": now,
             "updated_at": now,
         }
         _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, limit=safe_limit, resume=True)
+    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, symbols=parsed_symbols, resume=False)
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
             "backend": backend,
-            "message": "QQQ batch scan queued in the backend. Latest recommendations save after each symbol.",
+            "message": f"Custom batch queued for {len(parsed_symbols)} symbol(s). Schwab data calls are spaced by at least 60 seconds.",
         },
     )
 
@@ -1248,6 +1280,7 @@ def run_qqq_backtest_cheatsheet(
 @router.post("/analysis/strategy-optimizer/api/run-next-qqq-symbol")
 @router.post("/auth/backtest-cheatsheet/api/run-next-qqq-symbol")
 def run_next_qqq_symbol_cheatsheet(
+    symbols: str = Form(...),
     intervals: str = Form("5min"),
     trade_size: float = Form(100.0),
     builder_days: int = Form(DEFAULT_REPLAY_MM_CONFIG["builder_days"]),
@@ -1257,6 +1290,7 @@ def run_next_qqq_symbol_cheatsheet(
     eod_auto_close: str = Form("on"),
     user: User = Depends(get_current_user),
 ):
+    parsed_symbols = _parse_optimizer_symbols(symbols)
     parsed_intervals = tuple(
         i.strip().lower()
         for i in str(intervals or "5min").replace(";", ",").split(",")
@@ -1267,7 +1301,7 @@ def run_next_qqq_symbol_cheatsheet(
         raise HTTPException(status_code=400, detail="Choose one or more supported intervals")
 
     req = CheatSheetRequest(
-        symbol="QQQ_LIST",
+        symbol="CUSTOM_LIST",
         intervals=parsed_intervals,
         trade_size=max(float(trade_size or 1.0), 1.0),
         builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
@@ -1283,21 +1317,21 @@ def run_next_qqq_symbol_cheatsheet(
         _cheatsheet_jobs[job_id] = {
             "user_id": user.id,
             "status": "queued",
-            "message": "Next QQQ symbol scan queued.",
+            "message": "Single symbol scan queued.",
             "result": None,
             "error": None,
             "created_at": now,
             "updated_at": now,
         }
         _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, max_new_symbols=1, resume=True)
+    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, symbols=parsed_symbols, max_new_symbols=1, resume=False)
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
             "backend": backend,
-            "message": "Next missing QQQ symbol scan queued in the backend. Results save after that symbol finishes.",
+            "message": "First symbol from your list queued. Schwab data calls are spaced by at least 60 seconds.",
         },
     )
 

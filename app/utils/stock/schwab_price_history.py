@@ -2,6 +2,7 @@
 import datetime as dt
 import logging
 import os
+import time
 import pandas as pd
 import pytz
 import requests
@@ -12,6 +13,7 @@ log = logging.getLogger("schwab_history")
 
 BASE_URL = "https://api.schwabapi.com/marketdata/v1/pricehistory"
 TZ = pytz.timezone("US/Eastern")
+_HISTORY_CACHE: dict[tuple[tuple[str, str], ...], tuple[float, pd.DataFrame]] = {}
 
 # Keep this for compatibility with any callers that reference it
 SCHWAB_INTERVAL_MAP = {
@@ -34,6 +36,13 @@ def _ms(ts: dt.datetime) -> int:
 
 def _request(params: dict) -> pd.DataFrame:
     """Perform Schwab pricehistory request and return ET-tz DataFrame: [open,high,low,close,volume]."""
+    cache_ttl = int(os.getenv("SCHWAB_HISTORY_CACHE_SECONDS", "60"))
+    cache_key = tuple(sorted((str(k), str(v)) for k, v in params.items()))
+    cached = _HISTORY_CACHE.get(cache_key)
+    now = time.time()
+    if cached and now - cached[0] <= cache_ttl:
+        return cached[1].copy()
+
     access_token = get_valid_access_token()
     if not access_token:
         raise RuntimeError("No valid Schwab access token.")
@@ -49,12 +58,16 @@ def _request(params: dict) -> pd.DataFrame:
     candles = data.get("candles", [])
     if not candles:
         log.warning(f"[SCHWAB] No candles; params={params}")
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        _HISTORY_CACHE[cache_key] = (now, empty)
+        return empty
 
     df = pd.DataFrame(candles)
     # Schwab returns ms in 'datetime'; convert to ET tz-aware index
     df["timestamp"] = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert(TZ)
-    return df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+    out = df.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
+    _HISTORY_CACHE[cache_key] = (now, out)
+    return out.copy()
 
 def _fetch_intraday(symbol: str, frequency_minutes: int, days_back: int = 5,
                     extended: bool = True) -> pd.DataFrame:

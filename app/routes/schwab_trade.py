@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path as FSPath, Path
 from typing import Any, Dict, Optional, Literal
@@ -127,6 +128,42 @@ def _safe_json(resp: requests.Response) -> Any:
     except Exception:
         pass
     return None
+
+
+_GET_CACHE: dict[tuple[Any, ...], tuple[float, Any]] = {}
+
+
+def _cache_ttl(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
+
+
+def _cached_get_json(
+    cache_key: tuple[Any, ...],
+    url: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, str] | None = None,
+    ttl: int,
+) -> Any:
+    now = time.time()
+    cached = _GET_CACHE.get(cache_key)
+    if cached and now - cached[0] <= ttl:
+        return cached[1]
+
+    resp = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    data = _safe_json(resp) or []
+    _GET_CACHE[cache_key] = (now, data)
+    return data
+
+
+def _clear_trade_read_cache(user_id: int) -> None:
+    prefix = (user_id,)
+    for key in list(_GET_CACHE.keys()):
+        if key[:1] == prefix:
+            _GET_CACHE.pop(key, None)
 
 # --------------------------------------------------------------------
 # DTOs
@@ -341,10 +378,13 @@ def list_account_orders(
     if status:
         params["status"] = status
 
-    resp = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return _safe_json(resp) or []
+    return _cached_get_json(
+        (current_user.id, "account_orders", acct_hash, tuple(sorted(params.items()))),
+        url,
+        headers=headers,
+        params=params,
+        ttl=max(60, _cache_ttl("SCHWAB_TRADE_ORDERS_CACHE_SECONDS", 60)),
+    )
 
 @trade_router.post("/accounts/{account_id}/orders")
 def place_account_order(
@@ -361,6 +401,7 @@ def place_account_order(
     resp = requests.post(url, headers={**headers, "Content-Type": "application/json"}, json=body, timeout=REQ_TIMEOUT)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    _clear_trade_read_cache(current_user.id)
 
     order_id = (resp.headers.get("Location") or resp.headers.get("location") or "").rstrip("/").split("/")[-1]
     return {"status": "submitted", "account_id": acct_hash, "order_id": order_id, "broker_response": _safe_json(resp) or {}}
@@ -383,6 +424,7 @@ def cancel_account_order(account_id: str, order_id: str, db: Session = Depends(g
     resp = requests.delete(url, headers=headers, timeout=REQ_TIMEOUT)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    _clear_trade_read_cache(current_user.id)
     return {"status": "cancel_requested", "account_id": acct_hash, "order_id": order_id}
 
 @trade_router.put("/accounts/{account_id}/orders/{order_id}")
@@ -400,6 +442,7 @@ def replace_account_order(
     resp = requests.put(url, headers={**headers, "Content-Type": "application/json"}, json=body, timeout=REQ_TIMEOUT)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    _clear_trade_read_cache(current_user.id)
     return {"status": "replaced", "account_id": acct_hash, "order_id": order_id, "broker_response": _safe_json(resp) or {}}
 
 # --------------------------------------------------------------------
@@ -430,10 +473,13 @@ def list_all_orders(
     if status:
         params["status"] = status
 
-    resp = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return _safe_json(resp) or []
+    return _cached_get_json(
+        (current_user.id, "all_orders", tuple(sorted(params.items()))),
+        url,
+        headers=headers,
+        params=params,
+        ttl=max(60, _cache_ttl("SCHWAB_TRADE_ORDERS_CACHE_SECONDS", 60)),
+    )
 
 # --------------------------------------------------------------------
 # Positions & Transactions (Trade History)
@@ -449,11 +495,13 @@ def get_account_positions(
 
     # Prefer per-account endpoint with ?fields=positions
     url_one = f"{SCHWAB_TRADER_BASE}/accounts/{acct_hash}"
-    resp = requests.get(url_one, headers=headers, params={"fields": "positions"}, timeout=REQ_TIMEOUT)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-
-    data = _safe_json(resp) or {}
+    data = _cached_get_json(
+        (current_user.id, "positions", acct_hash),
+        url_one,
+        headers=headers,
+        params={"fields": "positions"},
+        ttl=max(60, _cache_ttl("SCHWAB_TRADE_POSITIONS_CACHE_SECONDS", 60)),
+    )
     accounts = data if isinstance(data, list) else [data]
     out = []
     for a in accounts:
@@ -493,10 +541,13 @@ def get_trade_history(
     if symbol:
         params["symbol"] = symbol.strip().upper()
 
-    resp = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return _safe_json(resp) or []
+    return _cached_get_json(
+        (current_user.id, "history", acct_hash, tuple(sorted(params.items()))),
+        url,
+        headers=headers,
+        params=params,
+        ttl=max(60, _cache_ttl("SCHWAB_TRADE_HISTORY_CACHE_SECONDS", 300)),
+    )
 
 # --------------------------------------------------------------------
 # Unlink (delete file + clear account rows)

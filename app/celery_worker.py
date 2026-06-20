@@ -102,9 +102,9 @@ celery.conf.update(
 celery.conf.beat_schedule = {
     # Schwab token refresh: refreshes BOTH market + trade tokens.
     # Default user_id is 3 for /var/stockwicks/clients/ashakil/data/3.
-    "refresh-schwab-tokens-every-5min": {
+    "refresh-schwab-tokens-every-15min": {
         "task": "app.tasks.schwab_tasks.auto_refresh_user_token",
-        "schedule": 300.0,
+        "schedule": 900.0,
         "args": (),
         "options": {"queue": "broker"},
     },

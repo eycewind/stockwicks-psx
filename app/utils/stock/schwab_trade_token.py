@@ -31,6 +31,11 @@ CLIENT_ROOT = os.getenv("CLIENT_ROOT", _infer_client_root())
 DATA_DIR = Path(os.getenv("DATA_DIR", f"{CLIENT_ROOT}/data"))
 SCHWAB_REFRESH_USER_ID = int(os.getenv("SCHWAB_REFRESH_USER_ID", "1"))
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
+TOKEN_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Accept": "application/json",
+    "User-Agent": "StockWicks/1.0",
+}
 
 CLIENT_ID = os.getenv("SCHWAB_TRADE_CLIENT_ID", "").strip()
 CLIENT_SECRET = os.getenv("SCHWAB_TRADE_CLIENT_SECRET", "").strip()
@@ -62,6 +67,14 @@ def save_user_token(user_id: int, data: dict) -> None:
     log.info("[TRADE TOKEN] Saved for user %s -> %s", user_id, path)
 
 
+def _post_token(headers: dict, data: dict, timeout: int = 15):
+    merged_headers = dict(TOKEN_HEADERS)
+    merged_headers.update(headers)
+    session = requests.Session()
+    session.trust_env = os.getenv("SCHWAB_TRUST_ENV_PROXIES", "0").strip().lower() in {"1", "true", "yes"}
+    return session.post(TOKEN_URL, headers=merged_headers, data=data, timeout=timeout)
+
+
 def refresh_user_trade_token(user_id: int):
     """Refresh one user's Schwab trading token from this client's data dir."""
     old = load_user_token(user_id)
@@ -78,16 +91,11 @@ def refresh_user_trade_token(user_id: int):
     refresh_token = old["refresh_token"]
     b64_auth = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
 
-    resp = requests.post(
-        TOKEN_URL,
-        headers={
-            "Authorization": f"Basic {b64_auth}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
+    resp = _post_token(
+        headers={"Authorization": f"Basic {b64_auth}"},
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "redirect_uri": REDIRECT_URI,
         },
         timeout=15,
     )

@@ -108,9 +108,13 @@
     </div>
 
     <div class="card">
-      <h2>QQQ List Batch</h2>
+      <h2>Custom Symbol Batch</h2>
       <form id="qqqBatchForm" autocomplete="off">
         <div class="form-grid">
+          <div>
+            <label>Symbols (max 10)</label>
+            <input name="symbols" id="q_symbols" value="AAPL,MSFT,NVDA" placeholder="AAPL,MSFT,NVDA">
+          </div>
           <div>
             <label>Intervals</label>
             <input name="intervals" id="q_intervals" value="5min" placeholder="1min,5min,15min">
@@ -135,13 +139,13 @@
             </select>
           </div>
           <div>
-            <button class="btn btn-secondary" id="latestBtn" type="button" title="Load the saved QQQ-list recommendation cache">Load Cache</button>
+            <button class="btn btn-secondary" id="latestBtn" type="button" title="Load the saved recommendation cache">Load Cache</button>
           </div>
           <div>
-            <button class="btn btn-secondary" id="nextSymbolBtn" type="button" title="Scan only the next unattempted symbol from app/scripts/qqq_list.csv">Next QQQ Symbol</button>
+            <button class="btn btn-secondary" id="nextSymbolBtn" type="button" title="Scan the first symbol from the list only">Run First Symbol</button>
           </div>
           <div>
-            <button class="btn btn-primary" id="qqqBatchBtn" type="button" title="Resume the full app/scripts/qqq_list.csv batch and save results after every symbol">Resume QQQ Batch</button>
+            <button class="btn btn-primary" id="qqqBatchBtn" type="button" title="Run up to 10 user-entered symbols">Run Symbol Batch</button>
           </div>
         </div>
         <div class="checks">
@@ -458,6 +462,18 @@ function updateCacheStatus(data) {
   card.classList.add("visible");
 }
 
+function parseBatchSymbols() {
+  const raw = (document.getElementById("q_symbols")?.value || "").trim();
+  const symbols = raw.split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+  const unique = Array.from(new Set(symbols));
+  if (!unique.length) throw new Error("Enter 1 to 10 comma-separated symbols.");
+  if (unique.length > 10) throw new Error("Enter at most 10 symbols per batch.");
+  for (const symbol of unique) {
+    if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol)) throw new Error(`Invalid symbol: ${symbol}`);
+  }
+  return unique;
+}
+
 function renderRows(rows, targetId, showRank) {
   const body = document.getElementById(targetId);
   if (!rows.length) {
@@ -604,7 +620,16 @@ async function runQqqBatch() {
     clearTimeout(activePolls.qqq);
     activePolls.qqq = null;
   }
-  setStatus("qqqStatus", "Resuming QQQ batch. This scans app/scripts/qqq_list.csv, skips already-attempted symbols, and saves after each symbol.", "info");
+  try {
+    const symbols = parseBatchSymbols();
+    setStatus("qqqStatus", `Running ${symbols.length} symbol(s). Schwab data calls are spaced by at least 60 seconds.`, "info");
+  } catch (err) {
+    setStatus("qqqStatus", err.message || String(err), "error");
+    batchBtn.disabled = false;
+    nextBtn.disabled = false;
+    latestBtn.disabled = false;
+    return;
+  }
 
   try {
     const res = await fetch(BATCH_URL, {
@@ -617,20 +642,20 @@ async function runQqqBatch() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setStatus("qqqStatus", data.detail || "QQQ batch failed to start.", "error");
+      setStatus("qqqStatus", data.detail || "Symbol batch failed to start.", "error");
       batchBtn.disabled = false;
       nextBtn.disabled = false;
       latestBtn.disabled = false;
       return;
     }
-    setStatus("qqqStatus", data.message || "QQQ batch started. Waiting for results.", "info");
+    setStatus("qqqStatus", data.message || "Symbol batch started. Waiting for results.", "info");
     await pollScanJob(data.job_id, {
       pollKey: "qqq",
       statusId: "qqqStatus",
       buttons: [batchBtn, nextBtn, latestBtn]
     });
   } catch (err) {
-    setStatus("qqqStatus", "Network error starting QQQ batch: " + err, "error");
+    setStatus("qqqStatus", "Network error starting symbol batch: " + err, "error");
     batchBtn.disabled = false;
     nextBtn.disabled = false;
     latestBtn.disabled = false;
@@ -648,7 +673,16 @@ async function runNextQqqSymbol() {
     clearTimeout(activePolls.qqq);
     activePolls.qqq = null;
   }
-  setStatus("qqqStatus", "Running the next missing QQQ symbol. The cache will update when that one symbol finishes.", "info");
+  try {
+    const symbols = parseBatchSymbols();
+    setStatus("qqqStatus", `Running first symbol only: ${symbols[0]}. Schwab data calls are spaced by at least 60 seconds.`, "info");
+  } catch (err) {
+    setStatus("qqqStatus", err.message || String(err), "error");
+    nextBtn.disabled = false;
+    batchBtn.disabled = false;
+    latestBtn.disabled = false;
+    return;
+  }
 
   try {
     const res = await fetch(NEXT_SYMBOL_URL, {
@@ -667,7 +701,7 @@ async function runNextQqqSymbol() {
       latestBtn.disabled = false;
       return;
     }
-    setStatus("qqqStatus", data.message || "Next symbol started. Waiting for saved results.", "info");
+    setStatus("qqqStatus", data.message || "First symbol started. Waiting for saved results.", "info");
     await pollScanJob(data.job_id, {
       pollKey: "qqq",
       statusId: "qqqStatus",

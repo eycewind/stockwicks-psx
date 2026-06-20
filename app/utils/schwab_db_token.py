@@ -15,13 +15,18 @@ from app.models.schwab_tokens import SchwabToken
 log = logging.getLogger("schwab_db_token")
 
 # Read from env if present; fall back to your current hard-coded values
-TRADE_CLIENT_ID = os.getenv("SCHWAB_CLIENT_ID", "kI9oDoNC4WNXzp7AJRpAAIvDoE9GxJGz").strip()
-TRADE_CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET", "x2tV8ksOGGh9cUXA").strip()
+TRADE_CLIENT_ID = os.getenv("SCHWAB_TRADE_CLIENT_ID", os.getenv("SCHWAB_CLIENT_ID", "")).strip()
+TRADE_CLIENT_SECRET = os.getenv("SCHWAB_TRADE_CLIENT_SECRET", os.getenv("SCHWAB_CLIENT_SECRET", "")).strip()
 TRADE_REDIRECT_URI = os.getenv("SCHWAB_TRADE_REDIRECT_URI", os.getenv("TRADE_REDIRECT_URI", "https://www.stockwicks.com/clients/ashakil/auth/schwab/db/callback")).strip()
 
 BASE_URL = "https://api.schwabapi.com"
 TOKEN_URL = f"{BASE_URL}/v1/oauth/token"
 REQ_TIMEOUT = 20  # seconds
+TOKEN_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Accept": "application/json",
+    "User-Agent": "StockWicks/1.0",
+}
 
 
 def _unsanitize_token(s: Optional[str]) -> Optional[str]:
@@ -59,6 +64,14 @@ def _apply_new_tokens(db: Session, row: SchwabToken, payload: dict, fallback_ref
     return access or ""
 
 
+def _post_token(headers: dict, data: dict):
+    merged_headers = dict(TOKEN_HEADERS)
+    merged_headers.update(headers)
+    session = requests.Session()
+    session.trust_env = os.getenv("SCHWAB_TRUST_ENV_PROXIES", "0").strip().lower() in {"1", "true", "yes"}
+    return session.post(TOKEN_URL, headers=merged_headers, data=data, timeout=REQ_TIMEOUT)
+
+
 def _refresh_access_token(db: Session, row: SchwabToken) -> Optional[str]:
     """
     Try to refresh the access token using the stored refresh_token.
@@ -75,15 +88,14 @@ def _refresh_access_token(db: Session, row: SchwabToken) -> Optional[str]:
 
     # Strategy 1: Basic auth header
     b64 = base64.b64encode(f"{TRADE_CLIENT_ID}:{TRADE_CLIENT_SECRET}".encode()).decode()
-    headers1 = {"Authorization": f"Basic {b64}", "Content-Type": "application/x-www-form-urlencoded"}
+    headers1 = {"Authorization": f"Basic {b64}"}
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh,
-        "redirect_uri": TRADE_REDIRECT_URI,  # some providers require this on refresh
     }
 
     try:
-        resp = requests.post(TOKEN_URL, headers=headers1, data=data, timeout=REQ_TIMEOUT)
+        resp = _post_token(headers=headers1, data=data)
         if resp.status_code < 400:
             td = resp.json()
             return _apply_new_tokens(db, row, td, fallback_refresh=refresh)
@@ -94,16 +106,14 @@ def _refresh_access_token(db: Session, row: SchwabToken) -> Optional[str]:
         log.warning("Schwab refresh (Basic) exception: %s", e)
 
     # Strategy 2: creds in form body (no Authorization header)
-    headers2 = {"Content-Type": "application/x-www-form-urlencoded"}
     data2 = {
         "grant_type": "refresh_token",
         "refresh_token": refresh,
-        "redirect_uri": TRADE_REDIRECT_URI,
         "client_id": TRADE_CLIENT_ID,
         "client_secret": TRADE_CLIENT_SECRET,
     }
     try:
-        resp2 = requests.post(TOKEN_URL, headers=headers2, data=data2, timeout=REQ_TIMEOUT)
+        resp2 = _post_token(headers={}, data=data2)
         if resp2.status_code >= 400:
             log.error("Schwab refresh (body) failed: %s", resp2.text)
             return None

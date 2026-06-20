@@ -29,6 +29,11 @@ SCHWAB_BASE_URL = "https://api.schwabapi.com"
 SCHWAB_AUTH_URL = f"{SCHWAB_BASE_URL}/v1/oauth/authorize"
 SCHWAB_TOKEN_URL = f"{SCHWAB_BASE_URL}/v1/oauth/token"
 SCHWAB_TRADER_BASE = "https://api.schwabapi.com/trader/v1"
+SCHWAB_TOKEN_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Accept": "application/json",
+    "User-Agent": "StockWicks/1.0",
+}
 
 
 def _data_dir() -> Path:
@@ -194,13 +199,27 @@ def _build_auth_url(cfg: dict, state: str) -> str:
     return auth_url
 
 
+def _schwab_token_post(headers: dict, data: dict, timeout: int = 30) -> requests.Response:
+    merged_headers = dict(SCHWAB_TOKEN_HEADERS)
+    merged_headers.update(headers)
+    session = requests.Session()
+    # Avoid inherited proxy env vars rewriting Schwab OAuth traffic in hosted deploys.
+    session.trust_env = os.getenv("SCHWAB_TRUST_ENV_PROXIES", "0").strip().lower() in {"1", "true", "yes"}
+    return session.post(SCHWAB_TOKEN_URL, headers=merged_headers, data=data, timeout=timeout)
+
+
+def _schwab_error_preview(resp: requests.Response) -> str:
+    content_type = resp.headers.get("content-type", "")
+    body = resp.text[:500].replace("\n", " ").strip()
+    if "text/html" in content_type.lower():
+        return f"HTML response from Schwab edge: {body[:300]}"
+    return body[:300]
+
 
 def _exchange_code_for_token(cfg: dict, code: str) -> dict:
     basic = base64.b64encode(f"{cfg['client_id']}:{cfg['client_secret']}".encode()).decode()
     headers = {
         "Authorization": f"Basic {basic}",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
     }
     data = {
         "grant_type": "authorization_code",
@@ -208,24 +227,31 @@ def _exchange_code_for_token(cfg: dict, code: str) -> dict:
         "redirect_uri": cfg["redirect_uri"],
     }
 
-    resp = requests.post(SCHWAB_TOKEN_URL, headers=headers, data=data, timeout=30)
+    resp = _schwab_token_post(headers=headers, data=data, timeout=30)
 
     # Production-compatible fallback: client_id/client_secret in form body.
-    if resp.status_code >= 400:
+    if resp.status_code in {400, 401}:
+        first_error = _schwab_error_preview(resp)
         fallback_data = dict(data)
         fallback_data["client_id"] = cfg["client_id"]
         fallback_data["client_secret"] = cfg["client_secret"]
-        resp = requests.post(
-            SCHWAB_TOKEN_URL,
-            headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
-            data=fallback_data,
-            timeout=30,
-        )
+        fallback_resp = _schwab_token_post(headers={}, data=fallback_data, timeout=30)
+        if fallback_resp.status_code < 400:
+            resp = fallback_resp
+        else:
+            log.warning(
+                "Schwab %s token exchange failed with Basic first: status=%s body=%s; body fallback status=%s body=%s",
+                cfg["label"],
+                resp.status_code,
+                first_error,
+                fallback_resp.status_code,
+                _schwab_error_preview(fallback_resp),
+            )
 
     if resp.status_code >= 400:
         raise HTTPException(
             status_code=400,
-            detail=f"Schwab {cfg['label']} token exchange failed: {resp.status_code} {resp.text[:300]}",
+            detail=f"Schwab {cfg['label']} token exchange failed: {resp.status_code} {_schwab_error_preview(resp)}",
         )
 
     token_data = resp.json()
@@ -673,10 +699,10 @@ def _refresh_trade_token_for_user(user_id: int) -> str:
         "refresh_token": refresh_token,
     }
 
-    resp = requests.post(SCHWAB_TOKEN_URL, headers=headers, data=data, timeout=30)
+    resp = _schwab_token_post(headers=headers, data=data, timeout=30)
 
     if resp.status_code >= 400:
-        log.error("Schwab trade token refresh failed: status=%s body=%s", resp.status_code, resp.text[:500])
+        log.error("Schwab trade token refresh failed: status=%s body=%s", resp.status_code, _schwab_error_preview(resp))
         raise HTTPException(status_code=400, detail="Schwab Trading token refresh failed. Reconnect Schwab Trading.")
 
     new_payload = resp.json()

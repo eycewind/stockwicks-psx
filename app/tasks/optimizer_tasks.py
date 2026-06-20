@@ -19,12 +19,13 @@ logger = logging.getLogger(__name__)
 def run_qqq_optimizer_batch(
     job_id: str,
     req_payload: dict[str, Any],
+    symbols: list[str],
     limit: int | None = None,
     max_new_symbols: int | None = None,
     resume: bool = True,
 ) -> dict[str, Any]:
     """
-    Run the QQQ optimizer in a real Celery worker instead of a web thread.
+    Run the custom-symbol optimizer in a real Celery worker instead of a web thread.
 
     The route module owns the cache/progress helpers, so this task imports the
     runner lazily to avoid making the normal web import path depend on Celery.
@@ -32,7 +33,7 @@ def run_qqq_optimizer_batch(
     from app.modules.replay.routes import _run_qqq_batch_job
 
     req = CheatSheetRequest(
-        symbol=str(req_payload.get("symbol") or "QQQ_LIST"),
+        symbol=str(req_payload.get("symbol") or "CUSTOM_LIST"),
         intervals=tuple(req_payload.get("intervals") or ("5min",)),
         trade_size=float(req_payload.get("trade_size") or 100.0),
         builder_days=int(req_payload.get("builder_days") or 30),
@@ -44,8 +45,9 @@ def run_qqq_optimizer_batch(
     )
 
     logger.info(
-        "[OPTIMIZER] starting QQQ batch job_id=%s intervals=%s max_new_symbols=%s resume=%s",
+        "[OPTIMIZER] starting custom symbol batch job_id=%s symbols=%s intervals=%s max_new_symbols=%s resume=%s",
         job_id,
+        symbols,
         req.intervals,
         max_new_symbols,
         resume,
@@ -53,6 +55,7 @@ def run_qqq_optimizer_batch(
     _run_qqq_batch_job(
         job_id,
         req,
+        symbols=symbols,
         limit=limit,
         max_new_symbols=max_new_symbols,
         resume=resume,

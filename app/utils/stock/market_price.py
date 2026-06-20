@@ -1,30 +1,43 @@
 #/var/www/stockwicks/app/utils/market_price.py
+import os
+import time
+from datetime import datetime
+
+import pandas as pd
 import requests
+
 from app.utils.stock.schwab_token import get_valid_access_token
 
 SCHWAB_API_URL = "https://api.schwabapi.com/marketdata/v1/quotes"
+_PRICE_CACHE: dict[str, tuple[float, float]] = {}
+
+
+def _price_cache_ttl() -> int:
+    return max(60, int(os.getenv("SCHWAB_QUOTE_CACHE_SECONDS", "60")))
+
 
 def get_live_price(symbol: str):
     """
-    Fetches live price for a symbol directly from Schwab API.
-    It automatically handles token refresh via get_valid_access_token().
+    Fetch live price for a symbol, with a short in-process cache to collapse
+    duplicate bot/risk checks for the same symbol.
     """
+    symbol_key = symbol.upper().strip()
+    now = time.time()
+    cached = _PRICE_CACHE.get(symbol_key)
+    if cached and now - cached[0] <= _price_cache_ttl():
+        return cached[1]
 
-    # ✅ 1. Get a valid access token (refresh if expired)
     access_token = get_valid_access_token()
     if not access_token:
         print("[ERROR] Schwab token missing or expired. Please re-authenticate using /auth/schwab/start")
         return None
 
-    # ✅ 2. Prepare API request
     headers = {"Authorization": f"Bearer {access_token}"}
-    params = {"symbols": symbol.upper()}
+    params = {"symbols": symbol_key}
 
     try:
-        # ✅ 3. Call Schwab API
-        resp = requests.get(SCHWAB_API_URL, headers=headers, params=params)
+        resp = requests.get(SCHWAB_API_URL, headers=headers, params=params, timeout=10)
 
-        # If token invalid, return None (can later trigger re-auth)
         if resp.status_code == 401:
             print("[ERROR] Schwab token expired. Please refresh via /auth/schwab/start")
             return None
@@ -32,10 +45,12 @@ def get_live_price(symbol: str):
         resp.raise_for_status()
         data = resp.json()
 
-        # ✅ 4. Extract last price safely
-        if symbol.upper() in data and "quote" in data[symbol.upper()]:
-            last_price = data[symbol.upper()]["quote"].get("lastPrice")
-            print(f"[INFO] Schwab live price for {symbol.upper()} = {last_price}")
+        if symbol_key in data and "quote" in data[symbol_key]:
+            last_price = data[symbol_key]["quote"].get("lastPrice")
+            if last_price is not None:
+                last_price = float(last_price)
+                _PRICE_CACHE[symbol_key] = (now, last_price)
+            print(f"[INFO] Schwab live price for {symbol_key} = {last_price}")
             return last_price
 
         print(f"[ERROR] Unexpected Schwab API response: {data}")
@@ -45,8 +60,6 @@ def get_live_price(symbol: str):
         print(f"[ERROR] Failed to fetch Schwab price for {symbol}: {e}")
         return None
 
-import pandas as pd
-from datetime import datetime, timedelta
 
 def get_price_history(symbol: str, days: int = 7, interval: str = "1d") -> pd.DataFrame | None:
     """
@@ -54,11 +67,9 @@ def get_price_history(symbol: str, days: int = 7, interval: str = "1d") -> pd.Da
     Replace with Schwab API call if/when supported.
     """
     try:
-        # Generate dummy price data (e.g., closing prices for 5 days)
         dates = pd.date_range(end=datetime.today(), periods=days)
-        prices = [180 + (i % 5) for i in range(days)]  # Fake data: 180, 181, ...
-        df = pd.DataFrame({"date": dates, "close": prices})
-        return df
+        prices = [180 + (i % 5) for i in range(days)]
+        return pd.DataFrame({"date": dates, "close": prices})
     except Exception as e:
         print(f"[ERROR] get_price_history failed: {e}")
         return None
