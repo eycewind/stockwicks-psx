@@ -7,6 +7,14 @@ RELEASES_DIR="${RELEASES_DIR:-/var/stockwicks/releases/ashakil}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP_DIR="${RELEASES_DIR}/backup_${TIMESTAMP}"
 
+REQUIRED_FILES=(
+  "app/main.py"
+  "app/celery_worker.py"
+  "app/database/connection.py"
+  "app/models/__init__.py"
+  "app/models/user.py"
+)
+
 if [[ -z "${RELEASE_SRC}" ]]; then
   echo "ERROR: RELEASE_SRC is required."
   exit 1
@@ -43,6 +51,12 @@ if [[ ! -d "${RELEASE_SRC}/app" ]]; then
   echo "ERROR: release app directory missing: ${RELEASE_SRC}/app"
   exit 1
 fi
+for required_file in "${REQUIRED_FILES[@]}"; do
+  if [[ ! -f "${RELEASE_SRC}/${required_file}" ]]; then
+    echo "ERROR: release missing required file: ${RELEASE_SRC}/${required_file}"
+    exit 1
+  fi
+done
 
 rsync -a --delete \
   --exclude '__pycache__' \
@@ -52,6 +66,25 @@ rsync -a --delete \
   --exclude 'logs' \
   "${RELEASE_SRC}/app/" "${APP_PATH}/app/"
 
+for required_file in "${REQUIRED_FILES[@]}"; do
+  if [[ ! -f "${APP_PATH}/${required_file}" ]]; then
+    echo "ERROR: deployed app missing required file: ${APP_PATH}/${required_file}"
+    exit 1
+  fi
+done
+
+if [[ ! -x "${APP_PATH}/venv/bin/python" ]]; then
+  echo "ERROR: venv python is missing or not executable: ${APP_PATH}/venv/bin/python"
+  exit 1
+fi
+
+echo "Validating ashakil imports"
+(
+  cd "${APP_PATH}"
+  "${APP_PATH}/venv/bin/python" -c "import app.main; print('web import ok')"
+  "${APP_PATH}/venv/bin/python" -c "from app.celery_worker import celery; print('celery import ok')"
+)
+
 echo "Restarting ashakil services"
 sudo systemctl daemon-reload
 sudo systemctl restart stockwicks-ashakil-web stockwicks-ashakil-celery stockwicks-ashakil-beat
@@ -60,5 +93,8 @@ echo "Checking service status"
 sudo systemctl is-active stockwicks-ashakil-web
 sudo systemctl is-active stockwicks-ashakil-celery
 sudo systemctl is-active stockwicks-ashakil-beat
+
+echo "Checking local web health"
+curl -fsS --max-time 20 http://127.0.0.1:8101/healthz
 
 echo "Deploy complete: ${TIMESTAMP}"

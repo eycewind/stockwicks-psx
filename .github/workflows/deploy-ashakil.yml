@@ -63,4 +63,4 @@ jobs:
 
       - name: Health check
         run: |
-          curl -fsS --max-time 20 "${{ secrets.ASHAKIL_PUBLIC_URL }}"
+          curl -fsS --max-time 20 "${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz"
