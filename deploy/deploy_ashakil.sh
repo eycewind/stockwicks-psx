@@ -31,8 +31,10 @@ if [[ ! -d "${APP_PATH}" ]]; then
 fi
 
 mkdir -p "${RELEASES_DIR}"
-mkdir -p "${APP_PATH}/models"
-chmod 2775 "${APP_PATH}/models" || true
+sudo install -d -o www-data -g www-data -m 2775 "${APP_PATH}/models"
+sudo chown -R www-data:www-data "${APP_PATH}/models"
+sudo find "${APP_PATH}/models" -type d -exec chmod 2775 {} +
+sudo find "${APP_PATH}/models" -type f -exec chmod 0664 {} +
 
 echo "Backing up current app to ${BACKUP_DIR}"
 mkdir -p "${BACKUP_DIR}"
