@@ -82,6 +82,13 @@ def _token_is_expired(token_data: dict, safety_seconds: int = 120) -> bool:
     return False
 
 
+def _access_token_safety_seconds() -> int:
+    try:
+        return int(os.getenv("SCHWAB_REFRESH_SAFETY_SECONDS", "600"))
+    except Exception:
+        return 600
+
+
 def refresh_token(user_id: int | None = None) -> Optional[dict]:
     """
     Compatibility wrapper.
@@ -116,7 +123,7 @@ def get_valid_access_token(user_id: int | None = None, *, force_refresh: bool = 
         log.warning("[SCHWAB TOKEN] No market token available from %s", token_path)
         return None
 
-    if _token_is_expired(token_data):
+    if _token_is_expired(token_data, safety_seconds=_access_token_safety_seconds()):
         log.info("[SCHWAB TOKEN] Market token near expiry, refreshing")
         token_data = refresh_token(user_id)
 

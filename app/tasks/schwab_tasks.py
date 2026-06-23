@@ -22,7 +22,7 @@ from pathlib import Path
 from celery import shared_task
 
 log = logging.getLogger("schwab_tasks")
-DEFAULT_REFRESH_SAFETY_SECONDS = 5 * 60
+DEFAULT_REFRESH_SAFETY_SECONDS = 10 * 60
 DEFAULT_BACKOFF_SECONDS = 60 * 60
 
 
