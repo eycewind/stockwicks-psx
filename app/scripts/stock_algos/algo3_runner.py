@@ -115,7 +115,7 @@ def run_algo3_bot_tick(bot_id: int, anchor_dt=None, **kwargs):
         #     decision_made = "MARKET_CLOSED"
         #     return
 
-        df = runner.fetch_source_bars(bot.symbol)
+        df = runner.fetch_source_bars(bot.symbol, user_id=bot.user_id)
 
         if df is None or df.empty:
             decision_made = "NO_DATA"

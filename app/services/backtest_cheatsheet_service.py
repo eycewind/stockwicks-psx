@@ -41,6 +41,7 @@ _ET = ZoneInfo("America/New_York")
 class CheatSheetRequest:
     symbol: str
     intervals: tuple[str, ...]
+    user_id: int | None = None
     trade_size: float = 100.0
     builder_days: int = 30
     k_forward: int = 3
@@ -214,7 +215,7 @@ def _adaptive_policy_probabilities(
     return probs.dropna(), meta
 
 
-def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.DataFrame:
+def _fetch_price_frame(symbol: str, interval: str, builder_days: int, user_id: int | None = None) -> pd.DataFrame:
     from app.scripts.stock_algos.base_wiring import StockBaseRunner
 
     runner = StockBaseRunner()
@@ -222,6 +223,7 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int) -> pd.Data
         symbol,
         interval=interval,
         lookback_days=builder_days,
+        user_id=user_id,
         raise_on_empty=True,
     )
     if raw is None or raw.empty:
@@ -650,7 +652,7 @@ def run_cheatsheet(
                     raise RuntimeError(f"No prefetched price data available for {symbol} {interval}")
                 price_full = cached.copy()
             else:
-                price_full = _fetch_price_frame(symbol, interval, req.builder_days)
+                price_full = _fetch_price_frame(symbol, interval, req.builder_days, req.user_id)
         except Exception as exc:
             errors.append(f"{symbol} {interval}: {exc}")
             continue

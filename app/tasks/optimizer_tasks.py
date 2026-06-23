@@ -35,6 +35,7 @@ def run_qqq_optimizer_batch(
     req = CheatSheetRequest(
         symbol=str(req_payload.get("symbol") or "CUSTOM_LIST"),
         intervals=tuple(req_payload.get("intervals") or ("5min",)),
+        user_id=int(req_payload["user_id"]) if req_payload.get("user_id") is not None else None,
         trade_size=float(req_payload.get("trade_size") or 100.0),
         builder_days=int(req_payload.get("builder_days") or 30),
         k_forward=int(req_payload.get("k_forward") or 3),

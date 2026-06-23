@@ -194,7 +194,7 @@ def run_algo2_bot_tick(bot_id: int, anchor_dt=None, **kwargs):
         # ------------------------------------------------------------------
         # 1) Fetch + resample bars using the same machinery as AlgoMM_runner
         # ------------------------------------------------------------------
-        df_raw = runner.fetch_source_bars(bot.symbol)
+        df_raw = runner.fetch_source_bars(bot.symbol, user_id=bot.user_id)
         if df_raw is None or df_raw.empty:
             decision_made = "NO_DATA"
             logging.warning(f"[ALGO2] No raw data for {bot.symbol}")

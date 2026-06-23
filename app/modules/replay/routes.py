@@ -231,6 +231,7 @@ def _parse_optimizer_symbols(symbols_text: str, max_symbols: int = OPTIMIZER_MAX
 def _optimizer_cache_key(req: CheatSheetRequest) -> dict:
     return {
         "intervals": list(req.intervals),
+        "user_id": req.user_id,
         "trade_size": float(req.trade_size),
         "builder_days": int(req.builder_days),
         "k_forward": int(req.k_forward),
@@ -360,6 +361,7 @@ def _cheatsheet_request_payload(req: CheatSheetRequest) -> dict:
     return {
         "symbol": req.symbol,
         "intervals": list(req.intervals),
+        "user_id": req.user_id,
         "trade_size": req.trade_size,
         "builder_days": req.builder_days,
         "k_forward": req.k_forward,
@@ -489,6 +491,19 @@ def _optimizer_worker_count(env_name: str, default: int, cap: int) -> int:
     return max(1, min(value, cap))
 
 
+def _is_schwab_market_auth_error(value: object) -> bool:
+    text = str(value or "").lower()
+    return (
+        "schwab market" in text
+        and (
+            "token" in text
+            or "unauthorized" in text
+            or "401" in text
+            or "reconnect schwab market data" in text
+        )
+    )
+
+
 def _prefetch_optimizer_symbol_data(
     symbol: str,
     req_template: CheatSheetRequest,
@@ -497,8 +512,10 @@ def _prefetch_optimizer_symbol_data(
     errors: list[str] = []
     for interval in req_template.intervals:
         try:
-            frames[interval] = _fetch_price_frame(symbol, interval, req_template.builder_days)
+            frames[interval] = _fetch_price_frame(symbol, interval, req_template.builder_days, req_template.user_id)
         except Exception as exc:
+            if _is_schwab_market_auth_error(exc):
+                raise
             errors.append(f"{symbol} {interval}: {exc}")
     return symbol, frames, errors
 
@@ -511,6 +528,7 @@ def _run_prefetched_optimizer_symbol(
     req = CheatSheetRequest(
         symbol=symbol,
         intervals=req_template.intervals,
+        user_id=req_template.user_id,
         trade_size=req_template.trade_size,
         builder_days=req_template.builder_days,
         k_forward=req_template.k_forward,
@@ -579,6 +597,7 @@ def _run_qqq_batch_job(
             )
 
         downloaded_count = 0
+        auth_blocked = False
         with ThreadPoolExecutor(max_workers=prefetch_workers) as prefetch_pool:
             future_map = {
                 prefetch_pool.submit(_prefetch_optimizer_symbol_data, symbol, req_template): symbol
@@ -590,9 +609,39 @@ def _run_qqq_batch_job(
                 try:
                     _, frames, symbol_errors = future.result()
                 except Exception as exc:
-                    frames = {}
-                    symbol_errors = [f"{symbol}: {exc}"]
-                    log.exception("[CHEATSHEET] Custom batch prefetch failed for symbol=%s", symbol)
+                    if _is_schwab_market_auth_error(exc):
+                        frames = {}
+                        symbol_errors = [f"{symbol}: {exc}"]
+                        attempted_symbol_set.add(symbol)
+                        auth_blocked = True
+                        for pending_future in future_map:
+                            if pending_future is not future:
+                                pending_future.cancel()
+                    else:
+                        frames = {}
+                        symbol_errors = [f"{symbol}: {exc}"]
+                        log.exception("[CHEATSHEET] Custom batch prefetch failed for symbol=%s", symbol)
+                if auth_blocked:
+                    errors.extend(symbol_errors)
+                    partial_result = _build_optimizer_cache_result(
+                        req_template=req_template,
+                        symbols=symbols,
+                        all_top=all_top,
+                        all_best=all_best,
+                        errors=errors,
+                        tested_combinations=tested_combinations,
+                        started_at=started_at,
+                        status="auth_failed",
+                        last_symbol=symbol,
+                        attempted_symbols=sorted(attempted_symbol_set),
+                    )
+                    _write_optimizer_cache(partial_result)
+                    _update_cheatsheet_job(
+                        job_id,
+                        result=partial_result,
+                        message="Custom batch stopped: reconnect Schwab Market Data, then rerun optimizer.",
+                    )
+                    break
 
                 if symbol_errors:
                     errors.extend(f"{symbol}: {err}" for err in symbol_errors)
@@ -623,6 +672,9 @@ def _run_qqq_batch_job(
                             f"symbols fetched. {len(prefetched_frames)} ready for backtest."
                         ),
                     )
+
+        if auth_blocked:
+            pending_symbols = []
 
         if prefetched_frames:
             _update_cheatsheet_job(
@@ -684,7 +736,10 @@ def _run_qqq_batch_job(
             )
         )
 
-        status = "complete" if len(attempted_symbol_set) >= len(symbols) else "partial"
+        if auth_blocked:
+            status = "auth_failed"
+        else:
+            status = "complete" if len(attempted_symbol_set) >= len(symbols) else "partial"
         result = _build_optimizer_cache_result(
             req_template=req_template,
             symbols=symbols,
@@ -698,11 +753,12 @@ def _run_qqq_batch_job(
         )
         _write_optimizer_cache(result)
 
-        message = (
-            f"Custom batch complete. Saved {len(all_best)} recommendations."
-            if status == "complete"
-            else f"Custom partial run complete. Attempted {result['completed_symbol_count']}/{len(symbols)} symbols."
-        )
+        if status == "complete":
+            message = f"Custom batch complete. Saved {len(all_best)} recommendations."
+        elif status == "auth_failed":
+            message = "Custom batch stopped: reconnect Schwab Market Data, then rerun optimizer."
+        else:
+            message = f"Custom partial run complete. Attempted {result['completed_symbol_count']}/{len(symbols)} symbols."
         _update_cheatsheet_job(
             job_id,
             status="succeeded",
@@ -1144,6 +1200,7 @@ def run_backtest_cheatsheet(
     req = CheatSheetRequest(
         symbol=symbol,
         intervals=parsed_intervals,
+        user_id=user.id,
         trade_size=max(float(trade_size or 1.0), 1.0),
         builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
         k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
@@ -1219,6 +1276,7 @@ def run_qqq_backtest_cheatsheet(
     req = CheatSheetRequest(
         symbol="CUSTOM_LIST",
         intervals=parsed_intervals,
+        user_id=user.id,
         trade_size=max(float(trade_size or 1.0), 1.0),
         builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
         k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),
@@ -1279,6 +1337,7 @@ def run_next_qqq_symbol_cheatsheet(
     req = CheatSheetRequest(
         symbol="CUSTOM_LIST",
         intervals=parsed_intervals,
+        user_id=user.id,
         trade_size=max(float(trade_size or 1.0), 1.0),
         builder_days=max(int(builder_days or DEFAULT_REPLAY_MM_CONFIG["builder_days"]), 10),
         k_forward=max(int(k_forward or DEFAULT_REPLAY_MM_CONFIG["k_forward"]), 1),

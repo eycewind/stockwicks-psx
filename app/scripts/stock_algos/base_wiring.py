@@ -23,12 +23,12 @@ from typing import Optional
 
 import pandas as pd
 import pytz
-import requests
 from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
 from app.models.paper_trading_bot import PaperStockTradeBot, PaperStockBotOpenTrade
 from app.services.trade_service import place_paper_and_maybe_live_order
+from app.utils.schwab_circuit import schwab_get
 from app.utils.stock.schwab_token import get_valid_access_token
 
 _ET = pytz.timezone("US/Eastern")
@@ -134,6 +134,10 @@ _SCHWAB_RATE_LOCK = threading.Lock()
 _SCHWAB_REQUEST_TIMES: deque[float] = deque()
 
 
+class SchwabAuthError(RuntimeError):
+    """Raised when Schwab market-data credentials are rejected."""
+
+
 def _caller_stack_if_enabled() -> Optional[str]:
     if os.getenv("STOCKWICKS_DEBUG_SCHWAB_STACK", "0") != "1":
         return None
@@ -166,10 +170,11 @@ def _fetch_schwab_pricehistory(
     frequency: int,
     start_ms: int,
     end_ms: int,
+    user_id: int | None = None,
     need_extended_hours: bool = False,
     timeout_sec: int = 10,
 ) -> list[dict]:
-    access_token = get_valid_access_token()
+    access_token = get_valid_access_token(user_id)
     if not access_token:
         raise RuntimeError("No valid Schwab access token")
 
@@ -184,7 +189,19 @@ def _fetch_schwab_pricehistory(
     }
     headers = {"Authorization": f"Bearer {access_token}"}
     _throttle_schwab_pricehistory()
-    resp = requests.get(url, headers=headers, params=params, timeout=timeout_sec)
+    resp = schwab_get(url, headers=headers, params=params, timeout=timeout_sec)
+    if resp.status_code == 401:
+        logging.warning("[SCHWAB] pricehistory 401 for %s; refreshing market token and retrying once", symbol.upper())
+        access_token = get_valid_access_token(user_id, force_refresh=True)
+        if not access_token:
+            raise SchwabAuthError("Schwab market token refresh failed after pricehistory 401. Reconnect Schwab Market Data.")
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        _throttle_schwab_pricehistory()
+        resp = schwab_get(url, headers=headers, params=params, timeout=timeout_sec)
+        if resp.status_code == 401:
+            raise SchwabAuthError("Schwab market-data token was rejected after refresh. Reconnect Schwab Market Data.")
+
     if resp.status_code == 400:
         return []
     resp.raise_for_status()
@@ -197,6 +214,7 @@ def get_schwab_history(
     interval: str,
     *,
     lookback_days: int = 7,
+    user_id: int | None = None,
     debug_stack_on_error: bool = False,
     need_extended_hours: bool = False,
     raise_on_empty: bool = False,
@@ -257,6 +275,7 @@ def get_schwab_history(
                 frequency=freq,
                 start_ms=int(start_dt.timestamp() * 1000),
                 end_ms=int(end_dt.timestamp() * 1000),
+                user_id=user_id,
                 need_extended_hours=need_extended_hours,
             )
             if not candles:
@@ -283,6 +302,8 @@ def get_schwab_history(
             if len(all_dfs) >= lookback_days:
                 break
 
+        except SchwabAuthError:
+            raise
         except Exception as e:
             errors.append(str(e))
             logging.warning("[SCHWAB] fetch error %s@%s: %s", symbol, fetch_interval, e)
@@ -344,6 +365,7 @@ class StockBaseRunner:
         symbol: str,
         interval: str = "1min",
         lookback_days: Optional[int] = None,
+        user_id: int | None = None,
         raise_on_empty: bool = False,
     ) -> pd.DataFrame:
         """
@@ -362,6 +384,7 @@ class StockBaseRunner:
         return get_schwab_history(
             symbol, iv,
             lookback_days=lookback_days,
+            user_id=user_id,
             debug_stack_on_error=debug_stack,
             need_extended_hours=False,
             raise_on_empty=raise_on_empty,

@@ -302,7 +302,7 @@ def run_algo1_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
             now_et = datetime.now(_ET)
 
         # Fetch data
-        df_raw = runner.fetch_source_bars(bot.symbol)
+        df_raw = runner.fetch_source_bars(bot.symbol, user_id=bot.user_id)
         if df_raw is None or df_raw.empty:
             logger.info("NO_DATA: Raw data empty")
             return
