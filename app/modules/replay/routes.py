@@ -82,8 +82,6 @@ OPTIMIZER_CACHE_DIR = Path(os.getenv("DATA_DIR", "data")) / "strategy_optimizer"
 OPTIMIZER_LATEST_JSON = OPTIMIZER_CACHE_DIR / "latest_recommendations.json"
 OPTIMIZER_LATEST_CSV = OPTIMIZER_CACHE_DIR / "latest_recommendations.csv"
 OPTIMIZER_MAX_BATCH_SYMBOLS = 10
-_optimizer_schwab_lock = threading.Lock()
-_optimizer_last_schwab_call = 0.0
 
 
 def _cheatsheet_redis_client():
@@ -230,26 +228,6 @@ def _parse_optimizer_symbols(symbols_text: str, max_symbols: int = OPTIMIZER_MAX
     return symbols
 
 
-def _optimizer_schwab_delay_seconds() -> float:
-    try:
-        configured = float(os.getenv("OPTIMIZER_SCHWAB_REQUEST_DELAY_SECONDS", "60"))
-    except Exception:
-        configured = 60.0
-    return max(60.0, configured)
-
-
-def _rate_limit_optimizer_schwab_call() -> None:
-    global _optimizer_last_schwab_call
-    delay = _optimizer_schwab_delay_seconds()
-    with _optimizer_schwab_lock:
-        now = time.time()
-        wait_for = (_optimizer_last_schwab_call + delay) - now
-        if wait_for > 0:
-            log.info("[CHEATSHEET] Waiting %.1fs before next Schwab optimizer data call", wait_for)
-            time.sleep(wait_for)
-        _optimizer_last_schwab_call = time.time()
-
-
 def _optimizer_cache_key(req: CheatSheetRequest) -> dict:
     return {
         "intervals": list(req.intervals),
@@ -353,8 +331,7 @@ def _build_optimizer_cache_result(
         "backtest_method_label": "Cached custom symbol batch",
         "backtest_explanation": (
             "This cache is built from the user-provided symbol list, capped at 10 symbols. "
-            "Partial results are saved after every symbol, and Schwab data requests are "
-            "spaced by at least 60 seconds."
+            "Partial results are saved after every symbol."
         ),
         "batch_status": status,
         "oos_fraction": float(req_template.oos_fraction),
@@ -520,7 +497,6 @@ def _prefetch_optimizer_symbol_data(
     errors: list[str] = []
     for interval in req_template.intervals:
         try:
-            _rate_limit_optimizer_schwab_call()
             frames[interval] = _fetch_price_frame(symbol, interval, req_template.builder_days)
         except Exception as exc:
             errors.append(f"{symbol} {interval}: {exc}")
@@ -598,7 +574,7 @@ def _run_qqq_batch_job(
                 status="running",
                 message=(
                     f"Custom batch downloading price data for {len(pending_symbols)} symbols "
-                    f"with {prefetch_workers} worker and at least 60 seconds between Schwab data calls."
+                    f"with {prefetch_workers} worker."
                 ),
             )
 
@@ -1271,7 +1247,7 @@ def run_qqq_backtest_cheatsheet(
             "job_id": job_id,
             "status": "queued",
             "backend": backend,
-            "message": f"Custom batch queued for {len(parsed_symbols)} symbol(s). Schwab data calls are spaced by at least 60 seconds.",
+            "message": f"Custom batch queued for {len(parsed_symbols)} symbol(s).",
         },
     )
 
@@ -1331,7 +1307,7 @@ def run_next_qqq_symbol_cheatsheet(
             "job_id": job_id,
             "status": "queued",
             "backend": backend,
-            "message": "First symbol from your list queued. Schwab data calls are spaced by at least 60 seconds.",
+            "message": "First symbol from your list queued.",
         },
     )
 
