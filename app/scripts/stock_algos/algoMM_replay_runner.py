@@ -75,7 +75,6 @@ if not logger.handlers:
 CLIENT_ROOT = os.getenv("CLIENT_ROOT", "/var/stockwicks/clients/ashakil")
 DATA_ROOT = os.getenv("DATA_DIR", os.path.join(CLIENT_ROOT, "data"))
 MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(CLIENT_ROOT, "models"))
-REPLAY_MODEL_DIR = os.getenv("REPLAY_MODEL_DIR", os.path.join(DATA_ROOT, "replay_models"))
 
 ALLOWED_MM_ALGOS = {
     "Algo1_MM": "app.scripts.stock_algos.Algo1_MM",
@@ -456,7 +455,7 @@ def _replay_model_path(session: ReplaySession, cfg: Any, interval: str) -> str:
         f"replay_{session.id}_mm_{cfg.algo_name}_{cfg.feature_set}_"
         f"{safe_symbol}_{safe_interval}_k{cfg.k_forward}.joblib"
     )
-    return os.path.join(REPLAY_MODEL_DIR, filename)
+    return os.path.join(MODEL_DIR, filename)
 
 
 def _make_open_trade_adapter(open_trade: Any, session_id: int) -> Any:
