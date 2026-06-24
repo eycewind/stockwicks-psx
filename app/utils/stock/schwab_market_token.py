@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-import os, json, time, base64, logging, requests
+import os, json, time, base64, logging
 from pathlib import Path
+from app.utils.schwab_circuit import schwab_session
 
 log = logging.getLogger("schwab_market_token")
 
@@ -10,28 +11,43 @@ def _infer_client_root() -> str:
     return str(Path(__file__).resolve().parents[3])
 
 
-CLIENT_ROOT = os.getenv("CLIENT_ROOT", _infer_client_root())
-DATA_DIR = Path(os.getenv("DATA_DIR", f"{CLIENT_ROOT}/data"))
-SCHWAB_REFRESH_USER_ID = int(os.getenv("SCHWAB_REFRESH_USER_ID", "1"))
-TOKEN_PATH = DATA_DIR / str(SCHWAB_REFRESH_USER_ID) / "schwab_market_token.json"
-
-CLIENT_ID = os.getenv("SCHWAB_MARKET_CLIENT_ID", "").strip()
-CLIENT_SECRET = os.getenv("SCHWAB_MARKET_CLIENT_SECRET", "").strip()
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
 TOKEN_HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
     "Accept": "application/json",
     "User-Agent": "StockWicks/1.0",
 }
-REDIRECT_URI = os.getenv(
-    "SCHWAB_MARKET_REDIRECT_URI",
-    f"https://www.stockwicks.com/clients/{os.getenv('CLIENT_SLUG', Path(CLIENT_ROOT).name)}/auth/schwab/callback",
-).strip()
+
+def _client_root() -> str:
+    return os.getenv("CLIENT_ROOT", _infer_client_root())
+
+
+def _data_dir() -> Path:
+    return Path(os.getenv("DATA_DIR", f"{_client_root()}/data"))
+
+
+def _refresh_user_id() -> int:
+    return int(os.getenv("SCHWAB_REFRESH_USER_ID", "1"))
+
+
+def _client_id() -> str:
+    return os.getenv("SCHWAB_MARKET_CLIENT_ID", "").strip()
+
+
+def _client_secret() -> str:
+    return os.getenv("SCHWAB_MARKET_CLIENT_SECRET", "").strip()
+
+
+def _redirect_uri() -> str:
+    return os.getenv(
+        "SCHWAB_MARKET_REDIRECT_URI",
+        f"https://www.stockwicks.com/clients/{os.getenv('CLIENT_SLUG', Path(_client_root()).name)}/auth/schwab/callback",
+    ).strip()
 
 # --- CORE FUNCS ---
 def get_user_token_path(user_id: int | None = None) -> Path:
-    uid = int(user_id or SCHWAB_REFRESH_USER_ID)
-    return DATA_DIR / str(uid) / "schwab_market_token.json"
+    uid = int(user_id if user_id is not None else _refresh_user_id())
+    return _data_dir() / str(uid) / "schwab_market_token.json"
 
 
 def load_token(user_id: int | None = None):
@@ -53,8 +69,7 @@ def save_token(tok: dict, user_id: int | None = None):
 def _post_token(headers: dict, data: dict, timeout: int = 15):
     merged_headers = dict(TOKEN_HEADERS)
     merged_headers.update(headers)
-    session = requests.Session()
-    session.trust_env = os.getenv("SCHWAB_TRUST_ENV_PROXIES", "0").strip().lower() in {"1", "true", "yes"}
+    session = schwab_session()
     return session.post(TOKEN_URL, headers=merged_headers, data=data, timeout=timeout)
 
 
@@ -63,12 +78,16 @@ def refresh_market_token(user_id: int | None = None):
     if not old or "refresh_token" not in old:
         log.error("[MARKET TOKEN] missing token or refresh_token")
         return None
-    if not CLIENT_ID or not CLIENT_SECRET or not REDIRECT_URI:
+
+    client_id = _client_id()
+    client_secret = _client_secret()
+    redirect_uri = _redirect_uri()
+    if not client_id or not client_secret or not redirect_uri:
         log.error("[MARKET TOKEN] missing SCHWAB_MARKET_CLIENT_ID / SCHWAB_MARKET_CLIENT_SECRET / SCHWAB_MARKET_REDIRECT_URI")
         return None
 
     refresh_token = old["refresh_token"]
-    b64 = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+    b64 = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     headers = {
         "Authorization": f"Basic {b64}",
     }
