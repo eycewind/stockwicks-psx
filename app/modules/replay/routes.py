@@ -86,6 +86,7 @@ OPTIMIZER_LATEST_CSV = OPTIMIZER_CACHE_DIR / "latest_recommendations.csv"
 OPTIMIZER_RUNS_DIR = OPTIMIZER_CACHE_DIR / "runs"
 OPTIMIZER_HISTORY_JSON = OPTIMIZER_CACHE_DIR / "history.json"
 OPTIMIZER_MAX_BATCH_SYMBOLS = 10
+OPTIMIZER_HISTORY_DEFAULT_LIMIT = 20
 
 
 def _cheatsheet_redis_client():
@@ -464,7 +465,18 @@ def _optimizer_run_path(run_id: str) -> Path:
     return OPTIMIZER_RUNS_DIR / f"{_safe_optimizer_run_id(run_id)}.json"
 
 
-def _load_optimizer_history() -> list[dict]:
+def _optimizer_history_limit() -> int:
+    try:
+        return max(1, int(os.getenv("OPTIMIZER_HISTORY_LIMIT", str(OPTIMIZER_HISTORY_DEFAULT_LIMIT)) or OPTIMIZER_HISTORY_DEFAULT_LIMIT))
+    except Exception:
+        return OPTIMIZER_HISTORY_DEFAULT_LIMIT
+
+
+def _optimizer_history_sort_key(entry: dict) -> str:
+    return str(entry.get("generated_at") or entry.get("started_at") or "")
+
+
+def _load_optimizer_history_index() -> list[dict]:
     if not OPTIMIZER_HISTORY_JSON.exists():
         return []
     try:
@@ -473,6 +485,27 @@ def _load_optimizer_history() -> list[dict]:
     except Exception as exc:
         log.warning("[CHEATSHEET] could not read optimizer history: %s", exc)
         return []
+
+
+def _load_optimizer_history() -> list[dict]:
+    by_run_id: dict[str, dict] = {}
+
+    for entry in _load_optimizer_history_index():
+        run_id = str(entry.get("run_id") or "").strip()
+        if run_id:
+            by_run_id[run_id] = entry
+
+    if OPTIMIZER_RUNS_DIR.exists():
+        for path in sorted(OPTIMIZER_RUNS_DIR.glob("*.json")):
+            run_id = path.stem
+            if run_id in by_run_id:
+                continue
+            data = _load_optimizer_run(run_id)
+            if data:
+                by_run_id[run_id] = _optimizer_history_entry(run_id, data)
+
+    history = sorted(by_run_id.values(), key=_optimizer_history_sort_key, reverse=True)
+    return history[:_optimizer_history_limit()]
 
 
 def _optimizer_group_summaries(result: dict) -> list[dict]:
@@ -568,9 +601,8 @@ def _write_optimizer_history_entry(run_id: str, result: dict) -> None:
     entry = _optimizer_history_entry(run_id, result)
     history = [item for item in _load_optimizer_history() if item.get("run_id") != run_id]
     history.insert(0, entry)
-    max_entries = max(1, int(os.getenv("OPTIMIZER_HISTORY_LIMIT", "100") or 100))
     OPTIMIZER_HISTORY_JSON.write_text(
-        json.dumps(history[:max_entries], default=str, indent=2),
+        json.dumps(history[:_optimizer_history_limit()], default=str, indent=2),
         encoding="utf-8",
     )
 
