@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: "Space-separated client slugs to update"
+        description: "Space-separated client slugs to update, or all"
         required: false
-        default: "haithama yzia"
+        default: "all"
       restart:
         description: "Restart target web/celery/beat services"
         required: true
@@ -26,6 +26,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Compile tracked Python files
+        run: |
+          git ls-files -z '*.py' | xargs -0 python -m py_compile
+
+      - name: Package release
+        run: |
+          mkdir -p release
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'deploy' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.env' \
+            --exclude 'venv' \
+            --exclude 'data' \
+            --exclude 'logs' \
+            ./ release/
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -33,19 +52,23 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Upload rollout script
+      - name: Upload release and rollout script
         run: |
           RELEASE_ID="rollout-${GITHUB_SHA::8}-$(date +%Y%m%d%H%M%S)"
           echo "RELEASE_ID=${RELEASE_ID}" >> "$GITHUB_ENV"
 
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "mkdir -p /tmp/stockwicks-${RELEASE_ID}-deploy"
+            "mkdir -p /tmp/stockwicks-${RELEASE_ID} /tmp/stockwicks-${RELEASE_ID}-deploy"
+
+          rsync -az -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            release/ \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/stockwicks-${RELEASE_ID}/"
 
           rsync -az -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
             app/scripts/deploy_rollout.sh \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/stockwicks-${RELEASE_ID}-deploy/deploy_rollout.sh"
 
-      - name: Roll out from Ashakil to target clients
+      - name: Roll out release to target clients
         run: |
           APPLY_FLAG="--apply"
           if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
@@ -62,8 +85,20 @@ jobs:
             RUNNER="sudo bash"
           fi
 
+          TARGETS="${{ github.event.inputs.targets }}"
+          if [[ -z "${TARGETS// }" || "${TARGETS}" == "all" ]]; then
+            TARGETS="--all"
+          else
+            for target in ${TARGETS}; do
+              if [[ ! "${target}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+                echo "Invalid target client slug: ${target}" >&2
+                exit 1
+              fi
+            done
+          fi
+
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
             "chmod +x /tmp/stockwicks-${RELEASE_ID}-deploy/deploy_rollout.sh && \
              ${RUNNER} /tmp/stockwicks-${RELEASE_ID}-deploy/deploy_rollout.sh \
-               --source '${{ secrets.ASHAKIL_APP_PATH }}' \
-               ${APPLY_FLAG} ${RESTART_FLAG} ${{ github.event.inputs.targets }}"
+               --source /tmp/stockwicks-${RELEASE_ID} \
+               ${APPLY_FLAG} ${RESTART_FLAG} ${TARGETS}"

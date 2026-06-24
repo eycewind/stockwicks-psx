@@ -11,13 +11,16 @@ import requests
 from sqlalchemy.orm import Session
 
 from app.models.schwab_tokens import SchwabToken
+from app.utils.client_context import public_base_url
 
 log = logging.getLogger("schwab_db_token")
 
-# Read from env if present; fall back to your current hard-coded values
 TRADE_CLIENT_ID = os.getenv("SCHWAB_TRADE_CLIENT_ID", os.getenv("SCHWAB_CLIENT_ID", "")).strip()
 TRADE_CLIENT_SECRET = os.getenv("SCHWAB_TRADE_CLIENT_SECRET", os.getenv("SCHWAB_CLIENT_SECRET", "")).strip()
-TRADE_REDIRECT_URI = os.getenv("SCHWAB_TRADE_REDIRECT_URI", os.getenv("TRADE_REDIRECT_URI", "https://www.stockwicks.com/clients/ashakil/auth/schwab/db/callback")).strip()
+TRADE_REDIRECT_URI = os.getenv(
+    "SCHWAB_TRADE_REDIRECT_URI",
+    os.getenv("TRADE_REDIRECT_URI", f"{public_base_url()}/auth/schwab/db/callback"),
+).strip()
 
 BASE_URL = "https://api.schwabapi.com"
 TOKEN_URL = f"{BASE_URL}/v1/oauth/token"

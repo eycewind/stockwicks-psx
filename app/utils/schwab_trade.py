@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import SessionLocal
 from app.models.schwab_accounts import SchwabAccount
+from app.utils.client_context import data_dir
 
 log = logging.getLogger(__name__)
 
@@ -40,10 +41,9 @@ def _unsanitize_token(s: Optional[str]) -> Optional[str]:
 
 def _load_user_trade_token(user_id: int) -> Optional[str]:
     """
-    Load the most recent trader access_token saved by /auth/schwab/db flow:
-      /var/stockwicks/clients/ashakil/data/<user_id>/schwab_trade_token.json
+    Load the most recent trader access_token saved by /auth/schwab/db flow.
     """
-    token_path = Path(os.getenv("DATA_DIR", "/var/stockwicks/clients/ashakil/data")) / str(user_id) / "schwab_trade_token.json"
+    token_path = data_dir() / str(user_id) / "schwab_trade_token.json"
     if not token_path.exists():
         log.error("[SCHWAB] Token file missing for user %s: %s", user_id, token_path)
         return None

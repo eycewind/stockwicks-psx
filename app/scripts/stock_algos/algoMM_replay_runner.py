@@ -64,6 +64,7 @@ from app.scripts.ml.model_refresh_policy import (
     DEFAULT_MODEL_REFRESH_MODE,
     normalize_model_refresh_mode,
 )
+from app.utils.client_context import client_root
 
 logger = logging.getLogger("AlgoMM_Replay")
 if not logger.handlers:
@@ -72,7 +73,7 @@ if not logger.handlers:
         format="%(asctime)s %(levelname)s [AlgoMM_Replay] %(message)s",
     )
 
-CLIENT_ROOT = os.getenv("CLIENT_ROOT", "/var/stockwicks/clients/ashakil")
+CLIENT_ROOT = str(client_root())
 DATA_ROOT = os.getenv("DATA_DIR", os.path.join(CLIENT_ROOT, "data"))
 MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(CLIENT_ROOT, "models"))
 

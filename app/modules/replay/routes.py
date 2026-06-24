@@ -1,4 +1,4 @@
-# /var/stockwicks/clients/ashakil/app/routes/replay.py
+# app/modules/replay/routes.py
 """
 Replay Simulator Routes
 =======================
@@ -60,6 +60,7 @@ from app.services.replay_process import (
     reap_stale_sessions,
     stop_session,
 )
+from app.utils.client_context import public_prefix
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -1294,7 +1295,7 @@ def replay_page(
             "running_sessions": running_sessions,
             "running_session_count": running_count,
             "max_running_replay_sessions": MAX_RUNNING_REPLAY_SESSIONS,
-            "url_prefix": os.getenv("CLIENT_PUBLIC_PREFIX", "/clients/ashakil"),
+            "url_prefix": public_prefix(),
         },
     )
 
@@ -1312,7 +1313,7 @@ def backtest_cheatsheet_page(
         context={
             "request": request,
             "user": user,
-            "url_prefix": os.getenv("CLIENT_PUBLIC_PREFIX", "/clients/ashakil"),
+            "url_prefix": public_prefix(),
         },
     )
 

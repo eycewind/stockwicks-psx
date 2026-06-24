@@ -4,6 +4,7 @@ import json
 import base64
 import time
 import logging
+import os
 from pathlib import Path
 from urllib.parse import quote
 import requests
@@ -17,23 +18,24 @@ from app.database.connection import get_db
 from app.models.schwab_tokens import SchwabToken
 from app.routes.auth import get_current_user
 from app.utils.schwab_db_token import get_valid_token
+from app.utils.client_context import data_dir, public_base_url
 
 router = APIRouter()
 log = logging.getLogger("schwab_auth")
 
 # ---------- Config ----------
-CLIENT_ID = "v99zYt7xLUTWcBXLfPgwsYOKXAgGEllN"
-CLIENT_SECRET = "Z7CFceh6PpREoH1Q"
-REDIRECT_URI = "https://www.stockwicks.com/clients/ashakil/auth/callback"
+CLIENT_ID = os.getenv("SCHWAB_MARKET_CLIENT_ID", os.getenv("SCHWAB_CLIENT_ID", "")).strip()
+CLIENT_SECRET = os.getenv("SCHWAB_MARKET_CLIENT_SECRET", os.getenv("SCHWAB_CLIENT_SECRET", "")).strip()
+REDIRECT_URI = os.getenv("SCHWAB_MARKET_REDIRECT_URI", f"{public_base_url()}/auth/callback").strip()
 
-TRADE_CLIENT_ID = "kI9oDoNC4WNXzp7AJRpAAIvDoE9GxJGz"
-TRADE_CLIENT_SECRET = "x2tV8ksOGGh9cUXA"
-TRADE_REDIRECT_URI = "https://www.stockwicks.com/clients/ashakil/auth/schwab/db/callback"
+TRADE_CLIENT_ID = os.getenv("SCHWAB_TRADE_CLIENT_ID", "").strip()
+TRADE_CLIENT_SECRET = os.getenv("SCHWAB_TRADE_CLIENT_SECRET", "").strip()
+TRADE_REDIRECT_URI = os.getenv("SCHWAB_TRADE_REDIRECT_URI", f"{public_base_url()}/auth/schwab/db/callback").strip()
 
 BASE_URL = "https://api.schwabapi.com"
 AUTH_URL = f"{BASE_URL}/v1/oauth/authorize"
 TOKEN_URL = f"{BASE_URL}/v1/oauth/token"
-TOKEN_PATH = "/var/www/stockwicks/data/schwab_token.json"
+TOKEN_PATH = str(data_dir() / "schwab_token.json")
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -208,7 +210,7 @@ async def schwab_callback_db(
         log.info(f"📦 Full token_data: {json.dumps(token_data, indent=2)}")
 
      # ✅ Save trade token to permanent user-specific location
-        token_path = Path(f"/var/www/stockwicks/data/{current_user.id}/trade_token.json")
+        token_path = data_dir() / str(current_user.id) / "trade_token.json"
         token_path.parent.mkdir(parents=True, exist_ok=True)
         with open(token_path, "w") as f:
             json.dump(token_data, f, indent=2)

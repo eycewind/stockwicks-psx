@@ -1,9 +1,12 @@
 # exchange_token.py
 import requests
+import os
 
-CLIENT_ID = kI9oDoNC4WNXzp7AJRpAAIvDoE9GxJGz
-CLIENT_SECRET = x2tV8ksOGGh9cUXA
-REDIRECT_URI = "https://www.stockwicks.com/clients/ashakil/auth/schwab/callback"
+from app.utils.client_context import public_base_url
+
+CLIENT_ID = os.getenv("SCHWAB_TRADE_CLIENT_ID", os.getenv("SCHWAB_CLIENT_ID", "")).strip()
+CLIENT_SECRET = os.getenv("SCHWAB_TRADE_CLIENT_SECRET", os.getenv("SCHWAB_CLIENT_SECRET", "")).strip()
+REDIRECT_URI = os.getenv("SCHWAB_TRADE_REDIRECT_URI", f"{public_base_url()}/auth/schwab/callback").strip()
 TOKEN_URL = "https://sandbox.schwabapi.com/v1/oauth/token"
 
 # 📝 Paste these manually:

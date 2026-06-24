@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.routes.auth import get_current_user
 from app.models.schwab_accounts import SchwabAccount
+from app.utils.client_context import data_dir, public_base_url
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ REQ_TIMEOUT = 20  # seconds
 
 PUBLIC_BASE_URL = os.getenv(
     "CLIENT_PUBLIC_BASE_URL",
-    os.getenv("PUBLIC_BASE_URL", "https://www.stockwicks.com/clients/ashakil")
+    os.getenv("PUBLIC_BASE_URL", public_base_url())
 ).rstrip("/")
 
 SCHWAB_LINK_START_URL = os.getenv(
@@ -42,7 +43,7 @@ SCHWAB_LINK_START_URL = os.getenv(
 
 SCHWAB_RELINK_NEXT = "/broker/trading"
 
-DATA_ROOT = os.getenv("DATA_DIR", "/var/stockwicks/clients/ashakil/data")
+DATA_ROOT = str(data_dir())
 
 # --------------------------------------------------------------------
 # Routers & UI

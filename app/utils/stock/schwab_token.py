@@ -8,8 +8,8 @@ Used by:
 - schwab_price_history.py
 - paper_trade_engine.py
 
-For market data, always use:
-  /var/stockwicks/clients/ashakil/data/{SCHWAB_REFRESH_USER_ID}/schwab_market_token.json
+For market data, use:
+  {DATA_DIR}/{SCHWAB_REFRESH_USER_ID}/schwab_market_token.json
 
 Trade order code should use schwab_trade_token.py separately.
 Never log raw tokens.
@@ -22,10 +22,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from app.utils.client_context import data_dir
+
 log = logging.getLogger("schwab_token")
 
-CLIENT_ROOT = os.getenv("CLIENT_ROOT", "/var/stockwicks/clients/ashakil")
-DATA_DIR = Path(os.getenv("DATA_DIR", f"{CLIENT_ROOT}/data"))
+DATA_DIR = data_dir()
 SCHWAB_REFRESH_USER_ID = int(os.getenv("SCHWAB_REFRESH_USER_ID", "3"))
 
 MARKET_TOKEN_PATH = DATA_DIR / str(SCHWAB_REFRESH_USER_ID) / "schwab_market_token.json"

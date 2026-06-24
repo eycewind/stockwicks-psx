@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Roll out code from one deployed client folder to other client folders.
+# Roll out a release folder to one or more deployed client folders.
 #
 # Default is a dry run. Use --apply to actually copy files.
 #
-# Examples from /var/stockwicks/clients/ashakil:
+# Examples from a packaged release folder or a client root:
 #   bash app/scripts/deploy_rollout.sh
 #   bash app/scripts/deploy_rollout.sh --apply
 #   sudo bash app/scripts/deploy_rollout.sh --apply --restart
-#   bash app/scripts/deploy_rollout.sh --source /var/stockwicks/clients/ashakil haithama yzia
+#   bash app/scripts/deploy_rollout.sh --source /tmp/stockwicks-release --all
+#   bash app/scripts/deploy_rollout.sh --source /tmp/stockwicks-release client_a client_b
 
-CLIENTS_ROOT_DEFAULT="/var/stockwicks/clients"
-RELEASES_ROOT_DEFAULT="/var/stockwicks/releases"
+CLIENTS_ROOT="${CLIENTS_ROOT:-/var/stockwicks/clients}"
+RELEASES_ROOT="${RELEASES_ROOT:-/var/stockwicks/releases}"
 SOURCE_ROOT=""
 APPLY=0
 RESTART=0
+TARGET_ALL=0
 TARGET_CLIENTS=()
 
 REQUIRED_FILES=(
@@ -34,16 +36,17 @@ die() {
 usage() {
   cat <<'EOF'
 Usage:
-  bash app/scripts/deploy_rollout.sh [--apply] [--restart] [--source <path>] [client ...]
+  bash app/scripts/deploy_rollout.sh [--apply] [--restart] [--source <path>] [--all|client ...]
 
 Defaults:
-  source: current client root if run from a client folder, otherwise /var/stockwicks/clients/ashakil
-  clients: haithama yzia
+  source: current directory if it looks like a StockWicks release/client root
+  clients: all client folders under CLIENTS_ROOT
 
 Options:
   --apply       Actually sync files. Without this, rsync runs dry-run.
   --restart     Restart target web/celery/beat services after sync. Requires sudo/root.
   --source PATH Source client root to copy from.
+  --all         Discover and update every client folder under CLIENTS_ROOT.
   -h, --help    Show this help.
 EOF
 }
@@ -63,6 +66,10 @@ while [[ $# -gt 0 ]]; do
       [[ -n "${SOURCE_ROOT}" ]] || die "--source requires a path"
       shift 2
       ;;
+    --all)
+      TARGET_ALL=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -77,20 +84,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ${#TARGET_CLIENTS[@]} -eq 0 ]]; then
-  TARGET_CLIENTS=("haithama" "yzia")
-fi
-
 if [[ -z "${SOURCE_ROOT}" ]]; then
   if [[ -d "app" && -f "app/main.py" ]]; then
     SOURCE_ROOT="$(pwd)"
   else
-    SOURCE_ROOT="${CLIENTS_ROOT_DEFAULT}/ashakil"
+    die "--source is required unless you run from a StockWicks release/client root"
   fi
 fi
 
 SOURCE_ROOT="$(cd "${SOURCE_ROOT}" && pwd)"
-CLIENTS_ROOT="$(dirname "${SOURCE_ROOT}")"
 SOURCE_SLUG="$(basename "${SOURCE_ROOT}")"
 
 [[ -d "${SOURCE_ROOT}/app" ]] || die "Source does not look like a StockWicks client root: ${SOURCE_ROOT}"
@@ -128,6 +130,22 @@ BACKUP_EXCLUDES=(
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
+discover_clients() {
+  local found=()
+  local dir
+  while IFS= read -r -d '' dir; do
+    [[ -f "${dir}/app/main.py" ]] || continue
+    found+=("$(basename "${dir}")")
+  done < <(find "${CLIENTS_ROOT}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+  printf '%s\n' "${found[@]}"
+}
+
+if [[ "${TARGET_ALL}" -eq 1 || ${#TARGET_CLIENTS[@]} -eq 0 ]]; then
+  mapfile -t TARGET_CLIENTS < <(discover_clients)
+fi
+
+[[ ${#TARGET_CLIENTS[@]} -gt 0 ]] || die "No target clients found under ${CLIENTS_ROOT}"
+
 echo "Source: ${SOURCE_ROOT}"
 echo "Targets: ${TARGET_CLIENTS[*]}"
 if [[ "${APPLY}" -eq 0 ]]; then
@@ -138,15 +156,16 @@ fi
 
 for client in "${TARGET_CLIENTS[@]}"; do
   [[ "${client}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "Invalid client slug: ${client}"
-  [[ "${client}" != "${SOURCE_SLUG}" ]] || die "Target client matches source: ${client}"
 
   target="${CLIENTS_ROOT}/${client}"
   [[ -d "${target}" ]] || die "Target client folder not found: ${target}"
+  target_real="$(cd "${target}" && pwd)"
+  [[ "${target_real}" != "${SOURCE_ROOT}" ]] || die "Target client matches source path: ${client}"
 
   echo
   echo "==> Sync ${SOURCE_SLUG} -> ${client}"
   if [[ "${APPLY}" -eq 1 ]]; then
-    backup_dir="${RELEASES_ROOT_DEFAULT}/${client}/rollout_backup_${TIMESTAMP}"
+    backup_dir="${RELEASES_ROOT}/${client}/rollout_backup_${TIMESTAMP}"
     echo "==> Backup ${client} -> ${backup_dir}"
     mkdir -p "${backup_dir}"
     rsync -a "${BACKUP_EXCLUDES[@]}" "${target}/" "${backup_dir}/"

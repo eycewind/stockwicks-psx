@@ -17,8 +17,7 @@ Commercial clean model-only behavior:
     3) trailing probability stop
     4) optional EOD close
 
-Install target:
-  /var/stockwicks/clients/ashakil/app/scripts/stock_algos/Algo5_MM.py
+Install target: app/scripts/stock_algos/Algo5_MM.py
 """
 
 import warnings
@@ -61,6 +60,7 @@ from app.services.mm_core_engine import (
     evaluate_entry,
     evaluate_exit,
 )
+from app.utils.client_context import client_root
 
 logger = logging.getLogger("Algo5_MM_Live")
 logging.basicConfig(
@@ -68,7 +68,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [Algo5_MM_Live] %(message)s",
 )
 
-CLIENT_ROOT = os.getenv("CLIENT_ROOT", "/var/stockwicks/clients/ashakil")
+CLIENT_ROOT = str(client_root())
 DATA_ROOT = os.getenv("DATA_DIR", os.path.join(CLIENT_ROOT, "data"))
 MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(CLIENT_ROOT, "models"))
 

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.models.paper_trading_bot import PaperStockTradeBot
 from app.routes.auth import get_current_user
+from app.utils.client_context import data_dir
 
 router = APIRouter(prefix="/auth/papertradebot", tags=["Paper Bot"])
 templates = Jinja2Templates(directory="app/templates")
@@ -41,15 +42,13 @@ def _read_jsonl(path: Path, limit: int = 500):
 
 
 def _bot_log_payload(bot: PaperStockTradeBot):
-    data_dir = os.getenv("DATA_DIR", "/var/stockwicks/clients/ashakil/data")
-
     user_id = int(bot.user_id)
     bot_id = int(bot.id)
     symbol = str(bot.symbol).upper()
     interval = str(bot.interval)
     algo_name = str(bot.algo_name)
 
-    base_dir = Path(data_dir) / str(user_id)
+    base_dir = data_dir() / str(user_id)
 
     candles_path = base_dir / f"bot_{bot_id}_{symbol}_{interval}_candles.jsonl"
     decisions_path = base_dir / f"bot_{bot_id}_{symbol}_{algo_name}_decisions.jsonl"

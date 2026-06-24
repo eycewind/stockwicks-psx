@@ -29,14 +29,14 @@ from app.scripts.ml.model_refresh_policy import (
     DEFAULT_MODEL_MAX_AGE_MINUTES,
     DEFAULT_MODEL_REFRESH_MODE,
 )
+from app.utils.client_context import data_dir
 
 
 def client_prefix(request: Request) -> str:
     """
     Path-based commercial deployment helper.
 
-    NGINX should set:
-        proxy_set_header X-Forwarded-Prefix /clients/ashakil;
+    NGINX should set X-Forwarded-Prefix for client-prefixed deployments.
 
     If the header is absent, CLIENT_PUBLIC_PREFIX can be used from .env.
     Empty prefix is valid for local/root deployments.
@@ -53,8 +53,8 @@ def prefixed_url(request: Request, path: str) -> str:
     """
     Use app-local redirects.
 
-    Current ashakil deployment forwards requests to this app as /auth/...
-    not /clients/ashakil/auth/..., so redirects must stay unprefixed.
+    Some deployments forward requests to this app as /auth/..., so redirects
+    must stay unprefixed.
     """
     if not path.startswith("/"):
         path = "/" + path
@@ -70,7 +70,7 @@ UTC = pytz.UTC
 import re
 from pathlib import Path
 
-DATA_DIR = os.getenv("DATA_DIR", "/var/stockwicks/clients/ashakil/data")
+DATA_DIR = str(data_dir())
 
 # --- AlgoMM commercial bot config ------------------------------------------
 ALLOWED_MM_ALGOS = {

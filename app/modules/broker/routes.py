@@ -19,6 +19,7 @@ from app.database.connection import get_db
 from app.models.schwab import BrokerConnection, SchwabAccount
 from app.models.user import User
 from app.routes.auth import get_current_user
+from app.utils.client_context import client_slug, data_dir, public_base_url
 
 router = APIRouter(prefix="/broker", tags=["Broker"])
 legacy_router = APIRouter(tags=["Broker Legacy Compatibility"])
@@ -37,7 +38,7 @@ SCHWAB_TOKEN_HEADERS = {
 
 
 def _data_dir() -> Path:
-    return Path(os.getenv("DATA_DIR", "/var/stockwicks/clients/ashakil/data"))
+    return data_dir()
 
 
 def _plain_store_token(raw_token: str | None) -> str | None:
@@ -287,10 +288,10 @@ def _state_secret() -> str:
 
 
 def _make_oauth_state(api_kind: str, user_id: int) -> str:
-    client_slug = (os.getenv("CLIENT_SLUG") or "ashakil").strip()
+    current_client_slug = client_slug()
     ts = str(int(time.time()))
     nonce = str(int(time.time() * 1000))
-    payload = f"{client_slug}:{api_kind}:{user_id}:{ts}:{nonce}"
+    payload = f"{current_client_slug}:{api_kind}:{user_id}:{ts}:{nonce}"
     sig = hmac.new(_state_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
     return f"{payload}:{sig}"
 
@@ -301,10 +302,10 @@ def _parse_oauth_state(state: str | None) -> tuple[str, int]:
         raise HTTPException(status_code=400, detail="Missing Schwab OAuth state.")
 
     parts = state.split(":")
-    expected_client_slug = (os.getenv("CLIENT_SLUG") or "ashakil").strip()
+    expected_client_slug = client_slug()
 
     # New commercial dispatcher format:
-    # ashakil:market:3:timestamp:nonce:signature
+    # client_slug:market:3:timestamp:nonce:signature
     if len(parts) == 6:
         client_slug, api_kind, user_id_raw, ts, nonce, sig = parts
         payload = f"{client_slug}:{api_kind}:{user_id_raw}:{ts}:{nonce}"
@@ -336,12 +337,7 @@ def _parse_oauth_state(state: str | None) -> tuple[str, int]:
     return api_kind, int(user_id_raw)
 
 def _public_client_url(path: str) -> str:
-    base = (
-        os.getenv("PUBLIC_BASE_URL")
-        or os.getenv("CLIENT_PUBLIC_BASE_URL")
-        or os.getenv("APP_PUBLIC_URL")
-        or "https://www.stockwicks.com/clients/ashakil"
-    ).rstrip("/")
+    base = public_base_url().rstrip("/")
 
     if not path.startswith("/"):
         path = "/" + path
@@ -898,8 +894,8 @@ def broker_sync_schwab_accounts(
         len(acct_map),
     )
 
-    # Return an app-local path only. NGINX proxy_redirect will add /clients/ashakil.
-    # Do NOT use _prefixed_url() here or the browser gets /clients/ashakil/clients/ashakil/...
+    # Return an app-local path only. NGINX proxy_redirect will add the client prefix.
+    # Do NOT use _prefixed_url() here or the browser gets duplicate client prefixes.
     return RedirectResponse(
         url=f"/broker/setup?accounts_synced=1&created={created}&updated={updated}",
         status_code=303,

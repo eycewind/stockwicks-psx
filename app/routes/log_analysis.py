@@ -1,4 +1,4 @@
-#/var/stockwicks/clients/ashakil/app/routes/log_analysis.py
+# app/routes/log_analysis.py
 from pathlib import Path
 from typing import Optional
 
@@ -19,7 +19,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 def project_base_dir() -> Path:
-    # /var/stockwicks/clients/ashakil/app/routes/log_analysis.py
+    # app/routes/log_analysis.py
     # parents[0] = routes
     # parents[1] = app
     # parents[2] = client root
