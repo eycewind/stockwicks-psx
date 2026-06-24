@@ -83,6 +83,8 @@ APP_PATH = Path(REPO_ROOT)
 OPTIMIZER_CACHE_DIR = Path(os.getenv("DATA_DIR", "data")) / "strategy_optimizer"
 OPTIMIZER_LATEST_JSON = OPTIMIZER_CACHE_DIR / "latest_recommendations.json"
 OPTIMIZER_LATEST_CSV = OPTIMIZER_CACHE_DIR / "latest_recommendations.csv"
+OPTIMIZER_RUNS_DIR = OPTIMIZER_CACHE_DIR / "runs"
+OPTIMIZER_HISTORY_JSON = OPTIMIZER_CACHE_DIR / "history.json"
 OPTIMIZER_MAX_BATCH_SYMBOLS = 10
 
 
@@ -451,6 +453,151 @@ def _write_optimizer_cache(result: dict) -> None:
             writer.writerow(row)
 
 
+def _safe_optimizer_run_id(run_id: str) -> str:
+    run_id = str(run_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", run_id):
+        raise HTTPException(status_code=400, detail="Invalid optimizer run id")
+    return run_id
+
+
+def _optimizer_run_path(run_id: str) -> Path:
+    return OPTIMIZER_RUNS_DIR / f"{_safe_optimizer_run_id(run_id)}.json"
+
+
+def _load_optimizer_history() -> list[dict]:
+    if not OPTIMIZER_HISTORY_JSON.exists():
+        return []
+    try:
+        data = json.loads(OPTIMIZER_HISTORY_JSON.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        log.warning("[CHEATSHEET] could not read optimizer history: %s", exc)
+        return []
+
+
+def _optimizer_group_summaries(result: dict) -> list[dict]:
+    rows = result.get("best_by_symbol_algo") or result.get("best_by_algo") or result.get("top") or []
+    groups: dict[tuple[str, str], dict] = {}
+    sorted_rows = _sort_optimizer_rows(list(rows))
+    for row in sorted_rows:
+        symbol = str(row.get("symbol") or "").upper().strip()
+        interval = str(row.get("interval") or "").strip()
+        if not symbol or not interval:
+            continue
+        key = (symbol, interval)
+        group = groups.setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "row_count": 0,
+                "best": None,
+            },
+        )
+        group["row_count"] += 1
+        if group["best"] is None:
+            group["best"] = {
+                "algo_name": row.get("algo_name"),
+                "feature_set": row.get("feature_set"),
+                "confidence": row.get("confidence"),
+                "total_profit": row.get("total_profit"),
+                "num_trades": row.get("num_trades"),
+                "win_rate": row.get("win_rate"),
+                "max_drawdown": row.get("max_drawdown"),
+                "score": row.get("score"),
+                "stop_loss_pct": row.get("stop_loss_pct") or row.get("per_share_stop_pct"),
+                "trailing_profit_pct": row.get("trailing_profit_pct") or row.get("per_share_trailing_profit_pct"),
+                "stop_loss_usd": row.get("stop_loss_usd") or row.get("hard_stop_usd"),
+                "trailing_profit_usd": row.get("trailing_profit_usd"),
+                "long_entry_prob": row.get("long_entry_prob"),
+                "short_entry_prob": row.get("short_entry_prob"),
+                "prob_trail_drop": row.get("prob_trail_drop"),
+                "prob_exit_mode": row.get("prob_exit_mode"),
+                "params": {
+                    "stop_loss_pct": row.get("stop_loss_pct") or row.get("per_share_stop_pct"),
+                    "trailing_profit_pct": row.get("trailing_profit_pct") or row.get("per_share_trailing_profit_pct"),
+                    "stop_loss_usd": row.get("stop_loss_usd") or row.get("hard_stop_usd"),
+                    "trailing_profit_usd": row.get("trailing_profit_usd"),
+                    "long_entry_prob": row.get("long_entry_prob"),
+                    "short_entry_prob": row.get("short_entry_prob"),
+                    "prob_trail_drop": row.get("prob_trail_drop"),
+                    "prob_exit_mode": row.get("prob_exit_mode"),
+                },
+            }
+    requested_symbols = [
+        str(s or "").upper().strip()
+        for s in (result.get("symbols_requested") or result.get("symbols_attempted") or result.get("symbols_scanned") or [])
+        if str(s or "").strip()
+    ]
+    requested_intervals = [str(i or "").strip() for i in (result.get("intervals") or []) if str(i or "").strip()]
+    for symbol in requested_symbols:
+        for interval in requested_intervals:
+            groups.setdefault(
+                (symbol, interval),
+                {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "row_count": 0,
+                    "best": None,
+                },
+            )
+    return sorted(groups.values(), key=lambda g: (g["symbol"], g["interval"]))
+
+
+def _optimizer_history_entry(run_id: str, result: dict) -> dict:
+    return {
+        "run_id": run_id,
+        "symbol": result.get("symbol") or "CUSTOM_LIST",
+        "intervals": list(result.get("intervals") or []),
+        "batch_status": result.get("batch_status"),
+        "generated_at": result.get("generated_at"),
+        "started_at": result.get("started_at"),
+        "symbols_requested": result.get("symbols_requested") or [],
+        "symbols_attempted": result.get("symbols_attempted") or [],
+        "symbol_count": result.get("symbol_count") or 0,
+        "completed_symbol_count": result.get("completed_symbol_count") or 0,
+        "recommendation_rows": len(result.get("best_by_symbol_algo") or result.get("best_by_algo") or result.get("top") or []),
+        "tested_combinations": result.get("tested_combinations") or 0,
+        "groups": _optimizer_group_summaries(result),
+        "errors": result.get("errors") or [],
+    }
+
+
+def _write_optimizer_history_entry(run_id: str, result: dict) -> None:
+    OPTIMIZER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    entry = _optimizer_history_entry(run_id, result)
+    history = [item for item in _load_optimizer_history() if item.get("run_id") != run_id]
+    history.insert(0, entry)
+    max_entries = max(1, int(os.getenv("OPTIMIZER_HISTORY_LIMIT", "100") or 100))
+    OPTIMIZER_HISTORY_JSON.write_text(
+        json.dumps(history[:max_entries], default=str, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _write_optimizer_run(result: dict, run_id: str) -> None:
+    run_id = _safe_optimizer_run_id(run_id)
+    OPTIMIZER_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    result["run_id"] = run_id
+    result["run_json"] = str(_optimizer_run_path(run_id))
+    payload = json.dumps(result, default=str, indent=2)
+    _optimizer_run_path(run_id).write_text(payload, encoding="utf-8")
+    _write_optimizer_cache(result)
+    _write_optimizer_history_entry(run_id, result)
+
+
+def _load_optimizer_run(run_id: str) -> dict | None:
+    path = _optimizer_run_path(run_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        log.warning("[CHEATSHEET] could not read optimizer run %s: %s", run_id, exc)
+        return None
+
+
 def _load_optimizer_cache() -> dict | None:
     if not OPTIMIZER_LATEST_JSON.exists():
         return None
@@ -645,7 +792,7 @@ def _run_qqq_batch_job(
                 status="cancelled",
                 attempted_symbols=sorted(attempted_symbol_set),
             )
-            _write_optimizer_cache(result)
+            _write_optimizer_run(result, job_id)
             _update_cheatsheet_job(
                 job_id,
                 status="cancelled",
@@ -706,7 +853,7 @@ def _run_qqq_batch_job(
                             last_symbol=symbol,
                             attempted_symbols=sorted(attempted_symbol_set),
                         )
-                        _write_optimizer_cache(partial_result)
+                        _write_optimizer_run(partial_result, job_id)
                         _update_cheatsheet_job(
                             job_id,
                             result=partial_result,
@@ -734,7 +881,7 @@ def _run_qqq_batch_job(
                             last_symbol=symbol,
                             attempted_symbols=sorted(attempted_symbol_set),
                         )
-                        _write_optimizer_cache(partial_result)
+                        _write_optimizer_run(partial_result, job_id)
                         _update_cheatsheet_job(
                             job_id,
                             result=partial_result,
@@ -756,7 +903,7 @@ def _run_qqq_batch_job(
                             last_symbol=symbol,
                             attempted_symbols=sorted(attempted_symbol_set),
                         )
-                        _write_optimizer_cache(result)
+                        _write_optimizer_run(result, job_id)
                         _update_cheatsheet_job(
                             job_id,
                             status="cancelled",
@@ -788,7 +935,7 @@ def _run_qqq_batch_job(
                 status="backtesting",
                 attempted_symbols=sorted(attempted_symbol_set),
             )
-            _write_optimizer_cache(backtesting_result)
+            _write_optimizer_run(backtesting_result, job_id)
             _update_cheatsheet_job(
                 job_id,
                 result=backtesting_result,
@@ -835,7 +982,7 @@ def _run_qqq_batch_job(
                         last_symbol=symbol,
                         attempted_symbols=sorted(attempted_symbol_set),
                     )
-                    _write_optimizer_cache(partial_result)
+                    _write_optimizer_run(partial_result, job_id)
                     _update_cheatsheet_job(
                             job_id,
                             result=partial_result,
@@ -858,7 +1005,7 @@ def _run_qqq_batch_job(
                             last_symbol=symbol,
                             attempted_symbols=sorted(attempted_symbol_set),
                         )
-                        _write_optimizer_cache(result)
+                        _write_optimizer_run(result, job_id)
                         _update_cheatsheet_job(
                             job_id,
                             status="cancelled",
@@ -898,7 +1045,7 @@ def _run_qqq_batch_job(
             status=status,
             attempted_symbols=sorted(attempted_symbol_set),
         )
-        _write_optimizer_cache(result)
+        _write_optimizer_run(result, job_id)
 
         if status == "complete":
             message = f"Custom batch complete. Saved {len(all_best)} recommendations."
@@ -1393,6 +1540,37 @@ def latest_backtest_cheatsheet(
             status_code=404,
             detail="No cached recommendations found. Run a custom symbol batch first.",
         )
+    return JSONResponse(_filter_optimizer_cache(data, symbol))
+
+
+@router.get("/analysis/cheatsheet/api/history")
+@router.get("/analysis/strategy-optimizer/api/history")
+@router.get("/auth/backtest-cheatsheet/api/history")
+def optimizer_history(
+    user: User = Depends(get_current_user),
+):
+    history = _load_optimizer_history()
+    if not history:
+        latest = _load_optimizer_cache()
+        if latest:
+            run_id = str(latest.get("run_id") or "latest")
+            history = [_optimizer_history_entry(run_id, latest)]
+    return JSONResponse({"history": history})
+
+
+@router.get("/analysis/cheatsheet/api/history/{run_id}")
+@router.get("/analysis/strategy-optimizer/api/history/{run_id}")
+@router.get("/auth/backtest-cheatsheet/api/history/{run_id}")
+def optimizer_history_detail(
+    run_id: str,
+    symbol: str = "",
+    user: User = Depends(get_current_user),
+):
+    data = _load_optimizer_run(run_id)
+    if not data and run_id == "latest":
+        data = _load_optimizer_cache()
+    if not data:
+        raise HTTPException(status_code=404, detail="Optimizer run not found.")
     return JSONResponse(_filter_optimizer_cache(data, symbol))
 
 

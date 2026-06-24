@@ -246,6 +246,7 @@
 const STATUS_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/status";
 const CANCEL_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/cancel";
 const LATEST_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/latest";
+const HISTORY_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/history";
 const BATCH_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-qqq-batch";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 const OPTIMIZER_URL = "{{ url_prefix }}/analysis/strategy-optimizer";
@@ -253,6 +254,7 @@ let latestRows = [];
 let topRows = [];
 let algoRows = [];
 let cacheData = null;
+let optimizerHistory = [];
 let activeJobId = null;
 let sortState = {
   top: { key: null, direction: "desc" },
@@ -464,16 +466,19 @@ function updateCacheStatus(data) {
 
 function detailFilterFromUrl() {
   const params = new URLSearchParams(window.location.search || "");
+  const runId = String(params.get("run_id") || "").trim();
   const symbol = String(params.get("symbol") || "").trim().toUpperCase();
   const interval = String(params.get("interval") || "").trim().toLowerCase();
   return {
+    runId: /^[A-Za-z0-9_.-]{1,80}$/.test(runId) ? runId : "",
     symbol: /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) ? symbol : "",
     interval: ["1min", "5min", "10min", "15min", "30min", "1d"].includes(interval) ? interval : ""
   };
 }
 
-function optimizerDetailUrl(symbol, interval) {
+function optimizerDetailUrl(runId, symbol, interval) {
   const params = new URLSearchParams();
+  if (runId) params.set("run_id", runId);
   params.set("symbol", symbol);
   params.set("interval", interval);
   return `${OPTIMIZER_URL}?${params.toString()}`;
@@ -495,6 +500,23 @@ function cachedPairs(data) {
 }
 
 function optimizerHistoryRows(data) {
+  if (optimizerHistory.length) {
+    return optimizerHistory.flatMap((entry) => {
+      const runId = entry.run_id || "";
+      const groups = entry.groups || [];
+      return groups.map((group) => ({
+        runId,
+        generatedAt: entry.generated_at,
+        batchStatus: entry.batch_status || "cached",
+        symbol: String(group.symbol || "").toUpperCase(),
+        interval: String(group.interval || ""),
+        rows: new Array(Number(group.row_count || 0)).fill(null),
+        best: group.best || {},
+        symbolsAttempted: entry.completed_symbol_count || 0,
+        symbolCount: entry.symbol_count || 0,
+      }));
+    }).filter((item) => item.symbol && item.interval);
+  }
   const rows = data?.best_by_symbol_algo || data?.best_by_algo || data?.top || [];
   const groups = new Map();
   rows.forEach((r) => {
@@ -502,7 +524,7 @@ function optimizerHistoryRows(data) {
     const interval = String(r.interval || "");
     if (!symbol || !interval) return;
     const key = `${symbol}|${interval}`;
-    if (!groups.has(key)) groups.set(key, { symbol, interval, rows: [], best: null });
+    if (!groups.has(key)) groups.set(key, { runId: data?.run_id || "latest", generatedAt: data?.generated_at, batchStatus: data?.batch_status || "cached", symbol, interval, rows: [], best: null });
     const group = groups.get(key);
     group.rows.push(r);
     if (!group.best || Number(r.score || 0) > Number(group.best.score || 0)) group.best = r;
@@ -528,21 +550,22 @@ function renderCachePairs(data) {
     : "Optimizer History";
   document.getElementById("optimizerHistoryHint").innerHTML = detail.symbol && detail.interval
     ? `<a class="muted" href="${OPTIMIZER_URL}">Back to all optimizer history</a>`
-    : "Saved symbol/interval optimizer runs from the latest cache.";
+    : "Saved symbol/interval optimizer runs from persisted backtest files.";
   box.innerHTML = history.map((item) => {
     const best = item.best || {};
-    const active = detail.symbol === item.symbol && detail.interval === item.interval;
+    const active = (!detail.runId || detail.runId === item.runId) && detail.symbol === item.symbol && detail.interval === item.interval;
     const pnlClass = Number(best.total_profit || 0) >= 0 ? "pnl-pos" : "pnl-neg";
-    const status = data.batch_status || "cached";
-    const updated = data.generated_at ? barTime(data.generated_at) : "-";
+    const status = item.batchStatus || data.batch_status || "cached";
+    const updated = item.generatedAt ? barTime(item.generatedAt) : (data.generated_at ? barTime(data.generated_at) : "-");
     const meta = [
       `${item.interval}`,
       `Best: ${best.algo_name || "-"}`,
       `Rows: ${item.rows.length}`,
       `Trades: ${Math.trunc(Number(best.num_trades || 0))}`,
       `Win: ${pct(best.win_rate)}`,
+      item.symbolCount ? `Symbols: ${item.symbolsAttempted}/${item.symbolCount}` : "",
       `Updated: ${updated}`
-    ].join(" | ");
+    ].filter(Boolean).join(" | ");
     return `
       <div class="history-row" data-symbol="${item.symbol}" data-interval="${item.interval}">
         <div class="history-symbol">${item.symbol}</div>
@@ -552,7 +575,7 @@ function renderCachePairs(data) {
         </div>
         <div><span class="chip Medium">${status}</span></div>
         <div class="history-actions">
-          <button class="btn ${active ? "btn-secondary" : "btn-primary"}" type="button" data-view-symbol="${item.symbol}" data-view-interval="${item.interval}">
+          <button class="btn ${active ? "btn-secondary" : "btn-primary"}" type="button" data-view-run="${item.runId || ""}" data-view-symbol="${item.symbol}" data-view-interval="${item.interval}">
             ${active ? "Open" : "View"}
           </button>
         </div>
@@ -561,7 +584,7 @@ function renderCachePairs(data) {
   }).join("");
   box.querySelectorAll("[data-view-symbol]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      window.location.href = optimizerDetailUrl(btn.dataset.viewSymbol, btn.dataset.viewInterval);
+      window.location.href = optimizerDetailUrl(btn.dataset.viewRun, btn.dataset.viewSymbol, btn.dataset.viewInterval);
     });
   });
   card.classList.add("visible");
@@ -681,6 +704,23 @@ function renderScanResult(data, statusId = "qqqStatus") {
   }
 }
 
+async function loadOptimizerHistory() {
+  try {
+    const res = await fetch(HISTORY_URL, {
+      headers: {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      optimizerHistory = Array.isArray(data.history) ? data.history : [];
+    }
+  } catch (err) {
+    console.warn("Could not load optimizer history", err);
+  }
+}
+
 async function pollScanJob(jobId, options = {}) {
   const pollKey = options.pollKey || "qqq";
   const statusId = options.statusId || "qqqStatus";
@@ -710,6 +750,8 @@ async function pollScanJob(jobId, options = {}) {
         activePolls[pollKey] = null;
         activeJobId = null;
         renderScanResult(data.result || {}, statusId);
+        await loadOptimizerHistory();
+        renderCachePairs(cacheData || data.result || {});
         buttons.forEach((button) => { button.disabled = false; });
         document.getElementById("stopBatchBtn").disabled = true;
         return;
@@ -726,6 +768,8 @@ async function pollScanJob(jobId, options = {}) {
         activePolls[pollKey] = null;
         activeJobId = null;
         if (data.result) renderScanResult(data.result, statusId);
+        await loadOptimizerHistory();
+        renderCachePairs(cacheData || data.result || {});
         setStatus(statusId, data.message || "Optimizer stopped. Partial results remain cached.", "info");
         buttons.forEach((button) => { button.disabled = false; });
         document.getElementById("stopBatchBtn").disabled = true;
@@ -750,7 +794,11 @@ async function loadLatestCached(showMissing = true) {
   const detail = detailFilterFromUrl();
   btn.disabled = true;
   try {
-    const res = await fetch(LATEST_URL, {
+    await loadOptimizerHistory();
+    const detailUrl = detail.runId
+      ? `${HISTORY_URL}/${encodeURIComponent(detail.runId)}${detail.symbol ? `?symbol=${encodeURIComponent(detail.symbol)}` : ""}`
+      : LATEST_URL;
+    const res = await fetch(detailUrl, {
       headers: {
         "Accept": "application/json",
         "X-Requested-With": "XMLHttpRequest"
