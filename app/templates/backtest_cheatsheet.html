@@ -52,9 +52,13 @@
   .params { color:#d6d6ff; line-height:1.45; }
   .tools { display:flex; gap:8px; flex-wrap:wrap; }
   .table-wrap { overflow-x:auto; border-radius:8px; border:1px solid #2a2a55; }
-  .cache-pairs { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:12px; }
-  .cache-pair { border:1px solid #2a2a55; background:#151533; color:#e5e7eb; border-radius:6px; padding:9px 10px; text-align:left; cursor:pointer; }
-  .cache-pair:hover { border-color:#4fd1c5; }
+  .history-list { display:flex; flex-direction:column; gap:7px; margin-top:12px; }
+  .history-row { display:flex; gap:12px; align-items:center; padding:11px 10px; background:#151533; border-radius:8px; border:1px solid transparent; }
+  .history-row:hover { border-color:#4fd1c5; }
+  .history-symbol { width:80px; font-weight:800; color:#c7d2fe; font-size:1rem; }
+  .history-main { flex:1; min-width:0; color:#d6d6ff; line-height:1.35; }
+  .history-meta { color:#fff; overflow-wrap:anywhere; }
+  .history-actions { display:flex; gap:8px; align-items:center; }
   @media (max-width:800px) {
     .wrap { width:92%; }
     table { min-width:980px; }
@@ -119,9 +123,9 @@
   </div>
 
   <div class="card cache-card" id="cachePairsCard">
-    <h2>Cached Symbol / Interval Runs</h2>
-    <div class="muted">Click a cached run to filter recommendations and reuse that symbol/interval.</div>
-    <div id="cachePairs" class="cache-pairs"></div>
+    <h2 id="optimizerHistoryTitle">Optimizer History</h2>
+    <div class="muted" id="optimizerHistoryHint">Saved symbol/interval optimizer runs from the latest cache.</div>
+    <div id="cachePairs" class="history-list"></div>
   </div>
 
   <div class="card cache-card" id="cacheStatusCard">
@@ -244,6 +248,7 @@ const CANCEL_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/cancel";
 const LATEST_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/latest";
 const BATCH_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-qqq-batch";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
+const OPTIMIZER_URL = "{{ url_prefix }}/analysis/strategy-optimizer";
 let latestRows = [];
 let topRows = [];
 let algoRows = [];
@@ -457,6 +462,23 @@ function updateCacheStatus(data) {
   card.classList.add("visible");
 }
 
+function detailFilterFromUrl() {
+  const params = new URLSearchParams(window.location.search || "");
+  const symbol = String(params.get("symbol") || "").trim().toUpperCase();
+  const interval = String(params.get("interval") || "").trim().toLowerCase();
+  return {
+    symbol: /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) ? symbol : "",
+    interval: ["1min", "5min", "10min", "15min", "30min", "1d"].includes(interval) ? interval : ""
+  };
+}
+
+function optimizerDetailUrl(symbol, interval) {
+  const params = new URLSearchParams();
+  params.set("symbol", symbol);
+  params.set("interval", interval);
+  return `${OPTIMIZER_URL}?${params.toString()}`;
+}
+
 function cachedPairs(data) {
   const rows = data?.best_by_symbol_algo || data?.best_by_algo || data?.top || [];
   const seen = new Set();
@@ -472,26 +494,74 @@ function cachedPairs(data) {
   }).sort((a, b) => `${a.symbol} ${a.interval}`.localeCompare(`${b.symbol} ${b.interval}`));
 }
 
+function optimizerHistoryRows(data) {
+  const rows = data?.best_by_symbol_algo || data?.best_by_algo || data?.top || [];
+  const groups = new Map();
+  rows.forEach((r) => {
+    const symbol = String(r.symbol || "").toUpperCase();
+    const interval = String(r.interval || "");
+    if (!symbol || !interval) return;
+    const key = `${symbol}|${interval}`;
+    if (!groups.has(key)) groups.set(key, { symbol, interval, rows: [], best: null });
+    const group = groups.get(key);
+    group.rows.push(r);
+    if (!group.best || Number(r.score || 0) > Number(group.best.score || 0)) group.best = r;
+  });
+  return Array.from(groups.values()).sort((a, b) => {
+    const bySymbol = a.symbol.localeCompare(b.symbol);
+    return bySymbol || a.interval.localeCompare(b.interval);
+  });
+}
+
 function renderCachePairs(data) {
   const card = document.getElementById("cachePairsCard");
   const box = document.getElementById("cachePairs");
-  const pairs = cachedPairs(data);
-  if (!pairs.length) {
+  const history = optimizerHistoryRows(data);
+  const detail = detailFilterFromUrl();
+  if (!history.length) {
     card.classList.remove("visible");
     box.innerHTML = "";
     return;
   }
-  box.innerHTML = pairs.map((p) => `
-    <button class="cache-pair" type="button" data-symbol="${p.symbol}" data-interval="${p.interval}">
-      <b>${p.symbol}</b><br><span class="muted">${p.interval}</span>
-    </button>
-  `).join("");
-  box.querySelectorAll(".cache-pair").forEach((btn) => {
+  document.getElementById("optimizerHistoryTitle").textContent = detail.symbol && detail.interval
+    ? `Optimizer Details: ${detail.symbol} ${detail.interval}`
+    : "Optimizer History";
+  document.getElementById("optimizerHistoryHint").innerHTML = detail.symbol && detail.interval
+    ? `<a class="muted" href="${OPTIMIZER_URL}">Back to all optimizer history</a>`
+    : "Saved symbol/interval optimizer runs from the latest cache.";
+  box.innerHTML = history.map((item) => {
+    const best = item.best || {};
+    const active = detail.symbol === item.symbol && detail.interval === item.interval;
+    const pnlClass = Number(best.total_profit || 0) >= 0 ? "pnl-pos" : "pnl-neg";
+    const status = data.batch_status || "cached";
+    const updated = data.generated_at ? barTime(data.generated_at) : "-";
+    const meta = [
+      `${item.interval}`,
+      `Best: ${best.algo_name || "-"}`,
+      `Rows: ${item.rows.length}`,
+      `Trades: ${Math.trunc(Number(best.num_trades || 0))}`,
+      `Win: ${pct(best.win_rate)}`,
+      `Updated: ${updated}`
+    ].join(" | ");
+    return `
+      <div class="history-row" data-symbol="${item.symbol}" data-interval="${item.interval}">
+        <div class="history-symbol">${item.symbol}</div>
+        <div class="history-main">
+          <div class="history-meta">${meta}</div>
+          <div><span class="${pnlClass}">${money(best.total_profit)}</span> | ${rowParams(best) || "No parameters"}</div>
+        </div>
+        <div><span class="chip Medium">${status}</span></div>
+        <div class="history-actions">
+          <button class="btn ${active ? "btn-secondary" : "btn-primary"}" type="button" data-view-symbol="${item.symbol}" data-view-interval="${item.interval}">
+            ${active ? "Open" : "View"}
+          </button>
+        </div>
+      </div>
+    `;
+  }).join("");
+  box.querySelectorAll("[data-view-symbol]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.getElementById("q_symbols").value = btn.dataset.symbol || "";
-      document.getElementById("q_intervals").value = btn.dataset.interval || "5min";
-      renderScanResult(_filterCacheForPair(cacheData, btn.dataset.symbol, btn.dataset.interval), "qqqStatus");
-      setStatus("qqqStatus", `Loaded cached ${btn.dataset.symbol} ${btn.dataset.interval}.`, "info");
+      window.location.href = optimizerDetailUrl(btn.dataset.viewSymbol, btn.dataset.viewInterval);
     });
   });
   card.classList.add("visible");
@@ -677,7 +747,7 @@ async function pollScanJob(jobId, options = {}) {
 
 async function loadLatestCached(showMissing = true) {
   const btn = document.getElementById("latestBtn");
-  const symbol = document.getElementById("q_symbols").value.trim().split(/[\s,;]+/)[0] || "";
+  const detail = detailFilterFromUrl();
   btn.disabled = true;
   try {
     const res = await fetch(LATEST_URL, {
@@ -692,12 +762,15 @@ async function loadLatestCached(showMissing = true) {
       return;
     }
     cacheData = data;
-    const displayData = symbol ? _filterCacheForPair(data, symbol, "") : data;
+    if (detail.symbol) document.getElementById("q_symbols").value = detail.symbol;
+    if (detail.interval) document.getElementById("q_intervals").value = detail.interval;
+    const displayData = detail.symbol ? _filterCacheForPair(data, detail.symbol, detail.interval) : data;
     updateCacheStatus(displayData);
     renderCachePairs(cacheData);
     renderScanResult(displayData, "qqqStatus");
     const generated = displayData.generated_at ? ` Generated ${barTime(displayData.generated_at)}.` : "";
-    setStatus("qqqStatus", `Loaded latest cached recommendations.${generated}`, "info");
+    const filterText = detail.symbol ? ` for ${detail.symbol}${detail.interval ? " " + detail.interval : ""}` : "";
+    setStatus("qqqStatus", `Loaded latest cached recommendations${filterText}.${generated}`, "info");
   } catch (err) {
     if (showMissing) setStatus("qqqStatus", "Network error loading latest recommendations: " + err, "error");
   } finally {
