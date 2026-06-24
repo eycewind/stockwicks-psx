@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -491,6 +492,13 @@ def _optimizer_worker_count(env_name: str, default: int, cap: int) -> int:
     return max(1, min(value, cap))
 
 
+def _optimizer_timeout_seconds(env_name: str, default: int) -> int:
+    try:
+        return max(30, int(os.getenv(env_name, str(default)) or default))
+    except Exception:
+        return default
+
+
 def _is_schwab_market_auth_error(value: object) -> bool:
     text = str(value or "").lower()
     return (
@@ -512,10 +520,27 @@ def _prefetch_optimizer_symbol_data(
     errors: list[str] = []
     for interval in req_template.intervals:
         try:
+            log.info(
+                "[CHEATSHEET] prefetch start symbol=%s interval=%s user_id=%s days=%s",
+                symbol,
+                interval,
+                req_template.user_id,
+                req_template.builder_days,
+            )
             frames[interval] = _fetch_price_frame(symbol, interval, req_template.builder_days, req_template.user_id)
+            frame = frames[interval]
+            log.info(
+                "[CHEATSHEET] prefetch done symbol=%s interval=%s rows=%s first=%s last=%s",
+                symbol,
+                interval,
+                len(frame) if hasattr(frame, "__len__") else "?",
+                frame.index[0] if hasattr(frame, "index") and len(frame.index) else None,
+                frame.index[-1] if hasattr(frame, "index") and len(frame.index) else None,
+            )
         except Exception as exc:
             if _is_schwab_market_auth_error(exc):
                 raise
+            log.warning("[CHEATSHEET] prefetch failed symbol=%s interval=%s: %s", symbol, interval, exc)
             errors.append(f"{symbol} {interval}: {exc}")
     return symbol, frames, errors
 
@@ -537,7 +562,16 @@ def _run_prefetched_optimizer_symbol(
         eod_close=req_template.eod_close,
         oos_fraction=req_template.oos_fraction,
     )
-    return symbol, run_cheatsheet(req, price_frames=price_frames)
+    log.info("[CHEATSHEET] backtest start symbol=%s intervals=%s", symbol, req.intervals)
+    result = run_cheatsheet(req, price_frames=price_frames)
+    log.info(
+        "[CHEATSHEET] backtest done symbol=%s tested=%s rows=%s errors=%s",
+        symbol,
+        result.get("tested_combinations"),
+        len(result.get("best_by_algo") or []),
+        len(result.get("errors") or []),
+    )
+    return symbol, result
 
 
 def _run_qqq_batch_job(
@@ -584,6 +618,8 @@ def _run_qqq_batch_job(
 
         prefetch_workers = _optimizer_worker_count("OPTIMIZER_PREFETCH_WORKERS", 1, 1)
         backtest_workers = _optimizer_worker_count("OPTIMIZER_BACKTEST_WORKERS", 1, 2)
+        prefetch_timeout = _optimizer_timeout_seconds("OPTIMIZER_PREFETCH_TIMEOUT_SECONDS", 15 * 60)
+        backtest_timeout = _optimizer_timeout_seconds("OPTIMIZER_BACKTEST_TIMEOUT_SECONDS", 30 * 60)
         prefetched_frames: dict[str, dict[str, object]] = {}
 
         if pending_symbols:
@@ -598,87 +634,111 @@ def _run_qqq_batch_job(
 
         downloaded_count = 0
         auth_blocked = False
-        with ThreadPoolExecutor(max_workers=prefetch_workers) as prefetch_pool:
+        prefetch_pool = ThreadPoolExecutor(max_workers=prefetch_workers)
+        try:
             future_map = {
                 prefetch_pool.submit(_prefetch_optimizer_symbol_data, symbol, req_template): symbol
                 for symbol in pending_symbols
             }
-            for future in as_completed(future_map):
-                symbol = future_map[future]
-                downloaded_count += 1
-                try:
-                    _, frames, symbol_errors = future.result()
-                except Exception as exc:
-                    if _is_schwab_market_auth_error(exc):
-                        frames = {}
-                        symbol_errors = [f"{symbol}: {exc}"]
-                        attempted_symbol_set.add(symbol)
-                        auth_blocked = True
-                        for pending_future in future_map:
-                            if pending_future is not future:
-                                pending_future.cancel()
+            try:
+                completed_prefetches = as_completed(future_map, timeout=prefetch_timeout)
+                for future in completed_prefetches:
+                    symbol = future_map[future]
+                    downloaded_count += 1
+                    try:
+                        _, frames, symbol_errors = future.result()
+                    except Exception as exc:
+                        if _is_schwab_market_auth_error(exc):
+                            frames = {}
+                            symbol_errors = [f"{symbol}: {exc}"]
+                            attempted_symbol_set.add(symbol)
+                            auth_blocked = True
+                            for pending_future in future_map:
+                                if pending_future is not future:
+                                    pending_future.cancel()
+                        else:
+                            frames = {}
+                            symbol_errors = [f"{symbol}: {exc}"]
+                            log.exception("[CHEATSHEET] Custom batch prefetch failed for symbol=%s", symbol)
+                    if auth_blocked:
+                        errors.extend(symbol_errors)
+                        partial_result = _build_optimizer_cache_result(
+                            req_template=req_template,
+                            symbols=symbols,
+                            all_top=all_top,
+                            all_best=all_best,
+                            errors=errors,
+                            tested_combinations=tested_combinations,
+                            started_at=started_at,
+                            status="auth_failed",
+                            last_symbol=symbol,
+                            attempted_symbols=sorted(attempted_symbol_set),
+                        )
+                        _write_optimizer_cache(partial_result)
+                        _update_cheatsheet_job(
+                            job_id,
+                            result=partial_result,
+                            message="Custom batch stopped: reconnect Schwab Market Data, then rerun optimizer.",
+                        )
+                        break
+
+                    if symbol_errors:
+                        errors.extend(f"{symbol}: {err}" for err in symbol_errors)
+                    if frames:
+                        prefetched_frames[symbol] = frames
                     else:
-                        frames = {}
-                        symbol_errors = [f"{symbol}: {exc}"]
-                        log.exception("[CHEATSHEET] Custom batch prefetch failed for symbol=%s", symbol)
-                if auth_blocked:
-                    errors.extend(symbol_errors)
-                    partial_result = _build_optimizer_cache_result(
-                        req_template=req_template,
-                        symbols=symbols,
-                        all_top=all_top,
-                        all_best=all_best,
-                        errors=errors,
-                        tested_combinations=tested_combinations,
-                        started_at=started_at,
-                        status="auth_failed",
-                        last_symbol=symbol,
-                        attempted_symbols=sorted(attempted_symbol_set),
-                    )
-                    _write_optimizer_cache(partial_result)
-                    _update_cheatsheet_job(
-                        job_id,
-                        result=partial_result,
-                        message="Custom batch stopped: reconnect Schwab Market Data, then rerun optimizer.",
-                    )
-                    break
+                        attempted_symbol_set.add(symbol)
 
-                if symbol_errors:
-                    errors.extend(f"{symbol}: {err}" for err in symbol_errors)
-                if frames:
-                    prefetched_frames[symbol] = frames
-                else:
-                    attempted_symbol_set.add(symbol)
-
-                if downloaded_count == len(pending_symbols) or downloaded_count % 5 == 0:
-                    partial_result = _build_optimizer_cache_result(
-                        req_template=req_template,
-                        symbols=symbols,
-                        all_top=all_top,
-                        all_best=all_best,
-                        errors=errors,
-                        tested_combinations=tested_combinations,
-                        started_at=started_at,
-                        status="downloading",
-                        last_symbol=symbol,
-                        attempted_symbols=sorted(attempted_symbol_set),
-                    )
-                    _write_optimizer_cache(partial_result)
-                    _update_cheatsheet_job(
-                        job_id,
-                        result=partial_result,
-                        message=(
-                            f"Custom batch downloading: {downloaded_count}/{len(pending_symbols)} "
-                            f"symbols fetched. {len(prefetched_frames)} ready for backtest."
-                        ),
-                    )
+                    if downloaded_count == len(pending_symbols) or downloaded_count % 5 == 0:
+                        partial_result = _build_optimizer_cache_result(
+                            req_template=req_template,
+                            symbols=symbols,
+                            all_top=all_top,
+                            all_best=all_best,
+                            errors=errors,
+                            tested_combinations=tested_combinations,
+                            started_at=started_at,
+                            status="downloading",
+                            last_symbol=symbol,
+                            attempted_symbols=sorted(attempted_symbol_set),
+                        )
+                        _write_optimizer_cache(partial_result)
+                        _update_cheatsheet_job(
+                            job_id,
+                            result=partial_result,
+                            message=(
+                                f"Custom batch downloading: {downloaded_count}/{len(pending_symbols)} "
+                                f"symbols fetched. {len(prefetched_frames)} ready for backtest."
+                            ),
+                        )
+            except FuturesTimeoutError:
+                timed_out = [sym for fut, sym in future_map.items() if not fut.done()]
+                for fut in future_map:
+                    fut.cancel()
+                errors.append(f"Prefetch timed out after {prefetch_timeout}s for symbols: {', '.join(timed_out)}")
+                log.error("[CHEATSHEET] Custom batch prefetch timed out symbols=%s", timed_out)
+        finally:
+            prefetch_pool.shutdown(wait=False, cancel_futures=True)
 
         if auth_blocked:
             pending_symbols = []
 
         if prefetched_frames:
+            backtesting_result = _build_optimizer_cache_result(
+                req_template=req_template,
+                symbols=symbols,
+                all_top=all_top,
+                all_best=all_best,
+                errors=errors,
+                tested_combinations=tested_combinations,
+                started_at=started_at,
+                status="backtesting",
+                attempted_symbols=sorted(attempted_symbol_set),
+            )
+            _write_optimizer_cache(backtesting_result)
             _update_cheatsheet_job(
                 job_id,
+                result=backtesting_result,
                 message=(
                     f"Custom batch backtesting {len(prefetched_frames)} prefetched symbols "
                     f"with up to {backtest_workers} workers."
@@ -686,47 +746,60 @@ def _run_qqq_batch_job(
             )
 
         completed_backtests = 0
-        with ThreadPoolExecutor(max_workers=backtest_workers) as backtest_pool:
+        backtest_pool = ThreadPoolExecutor(max_workers=backtest_workers)
+        try:
             future_map = {
                 backtest_pool.submit(_run_prefetched_optimizer_symbol, symbol, req_template, frames): symbol
                 for symbol, frames in prefetched_frames.items()
             }
-            for future in as_completed(future_map):
-                symbol = future_map[future]
-                completed_backtests += 1
-                try:
-                    _, result = future.result()
-                    tested_combinations += int(result.get("tested_combinations") or 0)
-                    all_top.extend(result.get("top") or [])
-                    all_best.extend(result.get("best_by_algo") or [])
-                    errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
-                except Exception as exc:
-                    log.exception("[CHEATSHEET] Custom batch failed for symbol=%s", symbol)
-                    errors.append(f"{symbol}: {exc}")
+            try:
+                completed_backtest_futures = as_completed(future_map, timeout=backtest_timeout)
+                for future in completed_backtest_futures:
+                    symbol = future_map[future]
+                    completed_backtests += 1
+                    try:
+                        _, result = future.result()
+                        tested_combinations += int(result.get("tested_combinations") or 0)
+                        all_top.extend(result.get("top") or [])
+                        all_best.extend(result.get("best_by_algo") or [])
+                        errors.extend(f"{symbol}: {e}" for e in (result.get("errors") or []))
+                        if not (result.get("top") or result.get("best_by_algo")):
+                            errors.append(f"{symbol}: backtest completed with no recommendation rows")
+                    except Exception as exc:
+                        log.exception("[CHEATSHEET] Custom batch failed for symbol=%s", symbol)
+                        errors.append(f"{symbol}: {exc}")
 
-                attempted_symbol_set.add(symbol)
-                partial_result = _build_optimizer_cache_result(
-                    req_template=req_template,
-                    symbols=symbols,
-                    all_top=all_top,
-                    all_best=all_best,
-                    errors=errors,
-                    tested_combinations=tested_combinations,
-                    started_at=started_at,
-                    status="running",
-                    last_symbol=symbol,
-                    attempted_symbols=sorted(attempted_symbol_set),
-                )
-                _write_optimizer_cache(partial_result)
-                _update_cheatsheet_job(
-                        job_id,
-                        result=partial_result,
-                        message=(
-                        f"Custom batch backtesting: {completed_backtests}/{len(prefetched_frames)} "
-                        f"prefetched symbols complete. Total attempted: "
-                        f"{partial_result['completed_symbol_count']}/{len(symbols)}."
-                    ),
-                )
+                    attempted_symbol_set.add(symbol)
+                    partial_result = _build_optimizer_cache_result(
+                        req_template=req_template,
+                        symbols=symbols,
+                        all_top=all_top,
+                        all_best=all_best,
+                        errors=errors,
+                        tested_combinations=tested_combinations,
+                        started_at=started_at,
+                        status="running",
+                        last_symbol=symbol,
+                        attempted_symbols=sorted(attempted_symbol_set),
+                    )
+                    _write_optimizer_cache(partial_result)
+                    _update_cheatsheet_job(
+                            job_id,
+                            result=partial_result,
+                            message=(
+                            f"Custom batch backtesting: {completed_backtests}/{len(prefetched_frames)} "
+                            f"prefetched symbols complete. Total attempted: "
+                            f"{partial_result['completed_symbol_count']}/{len(symbols)}."
+                        ),
+                    )
+            except FuturesTimeoutError:
+                timed_out = [sym for fut, sym in future_map.items() if not fut.done()]
+                for fut in future_map:
+                    fut.cancel()
+                errors.append(f"Backtest timed out after {backtest_timeout}s for symbols: {', '.join(timed_out)}")
+                log.error("[CHEATSHEET] Custom batch backtest timed out symbols=%s", timed_out)
+        finally:
+            backtest_pool.shutdown(wait=False, cancel_futures=True)
 
         all_best.sort(
             key=lambda r: (

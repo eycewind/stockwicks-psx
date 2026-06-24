@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -35,6 +36,7 @@ ALGO_FEATURE_SETS = {
 }
 
 _ET = ZoneInfo("America/New_York")
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -657,7 +659,9 @@ def run_cheatsheet(
             errors.append(f"{symbol} {interval}: {exc}")
             continue
 
+        log.info("[CHEATSHEET] scan interval start symbol=%s interval=%s bars=%s", symbol, interval, len(price_full))
         for algo_name, feature_set in ALGO_FEATURE_SETS.items():
+            log.info("[CHEATSHEET] scan algo start symbol=%s interval=%s algo=%s", symbol, interval, algo_name)
             if algo_name in {"Algo_SMI", "Algo_MACD"}:
                 n = len(price_full)
                 test_start = int(max(1, n * (1.0 - req.oos_fraction)))
@@ -740,6 +744,14 @@ def run_cheatsheet(
                     feature_set=feature_set,
                 )
                 feat_names = feature_module.get_feature_columns(feature_set)
+                log.info(
+                    "[CHEATSHEET] feature build done symbol=%s interval=%s algo=%s rows=%s features=%s",
+                    symbol,
+                    interval,
+                    algo_name,
+                    len(infer_feat),
+                    len(feat_names),
+                )
             except Exception as exc:
                 errors.append(f"{algo_name} {interval}: feature build failed: {exc}")
                 continue
@@ -772,6 +784,7 @@ def run_cheatsheet(
                 continue
 
             try:
+                log.info("[CHEATSHEET] model training start symbol=%s interval=%s algo=%s bars=%s", symbol, interval, algo_name, len(common_idx))
                 prob_all, refresh_meta = _adaptive_policy_probabilities(
                     feature_module=feature_module,
                     feature_set=feature_set,
@@ -783,6 +796,13 @@ def run_cheatsheet(
                     train_end=train_end,
                     k_forward=req.k_forward,
                     req=req,
+                )
+                log.info(
+                    "[CHEATSHEET] model training done symbol=%s interval=%s algo=%s train_events=%s",
+                    symbol,
+                    interval,
+                    algo_name,
+                    refresh_meta.get("train_events"),
                 )
             except Exception as exc:
                 errors.append(f"{algo_name} {interval}: model training failed: {exc}")
@@ -918,6 +938,14 @@ def run_cheatsheet(
                     **holdout_metrics,
                 }
                 all_rows.append(row)
+            log.info(
+                "[CHEATSHEET] scan algo done symbol=%s interval=%s algo=%s tested_total=%s rows_total=%s",
+                symbol,
+                interval,
+                algo_name,
+                tested_combinations,
+                len(all_rows),
+            )
 
     all_rows.sort(
         key=lambda r: (
