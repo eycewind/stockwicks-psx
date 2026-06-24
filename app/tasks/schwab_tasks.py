@@ -124,6 +124,10 @@ def _token_needs_refresh(path: str | Path) -> bool:
     return datetime.utcnow() >= expires_at - timedelta(seconds=safety)
 
 
+def _refresh_only_when_due() -> bool:
+    return os.getenv("SCHWAB_REFRESH_ONLY_WHEN_DUE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _backoff_path(user_id: int, kind: str) -> Path:
     return Path(_data_dir()) / str(user_id) / f".schwab_{kind}_refresh_backoff.json"
 
@@ -243,7 +247,7 @@ def auto_refresh_user_token(self, user_id: int | None = None):
             if before["market_exists"]:
                 if _backoff_active(uid, "market"):
                     market_result = "skipped_backoff"
-                elif not _token_needs_refresh(before["market_path"]):
+                elif _refresh_only_when_due() and not _token_needs_refresh(before["market_path"]):
                     market_result = "skipped_not_due"
                     log.info("[AUTO-REFRESH] Market token not due for refresh user_id=%s", uid)
                 else:
@@ -258,7 +262,7 @@ def auto_refresh_user_token(self, user_id: int | None = None):
             if before["trade_exists"]:
                 if _backoff_active(uid, "trade"):
                     trade_result = "skipped_backoff"
-                elif not _token_needs_refresh(before["trade_path"]):
+                elif _refresh_only_when_due() and not _token_needs_refresh(before["trade_path"]):
                     trade_result = "skipped_not_due"
                     log.info("[AUTO-REFRESH] Trade token not due for refresh user_id=%s", uid)
                 else:
