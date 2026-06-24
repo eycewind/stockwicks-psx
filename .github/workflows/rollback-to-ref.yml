@@ -27,14 +27,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout target ref
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.target_ref }}
+          fetch-depth: 0
 
       - name: Show checked out ref
         run: |
           echo "Requested target_ref: ${{ github.event.inputs.target_ref }}"
+          git fetch origin --tags
+          git checkout "${{ github.event.inputs.target_ref }}"
           echo "Checked out commit: $(git rev-parse --short HEAD)"
 
       - name: Configure SSH
