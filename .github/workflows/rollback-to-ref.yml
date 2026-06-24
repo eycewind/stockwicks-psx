@@ -1,0 +1,92 @@
+name: Rollback Clients To Git Ref
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Commit SHA, branch, or tag to check out, e.g. 0976a5b"
+        required: true
+        default: "0976a5b"
+      targets:
+        description: "Space-separated client slugs"
+        required: true
+        default: "ashakil haithama yzia"
+      restart:
+        description: "Restart web/celery/beat services"
+        required: true
+        type: boolean
+        default: true
+      dry_run:
+        description: "Preview only"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Roll back clients to target ref
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "TARGET_REF='${{ github.event.inputs.target_ref }}' \
+             TARGETS='${{ github.event.inputs.targets }}' \
+             RESTART='${{ github.event.inputs.restart }}' \
+             DRY_RUN='${{ github.event.inputs.dry_run }}' \
+             bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          BASE="/var/stockwicks/clients"
+
+          echo "Target ref: ${TARGET_REF}"
+          echo "Targets: ${TARGETS}"
+          echo "Dry run: ${DRY_RUN}"
+          echo "Restart: ${RESTART}"
+
+          for client in ${TARGETS}; do
+            if [[ ! "${client}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+              echo "ERROR: Invalid client slug: ${client}" >&2
+              exit 1
+            fi
+
+            dir="${BASE}/${client}"
+            if [[ ! -d "${dir}/.git" ]]; then
+              echo "ERROR: Missing git repo: ${dir}" >&2
+              exit 1
+            fi
+
+            echo
+            echo "===== ${client} ====="
+            cd "${dir}"
+
+            git fetch origin --tags
+            target_commit="$(git rev-parse --verify "${TARGET_REF}^{commit}")"
+
+            echo "Current: $(git rev-parse --short HEAD)"
+            echo "Target:  $(git rev-parse --short "${target_commit}")"
+
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "DRY RUN: would checkout ${TARGET_REF}"
+              continue
+            fi
+
+            git checkout "${target_commit}"
+
+            if [[ "${RESTART}" == "true" ]]; then
+              sudo systemctl restart "stockwicks-${client}-web" || true
+              sudo systemctl restart "stockwicks-${client}-celery" || true
+              sudo systemctl restart "stockwicks-${client}-beat" || true
+            fi
+
+            echo "Now: $(git rev-parse --short HEAD)"
+          done
+          REMOTE
