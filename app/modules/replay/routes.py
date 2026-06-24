@@ -176,6 +176,14 @@ def _snapshot_cheatsheet_job(job_id: str, user_id: int) -> dict | None:
         }
 
 
+def _is_cheatsheet_job_cancelled(job_id: str) -> bool:
+    with _cheatsheet_jobs_lock:
+        job = _cheatsheet_jobs.get(job_id)
+    if not job:
+        job = _load_cheatsheet_job(job_id) or {}
+    return bool(job.get("cancel_requested") or job.get("status") == "cancelled")
+
+
 def _run_cheatsheet_job(job_id: str, req: CheatSheetRequest) -> None:
     with _cheatsheet_jobs_lock:
         job = _cheatsheet_jobs.get(job_id)
@@ -381,15 +389,16 @@ def _queue_qqq_optimizer_job(
     limit: int | None = None,
     max_new_symbols: int | None = None,
     resume: bool = True,
-) -> str:
+) -> dict:
     try:
         from app.tasks.optimizer_tasks import run_qqq_optimizer_batch
 
-        run_qqq_optimizer_batch.apply_async(
+        async_result = run_qqq_optimizer_batch.apply_async(
             args=(job_id, _cheatsheet_request_payload(req), symbols, limit, max_new_symbols, resume),
             queue="replay",
         )
-        return "celery"
+        _update_cheatsheet_job(job_id, celery_task_id=async_result.id, backend="celery")
+        return {"backend": "celery", "task_id": async_result.id}
     except Exception as exc:
         log.warning("[CHEATSHEET] Celery optimizer queue failed; falling back to thread: %s", exc)
         _cheatsheet_batch_executor.submit(
@@ -401,7 +410,8 @@ def _queue_qqq_optimizer_job(
             max_new_symbols=max_new_symbols,
             resume=resume,
         )
-        return "thread"
+        _update_cheatsheet_job(job_id, backend="thread")
+        return {"backend": "thread", "task_id": None}
 
 
 def _write_optimizer_cache(result: dict) -> None:
@@ -622,6 +632,27 @@ def _run_qqq_batch_job(
         backtest_timeout = _optimizer_timeout_seconds("OPTIMIZER_BACKTEST_TIMEOUT_SECONDS", 30 * 60)
         prefetched_frames: dict[str, dict[str, object]] = {}
 
+        if _is_cheatsheet_job_cancelled(job_id):
+            result = _build_optimizer_cache_result(
+                req_template=req_template,
+                symbols=symbols,
+                all_top=all_top,
+                all_best=all_best,
+                errors=errors,
+                tested_combinations=tested_combinations,
+                started_at=started_at,
+                status="cancelled",
+                attempted_symbols=sorted(attempted_symbol_set),
+            )
+            _write_optimizer_cache(result)
+            _update_cheatsheet_job(
+                job_id,
+                status="cancelled",
+                result=result,
+                message="Custom batch cancelled before new symbols started.",
+            )
+            return
+
         if pending_symbols:
             _update_cheatsheet_job(
                 job_id,
@@ -711,6 +742,27 @@ def _run_qqq_batch_job(
                                 f"symbols fetched. {len(prefetched_frames)} ready for backtest."
                             ),
                         )
+                    if _is_cheatsheet_job_cancelled(job_id):
+                        result = _build_optimizer_cache_result(
+                            req_template=req_template,
+                            symbols=symbols,
+                            all_top=all_top,
+                            all_best=all_best,
+                            errors=errors,
+                            tested_combinations=tested_combinations,
+                            started_at=started_at,
+                            status="cancelled",
+                            last_symbol=symbol,
+                            attempted_symbols=sorted(attempted_symbol_set),
+                        )
+                        _write_optimizer_cache(result)
+                        _update_cheatsheet_job(
+                            job_id,
+                            status="cancelled",
+                            result=result,
+                            message="Custom batch cancelled during price-data download.",
+                        )
+                        return
             except FuturesTimeoutError:
                 timed_out = [sym for fut, sym in future_map.items() if not fut.done()]
                 for fut in future_map:
@@ -792,6 +844,27 @@ def _run_qqq_batch_job(
                             f"{partial_result['completed_symbol_count']}/{len(symbols)}."
                         ),
                     )
+                    if _is_cheatsheet_job_cancelled(job_id):
+                        result = _build_optimizer_cache_result(
+                            req_template=req_template,
+                            symbols=symbols,
+                            all_top=all_top,
+                            all_best=all_best,
+                            errors=errors,
+                            tested_combinations=tested_combinations,
+                            started_at=started_at,
+                            status="cancelled",
+                            last_symbol=symbol,
+                            attempted_symbols=sorted(attempted_symbol_set),
+                        )
+                        _write_optimizer_cache(result)
+                        _update_cheatsheet_job(
+                            job_id,
+                            status="cancelled",
+                            result=result,
+                            message="Custom batch cancelled. Partial recommendations were saved.",
+                        )
+                        return
             except FuturesTimeoutError:
                 timed_out = [sym for fut, sym in future_map.items() if not fut.done()]
                 for fut in future_map:
@@ -1371,13 +1444,14 @@ def run_qqq_backtest_cheatsheet(
             "updated_at": now,
         }
         _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, symbols=parsed_symbols, resume=False)
+    queued = _queue_qqq_optimizer_job(job_id=job_id, req=req, symbols=parsed_symbols, resume=False)
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
-            "backend": backend,
+            "backend": queued["backend"],
+            "task_id": queued["task_id"],
             "message": f"Custom batch queued for {len(parsed_symbols)} symbol(s).",
         },
     )
@@ -1432,13 +1506,14 @@ def run_next_qqq_symbol_cheatsheet(
             "updated_at": now,
         }
         _store_cheatsheet_job(job_id, _cheatsheet_jobs[job_id])
-    backend = _queue_qqq_optimizer_job(job_id=job_id, req=req, symbols=parsed_symbols, max_new_symbols=1, resume=False)
+    queued = _queue_qqq_optimizer_job(job_id=job_id, req=req, symbols=parsed_symbols, max_new_symbols=1, resume=False)
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
-            "backend": backend,
+            "backend": queued["backend"],
+            "task_id": queued["task_id"],
             "message": "First symbol from your list queued.",
         },
     )
@@ -1456,6 +1531,52 @@ def backtest_cheatsheet_status(
     if not snapshot:
         raise HTTPException(status_code=404, detail="Scan job not found")
     return JSONResponse(snapshot)
+
+
+@router.post("/analysis/cheatsheet/api/cancel/{job_id}")
+@router.post("/analysis/strategy-optimizer/api/cancel/{job_id}")
+@router.post("/auth/backtest-cheatsheet/api/cancel/{job_id}")
+def cancel_backtest_cheatsheet(
+    job_id: str,
+    user: User = Depends(get_current_user),
+):
+    _cleanup_cheatsheet_jobs()
+    snapshot = _snapshot_cheatsheet_job(job_id, user.id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Scan job not found")
+
+    task_id = None
+    with _cheatsheet_jobs_lock:
+        job = _cheatsheet_jobs.get(job_id)
+        if not job:
+            job = _load_cheatsheet_job(job_id) or {}
+        task_id = job.get("celery_task_id")
+        job.update(
+            {
+                "status": "cancelled",
+                "cancel_requested": True,
+                "message": "Stop requested. Partial optimizer results remain cached.",
+                "updated_at": time.time(),
+            }
+        )
+        _cheatsheet_jobs[job_id] = job
+        _store_cheatsheet_job(job_id, job)
+
+    if task_id:
+        try:
+            from app.celery_app import celery_app
+
+            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+        except Exception:
+            log.exception("[CHEATSHEET] failed to revoke optimizer task job_id=%s task_id=%s", job_id, task_id)
+
+    return JSONResponse(
+        {
+            "job_id": job_id,
+            "status": "cancelled",
+            "message": "Optimizer stop requested. Partial results remain available in cache.",
+        }
+    )
 
 
 # =============================================================================

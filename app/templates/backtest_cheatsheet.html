@@ -10,7 +10,7 @@
   h2 { margin:0 0 14px; color:#4fd1c5; font-size:1.25rem; }
   .muted { color:#a7a7c7; }
   .card { background:#1b1b3a; border:1px solid #2a2a55; border-radius:8px; padding:18px; margin:16px 0; box-shadow:0 4px 10px rgba(0,0,0,.28); }
-  .control-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:16px; align-items:start; margin:16px 0; }
+  .control-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; align-items:start; margin:16px 0; }
   .control-grid .card { margin:0; }
   .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; align-items:end; }
   label { display:block; font-size:.82rem; color:#a7a7c7; margin-bottom:5px; }
@@ -21,6 +21,7 @@
   .btn { border:0; border-radius:6px; padding:10px 16px; font-weight:700; cursor:pointer; }
   .btn-primary { background:#4fd1c5; color:#061013; }
   .btn-secondary { background:#334155; color:#fff; }
+  .btn-danger { background:#dc2626; color:#fff; }
   .btn:disabled { opacity:.55; cursor:not-allowed; }
   .status { display:none; border-radius:6px; padding:10px 12px; margin-top:12px; }
   .status.info { display:block; background:#1f3657; color:#cfe8ff; border:1px solid #2f5f93; }
@@ -51,6 +52,9 @@
   .params { color:#d6d6ff; line-height:1.45; }
   .tools { display:flex; gap:8px; flex-wrap:wrap; }
   .table-wrap { overflow-x:auto; border-radius:8px; border:1px solid #2a2a55; }
+  .cache-pairs { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:8px; margin-top:12px; }
+  .cache-pair { border:1px solid #2a2a55; background:#151533; color:#e5e7eb; border-radius:6px; padding:9px 10px; text-align:left; cursor:pointer; }
+  .cache-pair:hover { border-color:#4fd1c5; }
   @media (max-width:800px) {
     .wrap { width:92%; }
     table { min-width:980px; }
@@ -65,55 +69,12 @@
 
   <div class="control-grid">
     <div class="card">
-      <h2>Single Symbol Evaluation</h2>
-      <form id="normalScanForm" autocomplete="off">
+      <h2>Optimizer Run</h2>
+      <form id="optimizerForm" autocomplete="off">
         <div class="form-grid">
           <div>
-            <label>Symbol</label>
-            <input name="symbol" id="f_symbol" value="AAPL" required>
-          </div>
-          <div>
-            <label>Intervals</label>
-            <input name="intervals" id="f_intervals" value="5min" placeholder="1min,5min,15min">
-          </div>
-          <div>
-            <label>Trade Size</label>
-            <input type="number" min="1" step="1" name="trade_size" value="100">
-          </div>
-          <div>
-            <label>History Days</label>
-            <input type="number" min="10" max="90" step="1" name="builder_days" value="30">
-          </div>
-          <div>
-            <label>K Forward</label>
-            <input type="number" min="1" max="10" step="1" name="k_forward" value="3">
-          </div>
-          <div>
-            <label>Search Depth</label>
-            <select name="profile">
-              <option value="quick" selected>Quick</option>
-              <option value="deep">Deep</option>
-            </select>
-          </div>
-          <div>
-            <button class="btn btn-primary" id="runBtn" type="submit">Run Scan</button>
-          </div>
-        </div>
-        <div class="checks">
-          <label><input type="checkbox" name="allow_short_selling" checked> Allow Short</label>
-          <label><input type="checkbox" name="eod_auto_close" checked> Close EOD</label>
-        </div>
-        <div id="normalStatus" class="status"></div>
-      </form>
-    </div>
-
-    <div class="card">
-      <h2>Custom Symbol Batch</h2>
-      <form id="qqqBatchForm" autocomplete="off">
-        <div class="form-grid">
-          <div>
-            <label>Symbols (max 10)</label>
-            <input name="symbols" id="q_symbols" value="AAPL,MSFT,NVDA" placeholder="AAPL,MSFT,NVDA">
+            <label>Symbols (1-10)</label>
+            <input name="symbols" id="q_symbols" value="AAPL" placeholder="AAPL or AAPL,MSFT,NVDA">
           </div>
           <div>
             <label>Intervals</label>
@@ -142,10 +103,10 @@
             <button class="btn btn-secondary" id="latestBtn" type="button" title="Load the saved recommendation cache">Load Cache</button>
           </div>
           <div>
-            <button class="btn btn-secondary" id="nextSymbolBtn" type="button" title="Scan the first symbol from the list only">Run First Symbol</button>
+            <button class="btn btn-primary" id="runBatchBtn" type="submit" title="Run 1 to 10 user-entered symbols">Run Scan</button>
           </div>
           <div>
-            <button class="btn btn-primary" id="qqqBatchBtn" type="button" title="Run up to 10 user-entered symbols">Run Symbol Batch</button>
+            <button class="btn btn-danger" id="stopBatchBtn" type="button" disabled title="Stop the active optimizer job">Stop</button>
           </div>
         </div>
         <div class="checks">
@@ -155,6 +116,12 @@
         <div id="qqqStatus" class="status"></div>
       </form>
     </div>
+  </div>
+
+  <div class="card cache-card" id="cachePairsCard">
+    <h2>Cached Symbol / Interval Runs</h2>
+    <div class="muted">Click a cached run to filter recommendations and reuse that symbol/interval.</div>
+    <div id="cachePairs" class="cache-pairs"></div>
   </div>
 
   <div class="card cache-card" id="cacheStatusCard">
@@ -272,21 +239,21 @@
 </div>
 
 <script>
-const API_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run";
 const STATUS_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/status";
+const CANCEL_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/cancel";
 const LATEST_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/latest";
 const BATCH_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-qqq-batch";
-const NEXT_SYMBOL_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-next-qqq-symbol";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 let latestRows = [];
 let topRows = [];
 let algoRows = [];
+let cacheData = null;
+let activeJobId = null;
 let sortState = {
   top: { key: null, direction: "desc" },
   algo: { key: null, direction: "desc" }
 };
 let activePolls = {
-  normal: null,
   qqq: null
 };
 
@@ -405,7 +372,7 @@ function setTableSort(tableName, key) {
 }
 
 function replayText(r) {
-  const tradeSizeInput = document.querySelector("#normalScanForm [name='trade_size']");
+  const tradeSizeInput = document.querySelector("#optimizerForm [name='trade_size']");
   return [
     `Symbol: ${r.symbol}`,
     `Interval: ${r.interval}`,
@@ -429,11 +396,39 @@ async function copySettings(idx) {
   const row = latestRows[idx];
   if (!row) return;
   await navigator.clipboard.writeText(replayText(row));
-  setStatus("normalStatus", "Settings copied. Open Replay and paste/use these values.", "info");
+  setStatus("qqqStatus", "Settings copied.", "info");
 }
 
-function openReplay() {
-  window.location.href = REPLAY_URL;
+function replayParams(r) {
+  const form = document.getElementById("optimizerForm");
+  const fd = new FormData(form);
+  const params = new URLSearchParams();
+  const add = (key, value) => {
+    if (value !== null && value !== undefined && String(value) !== "") params.set(key, String(value));
+  };
+  add("symbol", r.symbol);
+  add("interval", r.interval);
+  add("algo_name", r.algo_name);
+  add("trade_size", fd.get("trade_size") || "100");
+  add("stop_loss_usd", r.stop_loss_usd || r.hard_stop_usd);
+  add("trailing_profit_usd", r.trailing_profit_usd);
+  add("stop_loss_pct", r.stop_loss_pct || r.per_share_stop_pct);
+  add("trailing_profit_pct", r.trailing_profit_pct || r.per_share_trailing_profit_pct);
+  add("long_entry_prob", r.long_entry_prob);
+  add("short_entry_prob", r.short_entry_prob);
+  add("prob_trail_drop", r.prob_trail_drop);
+  add("prob_exit_mode", r.prob_exit_mode);
+  add("long_fixed_exit_prob", r.long_fixed_exit_prob);
+  add("short_fixed_exit_prob", r.short_fixed_exit_prob);
+  add("allow_short_selling", form.querySelector("[name='allow_short_selling']")?.checked ? "on" : "");
+  add("eod_auto_close", form.querySelector("[name='eod_auto_close']")?.checked ? "on" : "");
+  return params;
+}
+
+function openReplay(idx) {
+  const row = latestRows[idx];
+  if (!row) return;
+  window.location.href = `${REPLAY_URL}?${replayParams(row).toString()}`;
 }
 
 function setStatus(targetId, msg, kind) {
@@ -462,6 +457,80 @@ function updateCacheStatus(data) {
   card.classList.add("visible");
 }
 
+function cachedPairs(data) {
+  const rows = data?.best_by_symbol_algo || data?.best_by_algo || data?.top || [];
+  const seen = new Set();
+  return rows.map((r) => ({
+    symbol: String(r.symbol || "").toUpperCase(),
+    interval: String(r.interval || "")
+  })).filter((item) => {
+    if (!item.symbol || !item.interval) return false;
+    const key = `${item.symbol}|${item.interval}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => `${a.symbol} ${a.interval}`.localeCompare(`${b.symbol} ${b.interval}`));
+}
+
+function renderCachePairs(data) {
+  const card = document.getElementById("cachePairsCard");
+  const box = document.getElementById("cachePairs");
+  const pairs = cachedPairs(data);
+  if (!pairs.length) {
+    card.classList.remove("visible");
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = pairs.map((p) => `
+    <button class="cache-pair" type="button" data-symbol="${p.symbol}" data-interval="${p.interval}">
+      <b>${p.symbol}</b><br><span class="muted">${p.interval}</span>
+    </button>
+  `).join("");
+  box.querySelectorAll(".cache-pair").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.getElementById("q_symbols").value = btn.dataset.symbol || "";
+      document.getElementById("q_intervals").value = btn.dataset.interval || "5min";
+      renderScanResult(_filterCacheForPair(cacheData, btn.dataset.symbol, btn.dataset.interval), "qqqStatus");
+      setStatus("qqqStatus", `Loaded cached ${btn.dataset.symbol} ${btn.dataset.interval}.`, "info");
+    });
+  });
+  card.classList.add("visible");
+}
+
+function _filterCacheForPair(data, symbol, interval) {
+  if (!data) return {};
+  const wantedSymbol = String(symbol || "").toUpperCase();
+  const wantedInterval = String(interval || "");
+  const rows = (data.best_by_symbol_algo || data.best_by_algo || []).filter((r) =>
+    String(r.symbol || "").toUpperCase() === wantedSymbol && (!wantedInterval || String(r.interval || "") === wantedInterval)
+  );
+  const top = (data.top || []).filter((r) =>
+    String(r.symbol || "").toUpperCase() === wantedSymbol && (!wantedInterval || String(r.interval || "") === wantedInterval)
+  );
+  return {
+    ...data,
+    symbol: wantedSymbol,
+    intervals: wantedInterval ? [wantedInterval] : Array.from(new Set(rows.map(r => r.interval).filter(Boolean))),
+    top: top.length ? top : rows,
+    best_by_algo: rows,
+    best_by_symbol_algo: rows,
+    filtered_from_cache: true
+  };
+}
+
+function duplicateRunWarning(symbols, intervals) {
+  const attempted = new Set((cacheData?.symbols_attempted || cacheData?.symbols_scanned || []).map(s => String(s).toUpperCase()));
+  const pairs = new Set(cachedPairs(cacheData).map(p => `${p.symbol}|${p.interval}`));
+  const repeatedSymbols = symbols.filter(s => attempted.has(s));
+  const repeatedPairs = [];
+  symbols.forEach((symbol) => intervals.forEach((interval) => {
+    if (pairs.has(`${symbol}|${interval}`)) repeatedPairs.push(`${symbol} ${interval}`);
+  }));
+  if (repeatedPairs.length) return `Already cached: ${repeatedPairs.join(", ")}. Running again will overwrite/refresh this cache.`;
+  if (repeatedSymbols.length) return `Already attempted in latest cache: ${repeatedSymbols.join(", ")}. Running again will refresh the batch.`;
+  return "";
+}
+
 function parseBatchSymbols() {
   const raw = (document.getElementById("q_symbols")?.value || "").trim();
   const symbols = raw.split(/[\s,;]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -472,6 +541,14 @@ function parseBatchSymbols() {
     if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol)) throw new Error(`Invalid symbol: ${symbol}`);
   }
   return unique;
+}
+
+function parseIntervals() {
+  const raw = (document.getElementById("q_intervals")?.value || "5min").trim();
+  const intervals = raw.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+  const allowed = new Set(["1min", "5min", "10min", "15min", "30min", "1d"]);
+  if (!intervals.length || intervals.some(i => !allowed.has(i))) throw new Error("Choose supported intervals: 1min, 5min, 10min, 15min, 30min, 1d.");
+  return Array.from(new Set(intervals));
 }
 
 function renderRows(rows, targetId, showRank) {
@@ -495,13 +572,17 @@ function renderRows(rows, targetId, showRank) {
         ${showRank ? `<td>${money(r.max_drawdown)}</td>` : ""}
         <td class="window">${testWindow(r)}</td>
         <td class="params">${rowParams(r)}</td>
-        ${showRank ? `<td><div class="tools"><button class="btn btn-secondary" onclick="copySettings(${idx})">Copy</button><button class="btn btn-primary" onclick="openReplay()">Replay</button></div></td>` : ""}
+        ${showRank ? `<td><div class="tools"><button class="btn btn-secondary" onclick="copySettings(${idx})">Copy</button><button class="btn btn-primary" onclick="openReplay(${idx})">Setup Replay</button></div></td>` : ""}
       </tr>
     `;
   }).join("");
 }
 
-function renderScanResult(data, statusId = "normalStatus") {
+function renderScanResult(data, statusId = "qqqStatus") {
+  if (data && !data.filtered_from_cache) {
+    cacheData = data;
+    renderCachePairs(data);
+  }
   updateCacheStatus(data);
   topRows = data.top || [];
   algoRows = data.best_by_algo || [];
@@ -531,8 +612,8 @@ function renderScanResult(data, statusId = "normalStatus") {
 }
 
 async function pollScanJob(jobId, options = {}) {
-  const pollKey = options.pollKey || "normal";
-  const statusId = options.statusId || "normalStatus";
+  const pollKey = options.pollKey || "qqq";
+  const statusId = options.statusId || "qqqStatus";
   const buttons = options.buttons || [];
   let attempts = 0;
   if (activePolls[pollKey]) {
@@ -557,14 +638,27 @@ async function pollScanJob(jobId, options = {}) {
       }
       if (data.status === "succeeded") {
         activePolls[pollKey] = null;
+        activeJobId = null;
         renderScanResult(data.result || {}, statusId);
         buttons.forEach((button) => { button.disabled = false; });
+        document.getElementById("stopBatchBtn").disabled = true;
         return;
       }
       if (data.status === "failed") {
         activePolls[pollKey] = null;
+        activeJobId = null;
         setStatus(statusId, data.error || "Strategy scan failed.", "error");
         buttons.forEach((button) => { button.disabled = false; });
+        document.getElementById("stopBatchBtn").disabled = true;
+        return;
+      }
+      if (data.status === "cancelled") {
+        activePolls[pollKey] = null;
+        activeJobId = null;
+        if (data.result) renderScanResult(data.result, statusId);
+        setStatus(statusId, data.message || "Optimizer stopped. Partial results remain cached.", "info");
+        buttons.forEach((button) => { button.disabled = false; });
+        document.getElementById("stopBatchBtn").disabled = true;
         return;
       }
 
@@ -583,11 +677,10 @@ async function pollScanJob(jobId, options = {}) {
 
 async function loadLatestCached(showMissing = true) {
   const btn = document.getElementById("latestBtn");
-  const symbol = document.getElementById("f_symbol").value.trim();
-  const url = symbol ? `${LATEST_URL}?symbol=${encodeURIComponent(symbol)}` : LATEST_URL;
+  const symbol = document.getElementById("q_symbols").value.trim().split(/[\s,;]+/)[0] || "";
   btn.disabled = true;
   try {
-    const res = await fetch(url, {
+    const res = await fetch(LATEST_URL, {
       headers: {
         "Accept": "application/json",
         "X-Requested-With": "XMLHttpRequest"
@@ -598,9 +691,12 @@ async function loadLatestCached(showMissing = true) {
       if (showMissing) setStatus("qqqStatus", data.detail || "No cached recommendations found.", "error");
       return;
     }
-    updateCacheStatus(data);
-    renderScanResult(data, "qqqStatus");
-    const generated = data.generated_at ? ` Generated ${barTime(data.generated_at)}.` : "";
+    cacheData = data;
+    const displayData = symbol ? _filterCacheForPair(data, symbol, "") : data;
+    updateCacheStatus(displayData);
+    renderCachePairs(cacheData);
+    renderScanResult(displayData, "qqqStatus");
+    const generated = displayData.generated_at ? ` Generated ${barTime(displayData.generated_at)}.` : "";
     setStatus("qqqStatus", `Loaded latest cached recommendations.${generated}`, "info");
   } catch (err) {
     if (showMissing) setStatus("qqqStatus", "Network error loading latest recommendations: " + err, "error");
@@ -610,31 +706,33 @@ async function loadLatestCached(showMissing = true) {
 }
 
 async function runQqqBatch() {
-  const batchBtn = document.getElementById("qqqBatchBtn");
-  const nextBtn = document.getElementById("nextSymbolBtn");
+  const batchBtn = document.getElementById("runBatchBtn");
   const latestBtn = document.getElementById("latestBtn");
+  const stopBtn = document.getElementById("stopBatchBtn");
   batchBtn.disabled = true;
-  nextBtn.disabled = true;
   latestBtn.disabled = true;
+  stopBtn.disabled = false;
   if (activePolls.qqq) {
     clearTimeout(activePolls.qqq);
     activePolls.qqq = null;
   }
   try {
     const symbols = parseBatchSymbols();
-    setStatus("qqqStatus", `Running ${symbols.length} symbol(s).`, "info");
+    const intervals = parseIntervals();
+    const warning = duplicateRunWarning(symbols, intervals);
+    setStatus("qqqStatus", `${warning ? warning + " " : ""}Running ${symbols.length} symbol(s).`, "info");
   } catch (err) {
     setStatus("qqqStatus", err.message || String(err), "error");
     batchBtn.disabled = false;
-    nextBtn.disabled = false;
     latestBtn.disabled = false;
+    stopBtn.disabled = true;
     return;
   }
 
   try {
     const res = await fetch(BATCH_URL, {
       method: "POST",
-      body: new FormData(document.getElementById("qqqBatchForm")),
+      body: new FormData(document.getElementById("optimizerForm")),
       headers: {
         "Accept": "application/json",
         "X-Requested-With": "XMLHttpRequest"
@@ -644,50 +742,33 @@ async function runQqqBatch() {
     if (!res.ok) {
       setStatus("qqqStatus", data.detail || "Symbol batch failed to start.", "error");
       batchBtn.disabled = false;
-      nextBtn.disabled = false;
       latestBtn.disabled = false;
+      stopBtn.disabled = true;
       return;
     }
+    activeJobId = data.job_id;
     setStatus("qqqStatus", data.message || "Symbol batch started. Waiting for results.", "info");
     await pollScanJob(data.job_id, {
       pollKey: "qqq",
       statusId: "qqqStatus",
-      buttons: [batchBtn, nextBtn, latestBtn]
+      buttons: [batchBtn, latestBtn]
     });
   } catch (err) {
     setStatus("qqqStatus", "Network error starting symbol batch: " + err, "error");
     batchBtn.disabled = false;
-    nextBtn.disabled = false;
     latestBtn.disabled = false;
+    stopBtn.disabled = true;
   }
 }
 
-async function runNextQqqSymbol() {
-  const nextBtn = document.getElementById("nextSymbolBtn");
-  const batchBtn = document.getElementById("qqqBatchBtn");
-  const latestBtn = document.getElementById("latestBtn");
-  nextBtn.disabled = true;
-  batchBtn.disabled = true;
-  latestBtn.disabled = true;
-  if (activePolls.qqq) {
-    clearTimeout(activePolls.qqq);
-    activePolls.qqq = null;
-  }
+async function stopActiveBatch() {
+  if (!activeJobId) return;
+  const stopBtn = document.getElementById("stopBatchBtn");
+  stopBtn.disabled = true;
+  setStatus("qqqStatus", "Stopping optimizer job. Any completed symbols stay in cache.", "info");
   try {
-    const symbols = parseBatchSymbols();
-    setStatus("qqqStatus", `Running first symbol only: ${symbols[0]}.`, "info");
-  } catch (err) {
-    setStatus("qqqStatus", err.message || String(err), "error");
-    nextBtn.disabled = false;
-    batchBtn.disabled = false;
-    latestBtn.disabled = false;
-    return;
-  }
-
-  try {
-    const res = await fetch(NEXT_SYMBOL_URL, {
+    const res = await fetch(`${CANCEL_URL}/${encodeURIComponent(activeJobId)}`, {
       method: "POST",
-      body: new FormData(document.getElementById("qqqBatchForm")),
       headers: {
         "Accept": "application/json",
         "X-Requested-With": "XMLHttpRequest"
@@ -695,80 +776,23 @@ async function runNextQqqSymbol() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setStatus("qqqStatus", data.detail || "Next symbol failed to start.", "error");
-      nextBtn.disabled = false;
-      batchBtn.disabled = false;
-      latestBtn.disabled = false;
+      setStatus("qqqStatus", data.detail || "Stop request failed.", "error");
+      stopBtn.disabled = false;
       return;
     }
-    setStatus("qqqStatus", data.message || "First symbol started. Waiting for saved results.", "info");
-    await pollScanJob(data.job_id, {
-      pollKey: "qqq",
-      statusId: "qqqStatus",
-      buttons: [nextBtn, batchBtn, latestBtn]
-    });
+    setStatus("qqqStatus", data.message || "Stop requested.", "info");
   } catch (err) {
-    setStatus("qqqStatus", "Network error starting next symbol: " + err, "error");
-    nextBtn.disabled = false;
-    batchBtn.disabled = false;
-    latestBtn.disabled = false;
+    setStatus("qqqStatus", "Network error stopping optimizer: " + err, "error");
+    stopBtn.disabled = false;
   }
 }
 
-document.getElementById("normalScanForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const btn = document.getElementById("runBtn");
-  btn.disabled = true;
-  if (activePolls.normal) {
-    clearTimeout(activePolls.normal);
-    activePolls.normal = null;
-  }
-  setStatus("normalStatus", "Running scan. This can take a bit because models are trained per algo and interval.", "info");
-  document.getElementById("results").style.display = "none";
-
-  try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      body: new FormData(event.target),
-      headers: {
-        "Accept": "application/json",
-        "X-Requested-With": "XMLHttpRequest"
-      }
-    });
-    const raw = await res.text();
-    let data = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch (parseErr) {
-      const plain = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 220);
-      setStatus("normalStatus", `Server returned ${res.status || "non-JSON"} instead of JSON. ${plain || "Try again."}`, "error");
-      return;
-    }
-    if (!res.ok) {
-      setStatus("normalStatus", data.detail || "Scan failed", "error");
-      return;
-    }
-    if (res.status === 202 && data.job_id) {
-      setStatus("normalStatus", data.message || "Strategy scan started. Waiting for results.", "info");
-      await pollScanJob(data.job_id, {
-        pollKey: "normal",
-        statusId: "normalStatus",
-        buttons: [btn]
-      });
-      return;
-    }
-
-    renderScanResult(data, "normalStatus");
-  } catch (err) {
-    setStatus("normalStatus", "Network error: " + err, "error");
-  } finally {
-    if (!activePolls.normal) btn.disabled = false;
-  }
-});
-
 document.getElementById("latestBtn").addEventListener("click", () => loadLatestCached(true));
-document.getElementById("nextSymbolBtn").addEventListener("click", runNextQqqSymbol);
-document.getElementById("qqqBatchBtn").addEventListener("click", runQqqBatch);
+document.getElementById("optimizerForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  runQqqBatch();
+});
+document.getElementById("stopBatchBtn").addEventListener("click", stopActiveBatch);
 document.querySelectorAll("th.sortable").forEach((th) => {
   th.addEventListener("click", () => setTableSort(th.dataset.table, th.dataset.sort));
 });

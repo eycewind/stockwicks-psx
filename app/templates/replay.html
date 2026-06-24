@@ -398,6 +398,38 @@ let lastBarCount = 0;
   endEl.max = fmt(today);
 })();
 
+function applyOptimizerReplayParams() {
+  const params = new URLSearchParams(window.location.search || "");
+  if (!params.has("symbol") && !params.has("algo_name")) return;
+  const fieldMap = {
+    symbol: "f_symbol",
+    interval: "f_interval",
+    algo_name: "f_algo",
+    trade_size: "f_qty",
+    stop_loss_usd: "f_stop_loss",
+    trailing_profit_usd: "f_trailing_profit",
+    stop_loss_pct: "f_stop_loss_pct",
+    trailing_profit_pct: "f_trailing_profit_pct",
+    long_entry_prob: "f_long_entry_prob",
+    short_entry_prob: "f_short_entry_prob",
+    prob_exit_mode: "f_prob_exit_mode",
+    prob_trail_drop: "f_prob_trail_drop",
+    long_fixed_exit_prob: "f_long_fixed_exit_prob",
+    short_fixed_exit_prob: "f_short_fixed_exit_prob"
+  };
+  Object.entries(fieldMap).forEach(([key, id]) => {
+    const el = document.getElementById(id);
+    const value = params.get(key);
+    if (el && value !== null && value !== "") el.value = value;
+  });
+  const shortBox = document.querySelector("#startForm [name='allow_short_selling']");
+  const eodBox = document.querySelector("#startForm [name='eod_auto_close']");
+  if (shortBox && params.has("allow_short_selling")) shortBox.checked = params.get("allow_short_selling") === "on";
+  if (eodBox && params.has("eod_auto_close")) eodBox.checked = params.get("eod_auto_close") === "on";
+  const formCard = document.getElementById("formCard");
+  if (formCard) formCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 // =============================================================================
 // Errors
 // =============================================================================
@@ -432,6 +464,7 @@ const startFormEl = document.getElementById("startForm");
 if (startFormEl) {
   const algoSelect = startFormEl.querySelector("[name='algo_name']");
   if (algoSelect) algoSelect.addEventListener("change", () => syncAlgoFields(startFormEl));
+  applyOptimizerReplayParams();
   syncAlgoFields(startFormEl);
 }
 
