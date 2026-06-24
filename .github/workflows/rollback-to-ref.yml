@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: "Commit SHA, branch, or tag to check out, e.g. 0976a5b"
+        description: "Commit SHA, branch, or tag to deploy, e.g. 0976a5b"
         required: true
         default: "0976a5b"
       targets:
@@ -27,6 +27,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_ref }}
+
+      - name: Show checked out ref
+        run: |
+          echo "Requested target_ref: ${{ github.event.inputs.target_ref }}"
+          echo "Checked out commit: $(git rev-parse --short HEAD)"
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -34,22 +44,103 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Roll back clients to target ref
+      - name: Upload checked-out snapshot
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "TARGET_REF='${{ github.event.inputs.target_ref }}' \
-             TARGETS='${{ github.event.inputs.targets }}' \
-             RESTART='${{ github.event.inputs.restart }}' \
-             DRY_RUN='${{ github.event.inputs.dry_run }}' \
-             bash -s" <<'REMOTE'
+          RELEASE_ID="rollback-ref-${{ github.event.inputs.target_ref }}-$(date +%Y%m%d%H%M%S)"
+          RELEASE_ID="$(echo "${RELEASE_ID}" | tr -c 'A-Za-z0-9_.-' '-')"
+          echo "RELEASE_ID=${RELEASE_ID}" >> "$GITHUB_ENV"
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "rm -rf /tmp/stockwicks-${RELEASE_ID} && mkdir -p /tmp/stockwicks-${RELEASE_ID}"
+
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude '.env' \
+            --exclude 'data/' \
+            --exclude 'logs/' \
+            --exclude 'venv/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude 'celerybeat-schedule*' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/stockwicks-${RELEASE_ID}/"
+
+      - name: Roll back clients from uploaded snapshot
+        run: |
+          APPLY_FLAG="--apply"
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            APPLY_FLAG=""
+          fi
+
+          RESTART_FLAG=""
+          if [[ "${{ github.event.inputs.restart }}" == "true" && "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            RESTART_FLAG="--restart"
+          fi
+
+          RUNNER="bash"
+          if [[ -n "${RESTART_FLAG}" ]]; then
+            RUNNER="sudo bash"
+          fi
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "${RUNNER} -s -- ${APPLY_FLAG} ${RESTART_FLAG} '/tmp/stockwicks-${RELEASE_ID}' '${{ github.event.inputs.target_ref }}' '${{ github.event.inputs.targets }}'" <<'REMOTE'
           set -euo pipefail
 
-          BASE="/var/stockwicks/clients"
+          CLIENTS_ROOT="${CLIENTS_ROOT:-/var/stockwicks/clients}"
+          RELEASES_ROOT="${RELEASES_ROOT:-/var/stockwicks/releases}"
+          APPLY=0
+          RESTART=0
+
+          while [[ $# -gt 0 && "$1" == --* ]]; do
+            case "$1" in
+              --apply)
+                APPLY=1
+                shift
+                ;;
+              --restart)
+                RESTART=1
+                shift
+                ;;
+              *)
+                echo "ERROR: Unknown option: $1" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          SNAPSHOT="${1:?snapshot path required}"
+          TARGET_REF="${2:?target ref required}"
+          TARGETS="${3:?targets required}"
+
+          [[ -d "${SNAPSHOT}/app" ]] || {
+            echo "ERROR: Uploaded snapshot is missing app/: ${SNAPSHOT}" >&2
+            exit 1
+          }
+
+          RSYNC_FLAGS=(-avc --delete)
+          if [[ "${APPLY}" -eq 0 ]]; then
+            RSYNC_FLAGS+=(-n)
+          fi
+
+          EXCLUDES=(
+            --exclude ".git/"
+            --exclude ".env"
+            --exclude "data/"
+            --exclude "logs/"
+            --exclude "venv/"
+            --exclude "__pycache__/"
+            --exclude "*.pyc"
+            --exclude "celerybeat-schedule*"
+          )
 
           echo "Target ref: ${TARGET_REF}"
+          echo "Snapshot: ${SNAPSHOT}"
           echo "Targets: ${TARGETS}"
-          echo "Dry run: ${DRY_RUN}"
+          if [[ "${APPLY}" -eq 0 ]]; then
+            echo "Mode: DRY RUN"
+          else
+            echo "Mode: APPLY"
+          fi
           echo "Restart: ${RESTART}"
 
           for client in ${TARGETS}; do
@@ -58,35 +149,40 @@ jobs:
               exit 1
             fi
 
-            dir="${BASE}/${client}"
-            if [[ ! -d "${dir}/.git" ]]; then
-              echo "ERROR: Missing git repo: ${dir}" >&2
+            target="${CLIENTS_ROOT}/${client}"
+            [[ -d "${target}" ]] || {
+              echo "ERROR: Target client folder not found: ${target}" >&2
               exit 1
-            fi
+            }
 
             echo
             echo "===== ${client} ====="
-            cd "${dir}"
 
-            git fetch origin --tags
-            target_commit="$(git rev-parse --verify "${TARGET_REF}^{commit}")"
-
-            echo "Current: $(git rev-parse --short HEAD)"
-            echo "Target:  $(git rev-parse --short "${target_commit}")"
-
-            if [[ "${DRY_RUN}" == "true" ]]; then
-              echo "DRY RUN: would checkout ${TARGET_REF}"
-              continue
+            if [[ "${APPLY}" -eq 1 ]]; then
+              backup_dir="${RELEASES_ROOT}/${client}/rollback_ref_backup_$(date +%Y%m%d_%H%M%S)"
+              echo "Backup: ${backup_dir}"
+              mkdir -p "${backup_dir}"
+              rsync -a "${EXCLUDES[@]}" "${target}/" "${backup_dir}/"
             fi
 
-            git checkout "${target_commit}"
+            rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" "${SNAPSHOT}/" "${target}/"
 
-            if [[ "${RESTART}" == "true" ]]; then
-              sudo systemctl restart "stockwicks-${client}-web" || true
-              sudo systemctl restart "stockwicks-${client}-celery" || true
-              sudo systemctl restart "stockwicks-${client}-beat" || true
+            if [[ "${APPLY}" -eq 1 ]]; then
+              echo "${TARGET_REF}" > "${target}/.deployed_git_ref"
             fi
 
-            echo "Now: $(git rev-parse --short HEAD)"
+            if [[ "${APPLY}" -eq 1 && "${RESTART}" -eq 1 ]]; then
+              systemctl daemon-reload
+              systemctl restart "stockwicks-${client}-web" || true
+              systemctl restart "stockwicks-${client}-celery" || true
+              systemctl restart "stockwicks-${client}-beat" || true
+            fi
           done
+
+          echo
+          if [[ "${APPLY}" -eq 0 ]]; then
+            echo "Dry run complete."
+          else
+            echo "Rollback to ${TARGET_REF} complete."
+          fi
           REMOTE
