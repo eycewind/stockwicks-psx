@@ -128,25 +128,40 @@ async function loadSummary() {
 async function loadChart() {
   const data = await fetchJson(`${URL_PREFIX}/analysis/api/logs/chart-data${qs()}`);
   const candles = data.candles || [];
+  const pricePoints = data.price_points || [];
   const events = data.events || [];
 
   const chartEl = document.getElementById("priceChart");
   if (!chartEl) return;
 
-  if (!candles.length) {
-    chartEl.innerHTML = `<div class="alert alert-warning">No candle data found.</div>`;
+  if (!candles.length && !pricePoints.length) {
+    chartEl.innerHTML = `<div class="alert alert-warning">No price data found.</div>`;
+    renderEntryExitTable(events);
     return;
   }
 
-  const candleTrace = {
-    x: candles.map(c => c.time),
-    open: candles.map(c => c.open),
-    high: candles.map(c => c.high),
-    low: candles.map(c => c.low),
-    close: candles.map(c => c.close),
-    type: "candlestick",
-    name: "Candles"
-  };
+  const priceTrace = candles.length
+    ? {
+        x: candles.map(c => c.time),
+        open: candles.map(c => c.open),
+        high: candles.map(c => c.high),
+        low: candles.map(c => c.low),
+        close: candles.map(c => c.close),
+        type: "candlestick",
+        name: "Candles"
+      }
+    : {
+        x: pricePoints.map(p => p.time),
+        y: pricePoints.map(p => p.price),
+        mode: "lines",
+        type: "scatter",
+        name: "Close Price",
+        line: { color: "#57e6c2", width: 2 },
+        text: pricePoints.map(p =>
+          `Close ${fmt(p.close || p.price, 2)}<br>${safeText(p.action || "")}<br>${safeText(p.reason || "")}`
+        ),
+        hoverinfo: "text+x+y"
+      };
 
   const openEvents = events.filter(e =>
     e.action === "OPEN_LONG" ||
@@ -198,9 +213,9 @@ async function loadChart() {
 
   Plotly.newPlot(
     "priceChart",
-    [candleTrace, openTrace, exitTrace],
+    [priceTrace, openTrace, exitTrace],
     {
-      title: "Entry / Exit Chart",
+      title: candles.length ? "Entry / Exit Candles" : "Entry / Exit Close Price",
       paper_bgcolor: "#0b0a2a",
       plot_bgcolor: "#0b0a2a",
       font: { color: "#ffffff" },
@@ -217,6 +232,36 @@ async function loadChart() {
     },
     { responsive: true }
   );
+
+  renderEntryExitTable(events);
+}
+
+function renderEntryExitTable(events) {
+  const tbody = document.querySelector("#entryExitTable tbody");
+  if (!tbody) return;
+
+  if (!events.length) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="7" class="text-muted" style="text-align:center;">
+          No entry or exit rows found.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = events.map(e => `
+    <tr>
+      <td>${safeText(e.time)}</td>
+      <td>${safeText(e.symbol)}</td>
+      <td><strong>${safeText(e.action)}</strong></td>
+      <td>${fmt(e.price, 2)}</td>
+      <td>${fmt(e.prob_up)}</td>
+      <td>${fmt(e.prob_down)}</td>
+      <td style="max-width: 620px; white-space: normal;">${safeText(e.reason)}</td>
+    </tr>
+  `).join("");
 }
 
 async function loadBlockedEntries() {

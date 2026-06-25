@@ -409,10 +409,12 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     candles = []
+    price_points = []
     decisions = []
     events = []
     event_actions = {"OPEN_LONG", "OPEN_SHORT"}
     seen_candle_times = set()
+    seen_price_times = set()
 
     for row in _candle_rows(rows) + rows:
         bar_time = row.get("bar_time")
@@ -426,6 +428,18 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "low": row.get("low"),
                 "close": row.get("close"),
                 "volume": row.get("volume"),
+            })
+
+        price = row.get("price") or row.get("close")
+        if bar_time and price is not None and bar_time not in seen_price_times:
+            seen_price_times.add(bar_time)
+            price_points.append({
+                "time": bar_time,
+                "price": price,
+                "open": row.get("open"),
+                "close": row.get("close"),
+                "action": row.get("action"),
+                "reason": row.get("reason"),
             })
 
         if row.get("row_type") == "candle":
@@ -457,7 +471,12 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "prob_down": row.get("prob_down"),
             })
 
-    return {"candles": candles, "decisions": decisions, "events": events}
+    return {
+        "candles": candles,
+        "price_points": price_points,
+        "decisions": decisions,
+        "events": events,
+    }
 
 
 def blocked_entries(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
