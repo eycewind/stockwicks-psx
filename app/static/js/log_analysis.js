@@ -19,9 +19,23 @@ function selectedSymbol() {
   return el ? el.value : "";
 }
 
+function selectedDate(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : "";
+}
+
 function qs() {
+  const params = new URLSearchParams();
   const symbol = selectedSymbol();
-  return symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  const startDate = selectedDate("startDate");
+  const endDate = selectedDate("endDate");
+
+  if (symbol) params.set("symbol", symbol);
+  if (startDate) params.set("start_date", startDate);
+  if (endDate) params.set("end_date", endDate);
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 function fmt(value, digits = 4) {
@@ -407,6 +421,8 @@ async function refreshAll() {
 document.addEventListener("DOMContentLoaded", () => {
   const refreshBtn = document.getElementById("refreshBtn");
   const symbolSelect = document.getElementById("symbolSelect");
+  const startDate = document.getElementById("startDate");
+  const endDate = document.getElementById("endDate");
 
   if (refreshBtn) {
     refreshBtn.addEventListener("click", refreshAll);
@@ -414,6 +430,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (symbolSelect) {
     symbolSelect.addEventListener("change", refreshAll);
+  }
+
+  if (startDate) {
+    startDate.addEventListener("change", refreshAll);
+  }
+
+  if (endDate) {
+    endDate.addEventListener("change", refreshAll);
   }
 
   loadSymbols()

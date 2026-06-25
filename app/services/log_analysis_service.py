@@ -1,6 +1,7 @@
 # /var/stockwicks/clients/ashakil/app/services/log_analysis_service.py
 import json
 import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +38,29 @@ def _safe_int(value: Any):
 def _symbol_from_filename(path: Path) -> Optional[str]:
     match = re.match(r"bot_(?:\d+|unknown)_([^_]+)_", path.name)
     return match.group(1) if match else None
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    if not value:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _row_date(row: Dict[str, Any]) -> Optional[date]:
+    for key in ("bar_time", "time", "log_time", "datetime", "ts_et"):
+        parsed = _parse_date(row.get(key))
+        if parsed:
+            return parsed
+    return None
 
 
 def _parse_features(raw: Any) -> Dict[str, Any]:
@@ -222,14 +246,33 @@ def parse_pretty_algo_log(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def find_algo_logs(base_dir: Path) -> List[Path]:
+def find_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
     candidates = []
     for folder in [base_dir / "logs", base_dir / "data"]:
         if folder.exists():
             candidates.extend(folder.rglob("bot_*_Algo*.log"))
-            candidates.extend(folder.rglob("bot_*_*_decisions.jsonl"))
-            candidates.extend(folder.rglob("bot_*_*_candles.jsonl"))
-    return sorted(set(candidates))
+
+    paths = sorted(set(candidates))
+    if symbol:
+        target = symbol.upper()
+        paths = [
+            path for path in paths
+            if (_symbol_from_filename(path) or "").upper() == target
+        ]
+    return paths
+
+
+def latest_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
+    paths = find_algo_logs(base_dir, symbol=symbol)
+    latest_by_symbol: Dict[str, Path] = {}
+
+    for path in paths:
+        path_symbol = (_symbol_from_filename(path) or "UNKNOWN").upper()
+        current = latest_by_symbol.get(path_symbol)
+        if current is None or path.stat().st_mtime > current.stat().st_mtime:
+            latest_by_symbol[path_symbol] = path
+
+    return sorted(latest_by_symbol.values(), key=lambda path: path.name)
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -246,9 +289,15 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def load_rows(base_dir: Path, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+def load_rows(
+    base_dir: Path,
+    symbol: Optional[str] = None,
+    start_date: Optional[Any] = None,
+    end_date: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    for path in find_algo_logs(base_dir):
+    selected_paths = latest_algo_logs(base_dir, symbol=symbol)
+    for path in selected_paths:
         try:
             if path.suffix == ".log":
                 rows.extend(parse_pretty_algo_log(path))
@@ -265,6 +314,21 @@ def load_rows(base_dir: Path, symbol: Optional[str] = None) -> List[Dict[str, An
 
     if symbol:
         rows = [r for r in rows if str(r.get("symbol") or "").upper() == symbol.upper()]
+
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    if start or end:
+        filtered = []
+        for row in rows:
+            row_date = _row_date(row)
+            if row_date is None:
+                continue
+            if start and row_date < start:
+                continue
+            if end and row_date > end:
+                continue
+            filtered.append(row)
+        rows = filtered
 
     deduped: List[Dict[str, Any]] = []
     seen = set()

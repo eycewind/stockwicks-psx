@@ -51,7 +51,8 @@
     font-weight: 700;
   }
 
-  .analysis-control select {
+  .analysis-control select,
+  .analysis-control input {
     width: 100%;
     padding: 10px 12px;
     border-radius: 8px;
@@ -223,11 +224,20 @@
         <div class="analysis-control">
           <label for="symbolSelect">Symbol</label>
           <select id="symbolSelect">
-            <option value="">All Symbols</option>
             <option value="MU">MU</option>
             <option value="TSLA">TSLA</option>
             <option value="MSTR">MSTR</option>
           </select>
+        </div>
+
+        <div class="analysis-control">
+          <label for="startDate">Start Date</label>
+          <input id="startDate" type="date">
+        </div>
+
+        <div class="analysis-control">
+          <label for="endDate">End Date</label>
+          <input id="endDate" type="date">
         </div>
 
         <div class="analysis-control">

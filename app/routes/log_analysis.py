@@ -38,8 +38,17 @@ async def log_analysis_page(request: Request):
 
 
 @router.get("/api/logs/summary")
-async def api_logs_summary(symbol: Optional[str] = Query(default=None)):
-    rows = load_rows(project_base_dir(), symbol=symbol)
+async def api_logs_summary(
+    symbol: Optional[str] = Query(default=None),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+):
+    rows = load_rows(
+        project_base_dir(),
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return JSONResponse(summarize(rows))
 
 
@@ -55,14 +64,32 @@ async def api_logs_symbols():
 
 
 @router.get("/api/logs/chart-data")
-async def api_logs_chart_data(symbol: Optional[str] = Query(default=None)):
-    rows = load_rows(project_base_dir(), symbol=symbol)
+async def api_logs_chart_data(
+    symbol: Optional[str] = Query(default=None),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+):
+    rows = load_rows(
+        project_base_dir(),
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return JSONResponse(chart_payload(rows))
 
 
 @router.get("/api/logs/blocked-entries")
-async def api_blocked_entries(symbol: Optional[str] = Query(default=None)):
-    rows = load_rows(project_base_dir(), symbol=symbol)
+async def api_blocked_entries(
+    symbol: Optional[str] = Query(default=None),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+):
+    rows = load_rows(
+        project_base_dir(),
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return JSONResponse(
         {
             "blocked_entries": blocked_entries(rows),
@@ -71,6 +98,15 @@ async def api_blocked_entries(symbol: Optional[str] = Query(default=None)):
 
 
 @router.get("/api/logs/features")
-async def api_features(symbol: Optional[str] = Query(default=None)):
-    rows = load_rows(project_base_dir(), symbol=symbol)
+async def api_features(
+    symbol: Optional[str] = Query(default=None),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+):
+    rows = load_rows(
+        project_base_dir(),
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return JSONResponse(feature_series(rows))
