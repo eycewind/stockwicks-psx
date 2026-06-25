@@ -1,5 +1,7 @@
 {% set url_prefix = request.headers.get("x-forwarded-prefix", "") if request is defined else "" %}
 {% set client_slug = request.app.state.client_slug|default("client") if request is defined else "client" %}
+{% set nav_user = user|default(none) %}
+{% set is_logged_in = nav_user or (request is defined and (request.session.get("user_id") or request.cookies.get("access_token"))) %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -114,8 +116,12 @@
             <a href="{{ url_prefix }}/analysis/strategy-optimizer">Strategy Optimizer</a>
              <a href="{{ url_prefix }}/analysis/logs">Log Analysis</a>
             <a href="{{ url_prefix }}/account">Account</a>
-            <a href="{{ url_prefix }}/auth/register">Register</a>
-            <a href="{{ url_prefix }}/auth/login">Login</a>
+            {% if is_logged_in %}
+                <a href="{{ url_prefix }}/auth/logout">Logout</a>
+            {% else %}
+                <a href="{{ url_prefix }}/auth/register">Register</a>
+                <a href="{{ url_prefix }}/auth/login">Login</a>
+            {% endif %}
         </div>
     </nav>
 

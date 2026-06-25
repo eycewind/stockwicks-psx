@@ -218,8 +218,10 @@ def login(
 
 # ✅ Logout Route
 @router.get("/logout", name="logout_page")
-def logout():
-    response = RedirectResponse(url="/")
+def logout(request: Request):
+    request.session.clear()
+    url_prefix = request.headers.get("x-forwarded-prefix", "")
+    response = RedirectResponse(url=f"{url_prefix}/auth/login")
     response.delete_cookie("access_token")
     return response
 
