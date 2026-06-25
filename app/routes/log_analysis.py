@@ -32,7 +32,7 @@ async def log_analysis_page(request: Request):
         request=request,
         name="log_analysis/index.html",
         context={
-            "title": "Bot Log Analysis",
+            "title": "Trade History Analysis",
         },
     )
 
