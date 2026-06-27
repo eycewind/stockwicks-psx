@@ -189,6 +189,7 @@ async def spx_0dte_form(
         db.close()
 
     return templates.TemplateResponse(
+        request,
         "spx_0dte.html",
         {
             "request": request,
@@ -241,6 +242,7 @@ async def spx_0dte_run(
             raise RuntimeError(result.get("error"))
 
         return templates.TemplateResponse(
+            request,
             "spx_0dte.html",
             {
                 "request": request,
@@ -257,6 +259,7 @@ async def spx_0dte_run(
         )
     except Exception as e:
         return templates.TemplateResponse(
+            request,
             "spx_0dte.html",
             {
                 "request": request,

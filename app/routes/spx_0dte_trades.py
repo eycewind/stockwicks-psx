@@ -156,6 +156,7 @@ def spx_0dte_trades_dashboard(
     summary = _pl_sums(history)
 
     return templates.TemplateResponse(
+        request,
         "spx_0dte_trades.html",
         {
             "request": request,
