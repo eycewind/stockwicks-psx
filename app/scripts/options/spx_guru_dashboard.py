@@ -69,6 +69,18 @@ def _parse_date_input(s: Optional[str]) -> date:
     # ISO
     return datetime.strptime(t, "%Y-%m-%d").date()
 
+def _validate_expiration_date(exp: date) -> None:
+    today = _today_et()
+    if exp < today:
+        raise ValueError(
+            f"{exp.isoformat()} is in the past. Schwab's live option-chain API cannot fetch historical 0DTE chains. "
+            f"Use today or a future trading day."
+        )
+    if exp.weekday() >= 5:
+        raise ValueError(
+            f"{exp.isoformat()} is a weekend. Choose a weekday SPXW expiration date."
+        )
+
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, indent=2, default=str)
 
@@ -96,7 +108,7 @@ def _headers() -> Dict[str, str]:
 # Schwab Fetchers
 # =========================
 
-def fetch_spx_option_chain(exp: date) -> Tuple[pd.DataFrame, float, Dict[str, Any]]:
+def _fetch_chain_for_symbol(symbol: str, exp: date) -> Tuple[pd.DataFrame, float, Dict[str, Any]]:
     """
     Returns:
       df with columns: symbol, putCall, strike, expiration, bid, ask, mark, delta, iv, oi, volume, daysToExpiration
@@ -105,7 +117,7 @@ def fetch_spx_option_chain(exp: date) -> Tuple[pd.DataFrame, float, Dict[str, An
     """
     url = f"{SCHWAB_API_URL}/chains"
     params = {
-        "symbol": "$SPX",
+        "symbol": symbol,
         "contractType": "ALL",
         "strategy": "SINGLE",
         "range": "ALL",
@@ -115,7 +127,7 @@ def fetch_spx_option_chain(exp: date) -> Tuple[pd.DataFrame, float, Dict[str, An
     }
 
     r = requests.get(url, headers=_headers(), params=params, timeout=30)
-    logger.info("Option chain API [$SPX %s] status=%s", exp.strftime("%Y-%m-%d"), r.status_code)
+    logger.info("Option chain API [%s %s] status=%s", symbol, exp.strftime("%Y-%m-%d"), r.status_code)
     if r.status_code != 200:
         raise RuntimeError(f"Option chain API failed: {r.status_code} {r.text[:500]}")
     data = r.json()
@@ -169,8 +181,32 @@ def fetch_spx_option_chain(exp: date) -> Tuple[pd.DataFrame, float, Dict[str, An
     puts = _flatten(data.get("putExpDateMap") or {}, "PUT")
     df = pd.DataFrame(calls + puts)
     if df.empty:
-        raise RuntimeError("No contracts returned for SPX chain.")
+        raise RuntimeError(f"No contracts returned for {symbol} chain.")
     return df, underlying, data
+
+
+def fetch_spx_option_chain(exp: date) -> Tuple[pd.DataFrame, float, Dict[str, Any]]:
+    """
+    Schwab environments differ on the accepted SPX root. Try the same roots
+    used by the live 0DTE runner before giving up.
+    """
+    _validate_expiration_date(exp)
+
+    errors = []
+    for symbol in ("SPXW", "$SPX", "SPX"):
+        try:
+            df, underlying, data = _fetch_chain_for_symbol(symbol, exp)
+            if not df.empty:
+                return df, underlying, data
+        except Exception as exc:
+            errors.append(f"{symbol}: {exc}")
+            logger.warning("Option chain fetch failed for %s %s: %s", symbol, exp, exc)
+
+    raise RuntimeError(
+        "Option chain API failed for SPX roots. "
+        f"Expiration={exp.isoformat()}. Tried SPXW, $SPX, SPX. "
+        f"Last errors: {' | '.join(errors[-3:])}"
+    )
 
 
 def fetch_spx_pricehistory_15m(days: int = 3) -> Optional[pd.DataFrame]:
