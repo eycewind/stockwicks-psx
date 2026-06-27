@@ -9,6 +9,8 @@ from app.models.schwab import BrokerConnection, SchwabAccount
 from app.models.replay import ReplaySession, ReplayOpenTrade, ReplayTradeHistory
 from app.models.audit import AuditEvent
 from app.models.notification_log import TradeNotificationLog
+from app.models.paper_spx_0dte import PaperSPXOpenTrade, PaperSPXPick, PaperSPXTradeHistory
+from app.models.spx_0dte_alert_subscription import SPX0DTEAlertSubscription
 
 __all__ = [
     "User",
@@ -25,4 +27,8 @@ __all__ = [
     "ReplayTradeHistory",
     "AuditEvent",
     "TradeNotificationLog",
+    "PaperSPXOpenTrade",
+    "PaperSPXPick",
+    "PaperSPXTradeHistory",
+    "SPX0DTEAlertSubscription",
 ]

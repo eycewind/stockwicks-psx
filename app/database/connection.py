@@ -125,6 +125,8 @@ from app.models.schwab import SchwabAccount, BrokerConnection  # noqa: F401
 # from app.models.replay import ReplaySession, ReplayOpenTrade, ReplayTradeHistory  # noqa: F401  # disabled: avoids circular import
 from app.models.audit import AuditEvent  # noqa: F401
 from app.models.notification_log import TradeNotificationLog  # noqa: F401
+from app.models.paper_spx_0dte import PaperSPXOpenTrade, PaperSPXPick, PaperSPXTradeHistory  # noqa: F401
+from app.models.spx_0dte_alert_subscription import SPX0DTEAlertSubscription  # noqa: F401
 
 
 # ----------------------------------------------------------------------------

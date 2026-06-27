@@ -42,6 +42,7 @@ from app.modules.dashboard.routes import router as dashboard_router
 from app.modules.broker.routes import router as broker_router, legacy_router as broker_legacy_router
 from app.modules.replay.routes import router as replay_router
 from app.routes import log_analysis
+from app.routes import spx_0dte_routes, spx_0dte_trades
 
 # Schwab routes
 from app.routes.schwab_trade import (
@@ -214,6 +215,8 @@ app.include_router(broker_legacy_router)
 app.include_router(paper_trade_bot.router)
 app.include_router(replay_router)
 app.include_router(log_analysis.router)
+app.include_router(spx_0dte_routes.router)
+app.include_router(spx_0dte_trades.router)
 # External integrations
 # Schwab trade
 app.include_router(schwab_trade_router)  # has prefix="/trade" internally
@@ -231,6 +234,12 @@ app.include_router(schwab_api.router, prefix="/auth")
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting background tasks...")
+    try:
+        from app.services.spx_0dte_schema import ensure_spx_0dte_tables
+
+        ensure_spx_0dte_tables()
+    except Exception as exc:
+        logger.warning("SPX 0DTE schema bootstrap skipped/failed: %s", exc)
 
 # -------------------------
 # Exception Handlers
