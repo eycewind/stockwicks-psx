@@ -42,6 +42,13 @@ ET_TZ = ZoneInfo("America/New_York")
 SPX0DTE_SHARED_USER_ID = int(os.getenv("SPX0DTE_SHARED_USER_ID", "116"))
 
 
+def _prefixed_url(request: Request, path: str) -> str:
+    prefix = (request.headers.get("x-forwarded-prefix") or "").rstrip("/")
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"{prefix}{path}" if prefix else path
+
+
 def _spx_status_path(user_id: int) -> str:
     base_dir = os.getenv("STOCKWICKS_DATA_DIR", "/var/www/stockwicks/data")
     return os.path.join(base_dir, str(int(user_id)), "spx0dte_status.jsonl")
@@ -251,12 +258,13 @@ def spx_0dte_trades_dashboard(
 
 @router.post("/options/spx-0dte-trades/alerts/subscribe", name="spx_0dte_alerts_subscribe")
 def spx_0dte_alerts_subscribe(
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     email = (getattr(user, "email", "") or "").strip()
     if not email:
-        return RedirectResponse(url="/options/spx-0dte-trades?alert=NO_EMAIL", status_code=302)
+        return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades?alert=NO_EMAIL"), status_code=302)
 
     sub = _get_alert_subscription(db, user.id)
     try:
@@ -271,15 +279,16 @@ def spx_0dte_alerts_subscribe(
             )
             db.add(sub)
         db.commit()
-        return RedirectResponse(url="/options/spx-0dte-trades?alert=SUBSCRIBED", status_code=302)
+        return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades?alert=SUBSCRIBED"), status_code=302)
     except Exception as e:
         db.rollback()
         log.exception("Failed to subscribe SPX 0DTE alerts: %s", e)
-        return RedirectResponse(url="/options/spx-0dte-trades?alert=ERROR", status_code=302)
+        return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades?alert=ERROR"), status_code=302)
 
 
 @router.post("/options/spx-0dte-trades/alerts/unsubscribe", name="spx_0dte_alerts_unsubscribe")
 def spx_0dte_alerts_unsubscribe(
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -288,15 +297,16 @@ def spx_0dte_alerts_unsubscribe(
         if sub:
             sub.is_active = False
             db.commit()
-        return RedirectResponse(url="/options/spx-0dte-trades?alert=UNSUBSCRIBED", status_code=302)
+        return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades?alert=UNSUBSCRIBED"), status_code=302)
     except Exception as e:
         db.rollback()
         log.exception("Failed to unsubscribe SPX 0DTE alerts: %s", e)
-        return RedirectResponse(url="/options/spx-0dte-trades?alert=ERROR", status_code=302)
+        return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades?alert=ERROR"), status_code=302)
 
 
 @router.post("/options/spx-0dte-trades/run-now")
 def spx_0dte_run_now(
+    request: Request,
     mode: str = Form("both"),
     max_risk: float = Form(100.0),
     db: Session = Depends(get_db),
@@ -309,11 +319,12 @@ def spx_0dte_run_now(
         log.exception("Failed to enqueue SPX run-now: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
-    return RedirectResponse(url="/options/spx-0dte-trades", status_code=302)
+    return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades"), status_code=302)
 
 
 @router.post("/options/spx-0dte-trades/close/{trade_id}")
 def spx_0dte_close_trade(
+    request: Request,
     trade_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -339,7 +350,7 @@ def spx_0dte_close_trade(
             details={"manual": True, "closed_from_shared_dashboard": True},
         )
         db.commit()
-        return RedirectResponse(url="/options/spx-0dte-trades", status_code=302)
+        return RedirectResponse(url=_prefixed_url(request, "/options/spx-0dte-trades"), status_code=302)
     except Exception as e:
         db.rollback()
         log.exception("Manual close failed: %s", e)

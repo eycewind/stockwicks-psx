@@ -41,6 +41,13 @@ router = APIRouter()
 SPX_GURU_SCRIPT = str(Path(__file__).resolve().parents[1] / "scripts" / "options" / "spx_guru_dashboard.py")
 
 
+def _prefixed_url(request: Request, path: str) -> str:
+    prefix = (request.headers.get("x-forwarded-prefix") or "").rstrip("/")
+    if not path.startswith("/"):
+        path = "/" + path
+    return f"{prefix}{path}" if prefix else path
+
+
 def _get_user_from_request(request: Request):
     """
     Best-effort user resolver (works with both request.state.user and session dicts).
@@ -94,7 +101,7 @@ def require_user(request: Request) -> Optional[RedirectResponse]:
         try:
             login_url = request.url_for("login_page")
         except Exception:
-            login_url = "/login"
+            login_url = _prefixed_url(request, "/auth/login")
         return RedirectResponse(url=str(login_url), status_code=HTTP_303_SEE_OTHER)
     return None
 
@@ -290,8 +297,8 @@ def spx0dte_form_close_trade(
     using `return_to` (safe, same-site path only). Default is /options/spx-0dte-bot.
     """
     user_id = _extract_user_id(user)
-    success_url = _safe_return_to(return_to, default_path="/options/spx-0dte-bot") + "?ok=MANUAL_CLOSED"
-    fail_url = _safe_return_to(return_to, default_path="/options/spx-0dte-bot") + "?err=CLOSE_FAILED"
+    success_url = _prefixed_url(request, _safe_return_to(return_to, default_path="/options/spx-0dte")) + "?ok=MANUAL_CLOSED"
+    fail_url = _prefixed_url(request, _safe_return_to(return_to, default_path="/options/spx-0dte")) + "?err=CLOSE_FAILED"
 
     db = SessionLocal()
     try:
@@ -302,13 +309,13 @@ def spx0dte_form_close_trade(
         )
         if not ot:
             return RedirectResponse(
-                url=_safe_return_to(return_to) + "?err=TRADE_NOT_FOUND",
+                url=_prefixed_url(request, _safe_return_to(return_to, default_path="/options/spx-0dte")) + "?err=TRADE_NOT_FOUND",
                 status_code=HTTP_303_SEE_OTHER,
             )
 
         if int(ot.user_id or 0) != int(user_id) or (ot.status or "").upper() != "OPEN":
             return RedirectResponse(
-                url=_safe_return_to(return_to) + "?err=NOT_ALLOWED",
+                url=_prefixed_url(request, _safe_return_to(return_to, default_path="/options/spx-0dte")) + "?err=NOT_ALLOWED",
                 status_code=HTTP_303_SEE_OTHER,
             )
 

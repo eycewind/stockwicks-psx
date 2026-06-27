@@ -307,11 +307,11 @@
       </div>
       <div>
         {% if spx_alert_subscribed %}
-          <form method="POST" action="{{ url_for('spx_0dte_alerts_unsubscribe') }}" style="display:inline;">
+          <form method="POST" action="{{ url_prefix }}/options/spx-0dte-trades/alerts/unsubscribe" style="display:inline;">
             <button class="btn-alert-unsubscribe" type="submit">Unsubscribe</button>
           </form>
         {% else %}
-          <form method="POST" action="{{ url_for('spx_0dte_alerts_subscribe') }}" style="display:inline;">
+          <form method="POST" action="{{ url_prefix }}/options/spx-0dte-trades/alerts/subscribe" style="display:inline;">
             <button class="btn-alert-subscribe" type="submit">Subscribe</button>
           </form>
         {% endif %}
@@ -438,7 +438,7 @@
               {{ t.opened_at_et if t.opened_at_et else '—' }}
             </td>
             <td>
-              <form method="POST" action="{{ url_for('spx_0dte_close_trade', trade_id=t.id) }}" style="display:inline;"
+              <form method="POST" action="{{ url_prefix }}/options/spx-0dte-trades/close/{{ t.id }}" style="display:inline;"
                     onsubmit="return confirm('Close this trade now?');">
                 <button class="btn-close-trade" type="submit">Close</button>
               </form>
