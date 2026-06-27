@@ -17,6 +17,8 @@ Shared dashboard + subscriber alerts:
 
 import logging
 import os
+import json
+from datetime import datetime
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
@@ -38,6 +40,78 @@ log = logging.getLogger(__name__)
 
 ET_TZ = ZoneInfo("America/New_York")
 SPX0DTE_SHARED_USER_ID = int(os.getenv("SPX0DTE_SHARED_USER_ID", "116"))
+
+
+def _spx_status_path(user_id: int) -> str:
+    base_dir = os.getenv("STOCKWICKS_DATA_DIR", "/var/www/stockwicks/data")
+    return os.path.join(base_dir, str(int(user_id)), "spx0dte_status.jsonl")
+
+
+def _parse_status_ts(value: str):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _load_bot_status(user_id: int) -> dict:
+    path = _spx_status_path(user_id)
+    default = {
+        "is_running": False,
+        "status_reason": "No SPX bot status file yet.",
+        "status_path": path,
+        "age_seconds": None,
+        "last": {},
+        "last_runs": [],
+    }
+
+    if not os.path.exists(path):
+        return default
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+    except Exception as exc:
+        log.warning("Failed reading SPX status file %s: %s", path, exc)
+        default["status_reason"] = f"Could not read status file: {exc}"
+        return default
+
+    rows = []
+    for line in lines[-5:]:
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        ts = _parse_status_ts(row.get("ts_et"))
+        if ts:
+            row["ts_et_display"] = ts.strftime("%I:%M %p").lstrip("0")
+        else:
+            row["ts_et_display"] = row.get("ts_et") or ""
+        rows.append(row)
+
+    if not rows:
+        default["status_reason"] = "Status file exists but has no readable rows."
+        return default
+
+    last = rows[-1]
+    last_ts = _parse_status_ts(last.get("ts_et"))
+    age_seconds = None
+    if last_ts:
+        now_et = datetime.now(ET_TZ)
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=ET_TZ)
+        age_seconds = max(0.0, (now_et - last_ts.astimezone(ET_TZ)).total_seconds())
+
+    return {
+        "is_running": age_seconds is not None and age_seconds <= 600,
+        "status_reason": last.get("reason") or last.get("status") or "Status loaded.",
+        "status_path": path,
+        "age_seconds": age_seconds,
+        "last": last,
+        "last_runs": list(reversed(rows)),
+    }
 
 
 def _utc_to_et(dt):
@@ -154,6 +228,7 @@ def spx_0dte_trades_dashboard(
 
     _decorate_time_fields(open_trades, history)
     summary = _pl_sums(history)
+    bot_status = _load_bot_status(shared_user_id)
 
     return templates.TemplateResponse(
         request,
@@ -165,6 +240,7 @@ def spx_0dte_trades_dashboard(
             "picks": picks,
             "history": history,
             "summary": summary,
+            "bot_status": bot_status,
             "spx_shared_user_id": shared_user_id,
             "spx_alert_subscribed": alert_subscribed,
             "spx_alert_email": alert_email,

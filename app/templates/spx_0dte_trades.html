@@ -438,9 +438,8 @@
               {{ t.opened_at_et if t.opened_at_et else '—' }}
             </td>
             <td>
-              <form method="POST" action="{{ url_for('spx0dte_close_trade') }}" style="display:inline;"
+              <form method="POST" action="{{ url_for('spx_0dte_close_trade', trade_id=t.id) }}" style="display:inline;"
                     onsubmit="return confirm('Close this trade now?');">
-                <input type="hidden" name="trade_id" value="{{ t.id }}">
                 <button class="btn-close-trade" type="submit">Close</button>
               </form>
             </td>
