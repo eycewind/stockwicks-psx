@@ -236,8 +236,67 @@
   {% endif %}
 
   {% if result %}
+    {% set picks = result.picks %}
+    {% set trend = (result.momentum.trend or "UNKNOWN")|upper %}
+    {% set preferred_key = "credit_call" if trend in ["DOWN", "BEARISH"] else "credit_put" if trend in ["UP", "BULLISH"] else "credit_call" %}
+    {% set preferred = picks.get(preferred_key) or picks.get("credit_put") or picks.get("credit_call") or picks.get("debit_put") or picks.get("debit_call") %}
+
+    <div style="margin-top:18px; display:grid; grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr); gap:16px; align-items:start;">
+      <div style="background:#0d1117; border:1px solid #2d3748; border-radius:14px; padding:18px; text-align:left;">
+        <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center;">
+          <h3 style="margin:0; color:#22d3ee;">Best Match For Your SPX Spread Style</h3>
+          <span style="background:#334155; color:#e5e7eb; border-radius:999px; padding:6px 12px; font-weight:800;">
+            {{ result.expiration }} • SPX {{ "%.2f"|format(result.underlying) if result.underlying is not none else "N/A" }}
+          </span>
+        </div>
+
+        {% if preferred %}
+          {% set is_call = "CALL" in preferred.action %}
+          {% set long_strike = preferred.strike + 10 if is_call else preferred.strike - 10 %}
+          {% set quick_target = preferred.entry - 0.55 %}
+          <div style="margin-top:14px; background:#111827; border:1px solid #374151; border-radius:12px; padding:16px;">
+            <div style="font-size:13px; color:#a7a7c7; font-weight:800;">Suggested spread candidate, not a blind auto-trade</div>
+            <div style="font-size:1.35rem; font-weight:900; margin-top:5px; color:#ffffff;">
+              {% if is_call %}
+                Bearish / rejection idea: SELL {{ "%.0f"|format(preferred.strike) }}/{{ "%.0f"|format(long_strike) }} CALL credit spread
+              {% else %}
+                Bullish / bounce idea: SELL {{ "%.0f"|format(preferred.strike) }}/{{ "%.0f"|format(long_strike) }} PUT credit spread
+              {% endif %}
+            </div>
+            <div style="margin-top:8px; color:#e5e7eb; line-height:1.55;">
+              Short leg from Schwab: <b>{{ preferred.symbol }}</b><br>
+              Short premium: <b>${{ "%.2f"|format(preferred.entry) }}</b>
+              {% if quick_target > 0 %}
+                • Quick buy-back target: <b>${{ "%.2f"|format(quick_target) }}</b> to <b>${{ "%.2f"|format(preferred.entry - 0.50) }}</b>
+              {% endif %}
+              <br>
+              Contracts: <b>{{ preferred.contracts }}</b>
+            </div>
+          </div>
+
+          <div style="margin-top:14px; background:#1f2937; border-left:4px solid #f59e0b; border-radius:10px; padding:13px; color:#f9fafb;">
+            <b>How to use this:</b> confirm your bounce/rejection on the chart first. Use this as the
+            <b>short strike candidate</b>, add the 10-point long leg for protection, and only enter if the real spread credit/risk fits.
+          </div>
+        {% else %}
+          <div style="margin-top:14px; background:#1f2937; border-radius:10px; padding:14px;">No usable SPX pick was returned.</div>
+        {% endif %}
+      </div>
+
+      <div style="background:#101827; border:1px solid #2d3748; border-radius:14px; padding:18px; text-align:left;">
+        <h3 style="margin:0 0 10px 0; color:#22d3ee;">Decision Guide</h3>
+        <div style="line-height:1.6; color:#e5e7eb;">
+          <b>Trend DOWN:</b> prefer call credit spread above price.<br>
+          <b>Trend UP:</b> prefer put credit spread below price.<br>
+          <b>OI pin LOW:</b> do not rely on pin as the main reason.<br>
+          <b>Risk too high:</b> reduce contracts or skip.<br>
+          <b>Exit:</b> quick premium decay. Do not hold long.
+        </div>
+      </div>
+    </div>
+
     <div class="card mt-3" style="background:#0d1117; border:1px solid #2d3748; border-radius:14px; padding:18px;">
-      <h3 style="margin:0 0 10px 0;">Recommendation</h3>
+      <h3 style="margin:0 0 10px 0;">Raw Candidates And Market Data</h3>
 
       <div class="row g-3">
         <div class="col-md-4">
