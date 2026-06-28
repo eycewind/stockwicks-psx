@@ -307,10 +307,10 @@ def _parse_oauth_state(state: str | None) -> tuple[str, int]:
     # New commercial dispatcher format:
     # client_slug:market:3:timestamp:nonce:signature
     if len(parts) == 6:
-        client_slug, api_kind, user_id_raw, ts, nonce, sig = parts
-        payload = f"{client_slug}:{api_kind}:{user_id_raw}:{ts}:{nonce}"
+        state_client_slug, api_kind, user_id_raw, ts, nonce, sig = parts
+        payload = f"{state_client_slug}:{api_kind}:{user_id_raw}:{ts}:{nonce}"
 
-        if client_slug != expected_client_slug:
+        if state_client_slug != expected_client_slug:
             raise HTTPException(status_code=400, detail="Invalid Schwab OAuth client.")
 
     # Old backward-compatible format:
