@@ -160,10 +160,131 @@
 
   .legend { color:#aab2ff; }
 
+  .results-card {
+    background:#0d1117;
+    border:1px solid #2d3748;
+    border-radius:8px;
+    padding:18px;
+    text-align:left;
+  }
+
+  .raw-grid,
+  .signal-grid,
+  .candidate-grid,
+  .candidate-stats {
+    display:grid;
+    gap:12px;
+  }
+
+  .raw-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  .signal-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); margin-top:12px; }
+  .candidate-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; margin-top:14px; }
+  .candidate-stats { grid-template-columns:repeat(4, minmax(0, 1fr)); margin-top:12px; gap:8px; }
+
+  .metric-box,
+  .stat-cell {
+    background:#111827;
+    border:1px solid #263244;
+    border-radius:8px;
+    min-width:0;
+  }
+
+  .metric-box { padding:12px 14px; min-height:76px; }
+  .stat-cell { padding:9px 10px; }
+
+  .metric-label,
+  .stat-label {
+    color:#a7b0c5;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:0;
+  }
+
+  .metric-label { font-size:.78rem; margin-bottom:4px; }
+  .stat-label { font-size:.72rem; }
+
+  .metric-value,
+  .stat-value {
+    color:#f8fafc;
+    font-weight:900;
+    line-height:1.25;
+    overflow-wrap:anywhere;
+  }
+
+  .metric-value { font-size:1.12rem; }
+  .stat-value { font-size:.98rem; margin-top:2px; }
+
+  .candidate-card {
+    background:#141b25;
+    border:1px solid #2d3748;
+    border-radius:8px;
+    padding:14px;
+    min-width:0;
+  }
+
+  .candidate-card.sell { border-top:3px solid #f97316; }
+  .candidate-card.buy { border-top:3px solid #22d3ee; }
+
+  .candidate-head {
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:12px;
+    margin-bottom:12px;
+  }
+
+  .candidate-title {
+    color:#f8fafc;
+    font-weight:900;
+    font-size:1rem;
+  }
+
+  .confidence-pill {
+    background:#243044;
+    color:#e5e7eb;
+    border-radius:999px;
+    padding:4px 9px;
+    font-size:.82rem;
+    font-weight:800;
+    white-space:nowrap;
+  }
+
+  .candidate-symbol {
+    color:#f8fafc;
+    font-size:.95rem;
+    line-height:1.4;
+    margin-bottom:12px;
+    overflow-wrap:anywhere;
+  }
+
+  .candidate-action {
+    color:#ffffff;
+    font-size:1rem;
+    font-weight:900;
+  }
+
+  .candidate-note {
+    margin-top:12px;
+    color:#dbeafe;
+    font-size:.9rem;
+    line-height:1.45;
+  }
+
   @media (max-width: 576px){
     .banner-heading { font-size: 1.45rem; }
     .summary-card .fs-5 { font-size: 1.05rem !important; }
     .trading-price { font-size: 1.1rem; }
+  }
+
+  @media (max-width: 900px){
+    .raw-grid,
+    .signal-grid,
+    .candidate-grid {
+      grid-template-columns:1fr;
+    }
+    .candidate-stats {
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+    }
   }
 </style>
 
@@ -295,46 +416,40 @@
       </div>
     </div>
 
-    <div class="card mt-3" style="background:#0d1117; border:1px solid #2d3748; border-radius:14px; padding:18px;">
-      <h3 style="margin:0 0 10px 0;">Raw Candidates And Market Data</h3>
+    <div class="results-card mt-3">
+      <h3 style="margin:0 0 14px 0;">Raw Candidates And Market Data</h3>
 
-      <div class="row g-3">
-        <div class="col-md-4">
-          <div style="color:#e5e7eb;">Symbol</div>
-          <div style="font-size:1.2rem; font-weight:700;">{{ result.symbol }}</div>
+      <div class="raw-grid">
+        <div class="metric-box">
+          <div class="metric-label">Symbol</div>
+          <div class="metric-value">{{ result.symbol }}</div>
         </div>
-        <div class="col-md-4">
-          <div style="color:#e5e7eb;">Expiration</div>
-          <div style="font-size:1.2rem; font-weight:700;">{{ result.expiration }}</div>
+        <div class="metric-box">
+          <div class="metric-label">Expiration</div>
+          <div class="metric-value">{{ result.expiration }}</div>
         </div>
-        <div class="col-md-4">
-          <div style="color:#e5e7eb;">Underlying</div>
-          <div style="font-size:1.2rem; font-weight:700;">
+        <div class="metric-box">
+          <div class="metric-label">Underlying</div>
+          <div class="metric-value">
             {% if result.underlying is not none %}${{ "%.2f"|format(result.underlying) }}{% else %}N/A{% endif %}
           </div>
         </div>
       </div>
 
-      <hr style="border-color:#2d3748;">
-
-      <div class="row g-3">
-        <div class="col-md-6">
-          <h5 style="margin-bottom:8px;">Momentum</h5>
-          <div style="color:#e5e7eb;">Trend: <b style="color:#e5e7eb;">{{ result.momentum.trend }}</b></div>
-          <div style="color:#e5e7eb;">Score: <b style="color:#e5e7eb;">{{ result.momentum.score }}/100</b></div>
-          <div style="color:#e5e7eb;">Volatility: <b style="color:#e5e7eb;">{{ result.momentum.volatility }}</b></div>
+      <div class="signal-grid">
+        <div class="metric-box">
+          <div class="metric-label">Momentum</div>
+          <div class="metric-value">{{ result.momentum.trend }}</div>
+          <div style="color:#dbeafe; margin-top:6px;">Score {{ result.momentum.score }}/100 &bull; Volatility {{ result.momentum.volatility }}</div>
         </div>
-        <div class="col-md-6">
-          <h5 style="margin-bottom:8px;">OI Pin</h5>
-          <div style="color:#e5e7eb;">Pin: <b style="color:#e5e7eb;">{{ result.pin.pin }}</b></div>
-          <div style="color:#e5e7eb;">Bias: <b style="color:#e5e7eb;">{{ result.pin.bias }}</b></div>
-          <div style="color:#e5e7eb;">Pin Confidence: <b style="color:#e5e7eb;">{{ result.pin.pin_confidence }}</b></div>
+        <div class="metric-box">
+          <div class="metric-label">OI Pin</div>
+          <div class="metric-value">{{ result.pin.pin }}</div>
+          <div style="color:#dbeafe; margin-top:6px;">Bias {{ result.pin.bias }} &bull; Confidence {{ result.pin.pin_confidence }}</div>
         </div>
       </div>
 
-      <hr style="border-color:#2d3748;">
-
-      <div class="row g-3">
+      <div class="candidate-grid">
 
         {% set picks = result.picks %}
 
@@ -345,37 +460,31 @@
           ("debit_put","Debit Put (BUY)")
         ] %}
           {% if picks.get(key) %}
-            <div class="col-md-6">
-              <div class="card" style="background:#161b22; border:1px solid #2d3748; border-radius:14px; padding:14px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <div style="font-weight:800;">{{ label }}</div>
-                  <div style="color:#e5e7eb;">{{ picks[key].confidence_level }} ({{ picks[key].confidence }}/100)</div>
+            {% set pick = picks[key] %}
+            <div class="candidate-card {{ 'sell' if 'SELL' in pick.action else 'buy' }}">
+              <div class="candidate-head">
+                  <div class="candidate-title">{{ label }}</div>
+                  <div class="confidence-pill">{{ pick.confidence_level }} {{ pick.confidence }}/100</div>
                 </div>
 
-                <div style="margin-top:10px; color:#e5e7eb;">
-                  <div><b>{{ picks[key].symbol }}</b> — Strike <b>{{ "%.2f"|format(picks[key].strike) }}</b> — Exp <b>{{ picks[key].expiration }}</b></div>
-                  <div style="margin-top:6px;"><b>{{ picks[key].action }}</b> @ <b>{{ "%.2f"|format(picks[key].entry) }}</b></div>
+                <div class="candidate-symbol">
+                  <div><b>{{ pick.symbol }}</b> &bull; Strike <b>{{ "%.2f"|format(pick.strike) }}</b> &bull; Exp <b>{{ pick.expiration }}</b></div>
+                  <div class="candidate-action">{{ pick.action }} @ {{ "%.2f"|format(pick.entry) }}</div>
                 </div>
 
-                <div class="row mt-2 g-2">
-                  <div class="col-6"><div style="color:#e5e7eb;">Target 1</div><div><b>{{ "%.2f"|format(picks[key].target1) }}</b></div></div>
-                  <div class="col-6"><div style="color:#e5e7eb;">Target 2</div><div><b>{{ "%.2f"|format(picks[key].target2) }}</b></div></div>
-                  <div class="col-6"><div style="color:#e5e7eb;">Stop</div><div><b>{{ "%.2f"|format(picks[key].stop) }}</b></div></div>
-                  <div class="col-6"><div style="color:#e5e7eb;">Contracts</div><div><b>{{ picks[key].contracts }}</b></div></div>
+                <div class="candidate-stats">
+                  <div class="stat-cell"><div class="stat-label">Target 1</div><div class="stat-value">{{ "%.2f"|format(pick.target1) }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Target 2</div><div class="stat-value">{{ "%.2f"|format(pick.target2) }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Stop</div><div class="stat-value">{{ "%.2f"|format(pick.stop) }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Contracts</div><div class="stat-value">{{ pick.contracts }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Est Risk</div><div class="stat-value">${{ "%.2f"|format(pick.est_risk_usd) }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Est R1</div><div class="stat-value">${{ "%.2f"|format(pick.est_reward1_usd) }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Est R2</div><div class="stat-value">${{ "%.2f"|format(pick.est_reward2_usd) }}</div></div>
+                  <div class="stat-cell"><div class="stat-label">Score</div><div class="stat-value">{{ pick.score }}</div></div>
                 </div>
 
-                <div class="row mt-2 g-2">
-                  <div class="col-6"><div style="color:#e5e7eb;">Est Risk</div><div><b>${{ "%.2f"|format(picks[key].est_risk_usd) }}</b></div></div>
-                  <div class="col-6"><div style="color:#e5e7eb;">Est R1</div><div><b>${{ "%.2f"|format(picks[key].est_reward1_usd) }}</b></div></div>
-                  <div class="col-6"><div style="color:#e5e7eb;">Est R2</div><div><b>${{ "%.2f"|format(picks[key].est_reward2_usd) }}</b></div></div>
-                  <div class="col-6"><div style="color:#e5e7eb;">Score</div><div><b>{{ picks[key].score }}</b></div></div>
-                </div>
-
-                <div style="margin-top:10px; color:#e5e7eb; font-size:0.95rem;">
-                  {{ picks[key].notes }}
-                </div>
+                <div class="candidate-note">{{ pick.notes }}</div>
               </div>
-            </div>
           {% endif %}
         {% endfor %}
 
