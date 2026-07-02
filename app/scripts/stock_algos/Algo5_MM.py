@@ -526,13 +526,17 @@ def _append_jsonl(path: str, row: dict) -> None:
         logger.warning("Failed writing jsonl %s", path, exc_info=True)
 
 
+def _safe_symbol_for_files(symbol: str) -> str:
+    return str(symbol or "").upper().strip().replace("/", "_").replace(" ", "_")
+
+
 def _log_candle_jsonl(log_dir: str, bot: PaperStockTradeBot, interval: str, df: pd.DataFrame) -> None:
     if df is None or df.empty:
         return
     row = df.iloc[-1]
     ts = row.name
     ts_et = _fmt_est(ts)
-    path = os.path.join(log_dir, f"bot_{bot.id}_{bot.symbol}_{interval}_candles.jsonl")
+    path = os.path.join(log_dir, f"bot_{bot.id}_{_safe_symbol_for_files(bot.symbol)}_{interval}_candles.jsonl")
     _append_jsonl(
         path,
         {
@@ -616,7 +620,8 @@ def log_trade_decision(
 
     if cfg:
         log_dir = os.path.dirname(log_file)
-        decision_path = os.path.join(log_dir, f"bot_{symbol}_{interval}_decisions_unkeyed.jsonl")
+        safe_symbol = _safe_symbol_for_files(symbol)
+        decision_path = os.path.join(log_dir, f"bot_{safe_symbol}_{interval}_decisions_unkeyed.jsonl")
         if open_trade is not None:
             bot_id_for_name = getattr(open_trade, "bot_id", "unknown")
         else:
@@ -626,7 +631,7 @@ def log_trade_decision(
             except Exception:
                 bot_id_for_name = "unknown"
 
-        decision_path = os.path.join(log_dir, f"bot_{bot_id_for_name}_{symbol}_{cfg.algo_name}_decisions.jsonl")
+        decision_path = os.path.join(log_dir, f"bot_{bot_id_for_name}_{safe_symbol}_{cfg.algo_name}_decisions.jsonl")
         _append_jsonl(
             decision_path,
             {
@@ -800,7 +805,7 @@ def run_algoMM_bot_tick(
         interval = bot.interval or "1min"
         log_dir = os.path.join(DATA_ROOT, str(bot.user_id))
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, f"bot_{bot.id}_{bot.symbol}_{cfg.algo_name}.log")
+        log_file = os.path.join(log_dir, f"bot_{bot.id}_{_safe_symbol_for_files(bot.symbol)}_{cfg.algo_name}.log")
 
         df_raw = _fetch_source_bars_for_bot(runner, bot, interval, cfg)
         if df_raw is None or df_raw.empty:

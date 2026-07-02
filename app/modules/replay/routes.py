@@ -230,7 +230,7 @@ def _parse_optimizer_symbols(symbols_text: str, max_symbols: int = OPTIMIZER_MAX
     ]
     symbols: list[str] = []
     for symbol in raw_symbols:
-        if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", symbol):
+        if not re.fullmatch(r"(?:[A-Z][A-Z0-9.\-]{0,9}|/[A-Z]{1,3}[FGHJKMNQUVXZ]\d{1,2})", symbol):
             raise HTTPException(status_code=400, detail=f"Invalid symbol: {symbol}")
         if symbol not in symbols:
             symbols.append(symbol)

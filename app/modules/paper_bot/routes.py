@@ -41,18 +41,23 @@ def _read_jsonl(path: Path, limit: int = 500):
     return rows[-limit:]
 
 
+def _safe_symbol_for_files(symbol: str) -> str:
+    return str(symbol or "").upper().strip().replace("/", "_").replace(" ", "_")
+
+
 def _bot_log_payload(bot: PaperStockTradeBot):
     user_id = int(bot.user_id)
     bot_id = int(bot.id)
     symbol = str(bot.symbol).upper()
+    safe_symbol = _safe_symbol_for_files(symbol)
     interval = str(bot.interval)
     algo_name = str(bot.algo_name)
 
     base_dir = data_dir() / str(user_id)
 
-    candles_path = base_dir / f"bot_{bot_id}_{symbol}_{interval}_candles.jsonl"
-    decisions_path = base_dir / f"bot_{bot_id}_{symbol}_{algo_name}_decisions.jsonl"
-    events_path = base_dir / f"bot_{bot_id}_{symbol}_{algo_name}_events.jsonl"
+    candles_path = base_dir / f"bot_{bot_id}_{safe_symbol}_{interval}_candles.jsonl"
+    decisions_path = base_dir / f"bot_{bot_id}_{safe_symbol}_{algo_name}_decisions.jsonl"
+    events_path = base_dir / f"bot_{bot_id}_{safe_symbol}_{algo_name}_events.jsonl"
 
     candles = _read_jsonl(candles_path, limit=500)
     decisions = _read_jsonl(decisions_path, limit=100)

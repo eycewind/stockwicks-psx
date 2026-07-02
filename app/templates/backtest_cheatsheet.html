@@ -250,6 +250,7 @@ const HISTORY_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/history";
 const BATCH_URL = "{{ url_prefix }}/analysis/strategy-optimizer/api/run-qqq-batch";
 const REPLAY_URL = "{{ url_prefix }}/replay-simulator";
 const OPTIMIZER_URL = "{{ url_prefix }}/analysis/strategy-optimizer";
+const SYMBOL_RE = /^(?:[A-Z][A-Z0-9.-]{0,9}|\/[A-Z]{1,3}[FGHJKMNQUVXZ]\d{1,2})$/;
 let latestRows = [];
 let topRows = [];
 let algoRows = [];
@@ -471,7 +472,7 @@ function detailFilterFromUrl() {
   const interval = String(params.get("interval") || "").trim().toLowerCase();
   return {
     runId: /^[A-Za-z0-9_.-]{1,80}$/.test(runId) ? runId : "",
-    symbol: /^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol) ? symbol : "",
+    symbol: SYMBOL_RE.test(symbol) ? symbol : "",
     interval: ["1min", "5min", "10min", "15min", "30min", "1d"].includes(interval) ? interval : ""
   };
 }
@@ -631,7 +632,7 @@ function parseBatchSymbols() {
   if (!unique.length) throw new Error("Enter 1 to 10 comma-separated symbols.");
   if (unique.length > 10) throw new Error("Enter at most 10 symbols per batch.");
   for (const symbol of unique) {
-    if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(symbol)) throw new Error(`Invalid symbol: ${symbol}`);
+    if (!SYMBOL_RE.test(symbol)) throw new Error(`Invalid symbol: ${symbol}`);
   }
   return unique;
 }

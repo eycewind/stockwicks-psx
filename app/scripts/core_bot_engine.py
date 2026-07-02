@@ -20,6 +20,10 @@ SCHWAB_INTERVALS = {
     '1wk': ('year', 1, 'weekly', 1),
 }
 
+def safe_symbol_for_files(symbol: str) -> str:
+    return str(symbol or "").upper().strip().replace("/", "_").replace(" ", "_")
+
+
 def get_schwab_1min_history(symbol, num_days=7):
     from app.utils.stock.schwab_token import get_valid_access_token
 
@@ -145,7 +149,7 @@ def get_stock_data(symbol, interval):
 def save_price_data_to_csv(user_id, symbol, interval, output_dir="/var/www/stockwicks/data"):
     user_dir = os.path.join(output_dir, str(user_id))
     os.makedirs(user_dir, exist_ok=True)
-    filename = f"{user_id}_{symbol}_{interval}_data.csv"
+    filename = f"{user_id}_{safe_symbol_for_files(symbol)}_{interval}_data.csv"
     filepath = os.path.join(user_dir, filename)
 
     if interval == '1min':

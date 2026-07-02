@@ -1,7 +1,7 @@
 # app/scripts/fetch_single_interval.py
 # app/scripts/fetch_single_interval.py
 import os, time, logging
-from app.scripts.core_bot_engine import save_price_data_to_csv
+from app.scripts.core_bot_engine import safe_symbol_for_files, save_price_data_to_csv
 
 DEFAULT_DATA_DIR = "/var/www/stockwicks/data"
 
@@ -46,7 +46,8 @@ def fetch_if_needed(user_id: int, symbol: str, interval: str,
     user_dir = os.path.join(data_dir, str(user_id))
     os.makedirs(user_dir, exist_ok=True)
 
-    path = os.path.join(user_dir, f"{user_id}_{symbol}_{interval}_data.csv")
+    safe_symbol = safe_symbol_for_files(symbol)
+    path = os.path.join(user_dir, f"{user_id}_{safe_symbol}_{interval}_data.csv")
     lockfile = _lock_path(path)
 
     # choose staleness window
@@ -81,7 +82,7 @@ def fetch_if_needed(user_id: int, symbol: str, interval: str,
 
         # 🆕 Cleanup: remove any old files before fetching
         for f in os.listdir(user_dir):
-            if f.startswith(f"{user_id}_{symbol}_{interval}_") and f.endswith(".csv"):
+            if f.startswith(f"{user_id}_{safe_symbol}_{interval}_") and f.endswith(".csv"):
                 try:
                     os.remove(os.path.join(user_dir, f))
                     logging.info(f"[{symbol}] removed stale file {f}")

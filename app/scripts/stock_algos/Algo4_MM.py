@@ -1070,7 +1070,8 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
         # Set up log file
         log_dir = os.path.join(DATA_ROOT, str(bot.user_id))
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, f"bot_{bot.id}_{bot.symbol}_AlgoMM.log")
+        safe_symbol = str(bot.symbol or "").replace("/", "_").replace(" ", "_").upper()
+        log_file = os.path.join(log_dir, f"bot_{bot.id}_{safe_symbol}_AlgoMM.log")
 
         # Fetch raw data and resample
         df_raw = _fetch_source_bars_for_bot(runner, bot, cfg)

@@ -1212,7 +1212,8 @@ def _bot_log_path(user_id: int, bot_id: int, symbol: str, algo_name: str) -> Pat
     /var/www/stockwicks/data/116/bot_393_AVGO_AlgoMM.log
     """
     base = Path(DATA_DIR) / str(user_id)
-    fname = f"bot_{bot_id}_{symbol}_{algo_name}.log"
+    safe_symbol = str(symbol or "").upper().strip().replace("/", "_").replace(" ", "_")
+    fname = f"bot_{bot_id}_{safe_symbol}_{algo_name}.log"
     return base / fname
 
 

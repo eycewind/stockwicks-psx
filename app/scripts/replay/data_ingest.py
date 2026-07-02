@@ -70,12 +70,16 @@ def get_replay_dir(user_id: int) -> Path:
     return p
 
 
+def safe_symbol_for_files(symbol: str) -> str:
+    return str(symbol or "").upper().strip().replace("/", "_").replace(" ", "_")
+
+
 def get_data_paths(user_id: int, symbol: str) -> tuple[Path, Path]:
     """
     Returns (csv_path, meta_path) for a given user+symbol.
     """
     d = get_replay_dir(user_id)
-    sym = symbol.upper()
+    sym = safe_symbol_for_files(symbol)
     return d / f"{sym}_1min.csv", d / f"{sym}_1min.meta.json"
 
 

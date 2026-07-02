@@ -393,10 +393,11 @@ class StockBaseRunner:
     def csv_fallback(self, user_id: int, symbol: str, interval: str) -> Optional[pd.DataFrame]:
         try:
             from app.utils.stock.fetch_single_interval import fetch_if_needed
+            from app.scripts.core_bot_engine import safe_symbol_for_files
             chosen = (interval or "1min").lower()
             fetch_if_needed(user_id, symbol, chosen, force=True)
             user_dir = f"/var/www/stockwicks/data/{user_id}"
-            csv_path = os.path.join(user_dir, f"{user_id}_{symbol}_{chosen}_data.csv")
+            csv_path = os.path.join(user_dir, f"{user_id}_{safe_symbol_for_files(symbol)}_{chosen}_data.csv")
             if os.path.exists(csv_path):
                 df_csv = pd.read_csv(
                     csv_path, index_col="datetime", parse_dates=True

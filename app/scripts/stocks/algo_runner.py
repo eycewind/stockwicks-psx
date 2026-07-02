@@ -37,7 +37,8 @@ def log_bot_decision(bot, data_len, last_bar, decision):
         os.makedirs(user_log_dir, exist_ok=True)
         
         # 2. Define the specific log file for this bot
-        log_file_name = f"bot_{bot.id}_{bot.symbol}_{bot.algo_name}.log"
+        safe_symbol = str(bot.symbol or "").replace("/", "_").replace(" ", "_").upper()
+        log_file_name = f"bot_{bot.id}_{safe_symbol}_{bot.algo_name}.log"
         log_file_path = os.path.join(user_log_dir, log_file_name)
         
         # 3. Create the detailed log message

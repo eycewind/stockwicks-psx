@@ -38,7 +38,8 @@ def log_bot_decision(bot, data_len, last_bar, decision):
         user_log_dir = os.path.join(DATA_ROOT, str(bot.user_id))
         os.makedirs(user_log_dir, exist_ok=True)
 
-        log_file_name = f"bot_{bot.id}_{bot.symbol}_{bot.algo_name}.log"
+        safe_symbol = str(bot.symbol or "").replace("/", "_").replace(" ", "_").upper()
+        log_file_name = f"bot_{bot.id}_{safe_symbol}_{bot.algo_name}.log"
         log_file_path = os.path.join(user_log_dir, log_file_name)
 
         timestamp_str = datetime.now(_ET).strftime("%Y-%m-%d %H:%M:%S %Z")
