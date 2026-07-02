@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -628,6 +628,44 @@ def _load_optimizer_run(run_id: str) -> dict | None:
     except Exception as exc:
         log.warning("[CHEATSHEET] could not read optimizer run %s: %s", run_id, exc)
         return None
+
+
+def _delete_optimizer_runs(run_ids: list[str]) -> list[str]:
+    safe_ids = []
+    for run_id in run_ids:
+        safe_id = _safe_optimizer_run_id(run_id)
+        if safe_id not in safe_ids:
+            safe_ids.append(safe_id)
+
+    if not safe_ids:
+        raise HTTPException(status_code=400, detail="Select at least one optimizer history run.")
+
+    deleted: list[str] = []
+    for run_id in safe_ids:
+        path = _optimizer_run_path(run_id)
+        if path.exists():
+            path.unlink()
+        deleted.append(run_id)
+
+    history = [
+        item
+        for item in _load_optimizer_history_index()
+        if str(item.get("run_id") or "").strip() not in set(deleted)
+    ]
+    OPTIMIZER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    OPTIMIZER_HISTORY_JSON.write_text(
+        json.dumps(history[:_optimizer_history_limit()], default=str, indent=2),
+        encoding="utf-8",
+    )
+
+    latest = _load_optimizer_cache()
+    latest_run_id = str((latest or {}).get("run_id") or "").strip()
+    if latest_run_id in set(deleted) or ("latest" in deleted and latest_run_id == ""):
+        for path in (OPTIMIZER_LATEST_JSON, OPTIMIZER_LATEST_CSV):
+            if path.exists():
+                path.unlink()
+
+    return deleted
 
 
 def _load_optimizer_cache() -> dict | None:
@@ -1604,6 +1642,21 @@ def optimizer_history_detail(
     if not data:
         raise HTTPException(status_code=404, detail="Optimizer run not found.")
     return JSONResponse(_filter_optimizer_cache(data, symbol))
+
+
+@router.post("/analysis/cheatsheet/api/history/delete")
+@router.post("/analysis/strategy-optimizer/api/history/delete")
+@router.post("/auth/backtest-cheatsheet/api/history/delete")
+def delete_optimizer_history(
+    payload: dict | None = Body(default=None),
+    user: User = Depends(get_current_user),
+):
+    payload = payload or {}
+    run_ids = payload.get("run_ids") if isinstance(payload, dict) else None
+    if not isinstance(run_ids, list):
+        raise HTTPException(status_code=400, detail="Expected run_ids list.")
+    deleted = _delete_optimizer_runs([str(run_id or "") for run_id in run_ids])
+    return JSONResponse({"ok": True, "deleted": deleted, "history": _load_optimizer_history()})
 
 
 @router.post("/analysis/cheatsheet/api/run-qqq-batch")
