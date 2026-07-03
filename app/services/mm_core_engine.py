@@ -13,6 +13,7 @@ class MMCoreConfig:
     short_entry_prob: float = 0.40
     min_prob_advantage: float = 0.0
     prob_smoothing_bars: int = 3
+    entry_confirmation_bars: int = 3
     stop_loss_usd: float = 300.0
     trailing_profit_usd: float = 75.0
     stop_loss_pct: float = 0.0
@@ -86,10 +87,11 @@ def config_from_obj(obj, *, allow_short: bool | None = None) -> MMCoreConfig:
         mode = "trailing"
 
     return MMCoreConfig(
-        long_entry_prob=_finite_float(getattr(obj, "long_entry_prob", 0.60), 0.60),
-        short_entry_prob=_finite_float(getattr(obj, "short_entry_prob", 0.40), 0.40),
+        long_entry_prob=_finite_float(getattr(obj, "long_entry_prob", getattr(obj, "long_threshold", 0.60)), 0.60),
+        short_entry_prob=_finite_float(getattr(obj, "short_entry_prob", getattr(obj, "short_threshold", 0.40)), 0.40),
         min_prob_advantage=max(0.0, _finite_float(getattr(obj, "min_prob_advantage", 0.0), 0.0)),
         prob_smoothing_bars=max(1, int(_finite_float(getattr(obj, "prob_smoothing_bars", 3), 3))),
+        entry_confirmation_bars=max(1, int(_finite_float(getattr(obj, "entry_confirmation_bars", 3), 3))),
         stop_loss_usd=stop_loss,
         trailing_profit_usd=trailing_profit,
         stop_loss_pct=max(0.0, _finite_float(getattr(obj, "stop_loss_pct", getattr(obj, "per_share_stop_pct", 0.0)), 0.0)),
@@ -107,11 +109,11 @@ def evaluate_entry(
     prob_up_avg: float,
     prob_up_avg_prev: float | None,
     cfg: MMCoreConfig,
+    long_streak: int = 0,
+    short_streak: int = 0,
 ) -> MMCoreDecision:
     if not np.isfinite(prob_up_avg):
         return MMCoreDecision(False, reason="NO_VALID_PROB_AVG")
-    if prob_up_avg_prev is None or not np.isfinite(prob_up_avg_prev):
-        return MMCoreDecision(False, reason="NO_PREVIOUS_PROB_AVG_FOR_CROSS")
     if not np.isfinite(cfg.long_entry_prob) or not np.isfinite(cfg.short_entry_prob):
         return MMCoreDecision(False, reason="BAD_ENTRY_THRESHOLDS")
     if cfg.short_entry_prob >= cfg.long_entry_prob:
@@ -127,37 +129,36 @@ def evaluate_entry(
     long_has_edge = long_advantage >= min_advantage
     short_has_edge = short_advantage >= min_advantage
 
-    crossed_up = prob_up_avg_prev < cfg.long_entry_prob <= prob_up_avg
-    crossed_down = prob_up_avg_prev > cfg.short_entry_prob >= prob_up_avg
+    confirm_bars = max(1, int(cfg.entry_confirmation_bars or 1))
 
-    if crossed_up and long_has_edge:
+    if long_streak >= confirm_bars and long_has_edge:
         return MMCoreDecision(
             True,
             action="LONG",
-            reason=f"PROB_AVG_CROSS_ABOVE_LONG_ENTRY_{cfg.long_entry_prob:.2f}_EDGE_{long_advantage:.3f}",
+            reason=f"PROB_AVG_{confirm_bars}BAR_LONG_{cfg.long_entry_prob:.2f}_EDGE_{long_advantage:.3f}",
         )
-    if crossed_up:
+    if long_streak >= confirm_bars:
         return MMCoreDecision(
             False,
-            reason=f"LONG_CROSS_BUT_EDGE_{long_advantage:.3f}_LT_MIN_{min_advantage:.3f}",
+            reason=f"LONG_{confirm_bars}BAR_BUT_EDGE_{long_advantage:.3f}_LT_MIN_{min_advantage:.3f}",
         )
-    if crossed_down and cfg.allow_short and short_has_edge:
+    if short_streak >= confirm_bars and cfg.allow_short and short_has_edge:
         return MMCoreDecision(
             True,
             action="SHORT",
-            reason=f"PROB_AVG_CROSS_BELOW_SHORT_ENTRY_{cfg.short_entry_prob:.2f}_EDGE_{short_advantage:.3f}",
+            reason=f"PROB_AVG_{confirm_bars}BAR_SHORT_{cfg.short_entry_prob:.2f}_EDGE_{short_advantage:.3f}",
         )
-    if crossed_down and cfg.allow_short:
+    if short_streak >= confirm_bars and cfg.allow_short:
         return MMCoreDecision(
             False,
-            reason=f"SHORT_CROSS_BUT_EDGE_{short_advantage:.3f}_LT_MIN_{min_advantage:.3f}",
+            reason=f"SHORT_{confirm_bars}BAR_BUT_EDGE_{short_advantage:.3f}_LT_MIN_{min_advantage:.3f}",
         )
-    if crossed_down and not cfg.allow_short:
+    if short_streak >= confirm_bars and not cfg.allow_short:
         return MMCoreDecision(False, reason="SHORT_SIGNAL_BUT_SHORT_DISABLED")
     if prob_up_avg >= cfg.long_entry_prob:
-        return MMCoreDecision(False, reason="BULLISH_BUT_NO_NEW_LONG_CROSS")
+        return MMCoreDecision(False, reason=f"BULLISH_BUT_CONFIRMATION_{long_streak}_LT_{confirm_bars}")
     if prob_up_avg <= cfg.short_entry_prob:
-        return MMCoreDecision(False, reason="BEARISH_BUT_NO_NEW_SHORT_CROSS")
+        return MMCoreDecision(False, reason=f"BEARISH_BUT_CONFIRMATION_{short_streak}_LT_{confirm_bars}")
     return MMCoreDecision(False, reason=f"NO_ENTRY_PROB_AVG_{prob_up_avg:.4f}_BETWEEN_{cfg.short_entry_prob:.2f}_{cfg.long_entry_prob:.2f}")
 
 

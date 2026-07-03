@@ -81,6 +81,7 @@ DEFAULTS = {
     "builder_days": 30,
     "long_threshold": 0.60,
     "short_threshold": 0.40,
+    "entry_confirmation_bars": 3,
     "long_exit_threshold": 0.55,      # hard floor for longs
     "short_exit_threshold": 0.45,     # hard floor for shorts
     "min_prob_advantage": 0.0,
@@ -121,6 +122,7 @@ class BotConfig:
     builder_days: int = DEFAULTS["builder_days"]
     long_threshold: float = DEFAULTS["long_threshold"]
     short_threshold: float = DEFAULTS["short_threshold"]
+    entry_confirmation_bars: int = DEFAULTS["entry_confirmation_bars"]
     long_exit_threshold: float = DEFAULTS["long_exit_threshold"]
     short_exit_threshold: float = DEFAULTS["short_exit_threshold"]
     min_prob_advantage: float = DEFAULTS["min_prob_advantage"]
@@ -744,6 +746,53 @@ def _fetch_source_bars_for_bot(runner: StockBaseRunner, bot: PaperStockTradeBot,
     return runner.fetch_source_bars(bot.symbol)
 
 
+def _drop_incomplete_live_bar(df: pd.DataFrame, interval: str, now_et: datetime) -> tuple[pd.DataFrame, Optional[pd.Timestamp]]:
+    if df is None or df.empty:
+        return df, None
+    delta = {
+        "1min": pd.Timedelta(minutes=1),
+        "5min": pd.Timedelta(minutes=5),
+        "10min": pd.Timedelta(minutes=10),
+        "15min": pd.Timedelta(minutes=15),
+        "30min": pd.Timedelta(minutes=30),
+        "1h": pd.Timedelta(hours=1),
+    }.get((interval or "1min").lower())
+    if delta is None:
+        return df, None
+    latest_ts = pd.Timestamp(df.index[-1])
+    now_ts = pd.Timestamp(_as_et_aware(now_et) or now_et)
+    if latest_ts.tzinfo is not None and now_ts.tzinfo is None:
+        now_ts = now_ts.tz_localize(latest_ts.tz)
+    elif latest_ts.tzinfo is None and now_ts.tzinfo is not None:
+        now_ts = now_ts.tz_convert(_ET).tz_localize(None)
+    elif latest_ts.tzinfo is not None and now_ts.tzinfo is not None:
+        now_ts = now_ts.tz_convert(latest_ts.tz)
+    if now_ts < latest_ts + delta + pd.Timedelta(seconds=2):
+        return df.iloc[:-1].copy(), latest_ts
+    return df, None
+
+
+def _prob_avg_streaks(prob_series: pd.Series, cfg: BotConfig) -> tuple[int, int]:
+    long_streak = 0
+    short_streak = 0
+    for value in reversed(prob_series.tolist()):
+        if not np.isfinite(value):
+            break
+        value = float(value)
+        if value >= cfg.long_threshold:
+            if short_streak:
+                break
+            long_streak += 1
+            continue
+        if value <= cfg.short_threshold:
+            if long_streak:
+                break
+            short_streak += 1
+            continue
+        break
+    return long_streak, short_streak
+
+
 # ---------------- CONFIG LOADERS ----------------
 
 def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
@@ -766,6 +815,10 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
             cfg.builder_days = _safe_int(js.get("builder_days", cfg.builder_days), cfg.builder_days)
             cfg.long_threshold = _safe_float(js.get("long_threshold", cfg.long_threshold), cfg.long_threshold)
             cfg.short_threshold = _safe_float(js.get("short_threshold", cfg.short_threshold), cfg.short_threshold)
+            cfg.entry_confirmation_bars = max(
+                1,
+                _safe_int(js.get("entry_confirmation_bars", cfg.entry_confirmation_bars), cfg.entry_confirmation_bars),
+            )
             cfg.long_exit_threshold = _safe_float(js.get("long_exit_threshold", cfg.long_exit_threshold), cfg.long_exit_threshold)
             cfg.short_exit_threshold = _safe_float(js.get("short_exit_threshold", cfg.short_exit_threshold), cfg.short_exit_threshold)
             cfg.min_prob_advantage = _safe_float(js.get("min_prob_advantage", cfg.min_prob_advantage), cfg.min_prob_advantage)
@@ -1117,6 +1170,83 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
             return
 
         df = df.sort_index()
+        if anchor_dt is None:
+            interval = bot.interval or "1min"
+            df, dropped_live_bar = _drop_incomplete_live_bar(df, interval, now_et)
+            if df is None or df.empty:
+                decision = "NO_CLOSED_BARS"
+                reason = f"WAITING_FOR_BAR_CLOSE dropped={dropped_live_bar}"
+                log_trade_decision(
+                    log_file,
+                    decision,
+                    prob_up,
+                    prob_down,
+                    0,
+                    bar_close_px,
+                    bar_open_px,
+                    None,
+                    {"long": cfg.long_threshold, "short": cfg.short_threshold},
+                    cfg=cfg,
+                    reason=reason,
+                )
+                return
+            if not runner.is_market_open_now():
+                decision = "MARKET_CLOSED"
+                reason = f"OUTSIDE_LIVE_WINDOW_{_fmt_est(now_et)}"
+                log_trade_decision(
+                    log_file,
+                    decision,
+                    prob_up,
+                    prob_down,
+                    len(df),
+                    bar_close_px,
+                    bar_open_px,
+                    None,
+                    {"long": cfg.long_threshold, "short": cfg.short_threshold},
+                    cfg=cfg,
+                    reason=reason,
+                    df=df,
+                )
+                return
+            latest_bar_et = _as_et_aware(df.index[-1])
+            if latest_bar_et is None:
+                decision = "STALE_PRICE_DATA"
+                reason = f"UNPARSEABLE_LATEST_BAR_TS_{df.index[-1]}"
+                log_trade_decision(
+                    log_file,
+                    decision,
+                    prob_up,
+                    prob_down,
+                    len(df),
+                    bar_close_px,
+                    bar_open_px,
+                    None,
+                    {"long": cfg.long_threshold, "short": cfg.short_threshold},
+                    cfg=cfg,
+                    reason=reason,
+                    df=df,
+                )
+                return
+            bar_age = now_et - latest_bar_et
+            max_age = runner.max_age_for_interval(interval)
+            if bar_age > max_age:
+                decision = "STALE_PRICE_DATA"
+                reason = f"LATEST_BAR_AGE_{int(bar_age.total_seconds())}s_GT_{int(max_age.total_seconds())}s latest={_fmt_est(latest_bar_et)}"
+                log_trade_decision(
+                    log_file,
+                    decision,
+                    prob_up,
+                    prob_down,
+                    len(df),
+                    bar_close_px,
+                    bar_open_px,
+                    None,
+                    {"long": cfg.long_threshold, "short": cfg.short_threshold},
+                    cfg=cfg,
+                    reason=reason,
+                    df=df,
+                )
+                return
         data_len = len(df)
         bar_close_px = float(df["close"].iloc[-1])
         bar_open_px = float(df["open"].iloc[-1])
@@ -1262,6 +1392,7 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
 
         prob_up = prev_prob
         prob_down = 1.0 - prev_prob
+        long_streak, short_streak = _prob_avg_streaks(prob_series_aligned, cfg)
 
         # Debug probabilities and thresholds (stdout logs)
         debug_probability_analysis(prob_up, prob_down, cfg)
@@ -1306,6 +1437,8 @@ def run_algoMM_bot_tick(bot_id: int, anchor_dt: Optional[datetime] = None):
                 prob_up_avg=prob_up,
                 prob_up_avg_prev=prev_prev_prob,
                 cfg=config_from_obj(cfg, allow_short=bool(getattr(bot, "allow_short_selling", True))),
+                long_streak=long_streak,
+                short_streak=short_streak,
             )
             should_enter = entry_decision.should_act
             enter_direction = entry_decision.action

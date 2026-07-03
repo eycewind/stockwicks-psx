@@ -371,8 +371,8 @@ def _simulate_combo(
     is_algo4 = str(algo_name or "") == "Algo4_MM"
     smoothing = max(1, int(params.get("prob_smoothing_bars", 3)))
     # Algo4_MM live/replay uses the previous aligned probability from a
-    # rolling k-forward average with min_periods=1. Algo1/2/3/5 use the
-    # stricter smoothed-cross behavior.
+    # rolling k-forward average with min_periods=1. Algo1/2/3/5 use
+    # averaged-probability confirmation.
     min_periods = 1 if is_algo4 else smoothing
     prob_avg = prob_up.rolling(window=smoothing, min_periods=min_periods).mean()
 
@@ -418,6 +418,24 @@ def _simulate_combo(
         prev_prob = _safe_float(aligned.iloc[prev_pos], float("nan"))
         if not math.isfinite(current_prob) or not math.isfinite(prev_prob):
             continue
+        confirm_bars = max(1, int(getattr(core_cfg, "entry_confirmation_bars", 3) or 3))
+        recent_probs = aligned.iloc[: prob_pos + 1].tail(confirm_bars)
+        long_streak = 0
+        short_streak = 0
+        for value in reversed(recent_probs.tolist()):
+            value = _safe_float(value, float("nan"))
+            if not math.isfinite(value):
+                break
+            if value >= core_cfg.long_entry_prob:
+                if short_streak:
+                    break
+                long_streak += 1
+            elif value <= core_cfg.short_entry_prob:
+                if long_streak:
+                    break
+                short_streak += 1
+            else:
+                break
 
         just_closed = False
         if position_side:
@@ -435,7 +453,13 @@ def _simulate_combo(
                 just_closed = True
 
         if position_side is None and not just_closed:
-            enter_decision = evaluate_entry(current_prob, prev_prob, core_cfg)
+            enter_decision = evaluate_entry(
+                current_prob,
+                prev_prob,
+                core_cfg,
+                long_streak=long_streak,
+                short_streak=short_streak,
+            )
 
             if enter_decision.should_act and enter_decision.action == "LONG":
                 position_side = "long"

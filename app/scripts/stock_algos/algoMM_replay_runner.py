@@ -992,6 +992,24 @@ def run_algoMM_replay_tick(
             prob_down = 1.0 - prob_up
             prob_up_avg = float(prob_avg.iloc[-1])
             prob_up_avg_prev = float(prob_avg.iloc[-2])
+            confirm_bars = max(1, int(getattr(core_cfg, "entry_confirmation_bars", 3) or 3))
+            recent_prob_avg = prob_avg.tail(confirm_bars)
+            long_streak = 0
+            short_streak = 0
+            for value in reversed(recent_prob_avg.tolist()):
+                if not np.isfinite(value):
+                    break
+                value = float(value)
+                if value >= core_cfg.long_entry_prob:
+                    if short_streak:
+                        break
+                    long_streak += 1
+                elif value <= core_cfg.short_entry_prob:
+                    if long_streak:
+                        break
+                    short_streak += 1
+                else:
+                    break
 
             if not np.isfinite(prob_up_avg) or not np.isfinite(prob_up_avg_prev):
                 decision = "NO_VALID_PROB"
@@ -1017,6 +1035,8 @@ def run_algoMM_replay_tick(
                 prob_up_avg=float(prob_up_avg),
                 prob_up_avg_prev=float(prob_up_avg_prev) if prob_up_avg_prev is not None else None,
                 cfg=core_cfg,
+                long_streak=long_streak,
+                short_streak=short_streak,
             )
             should_enter = entry_decision.should_act
             enter_direction = entry_decision.action

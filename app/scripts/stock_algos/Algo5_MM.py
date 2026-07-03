@@ -7,7 +7,7 @@ Commercial clean model-only behavior:
 - Featureset_5 is MACD-focused: standard/fast/slow MACD state, crosses,
   histogram slope, and histogram acceleration drive the model probability.
 - One probability value drives direction: prob_up.
-- Entry uses 3-bar smoothed prob_up crossing the 0.50 midline.
+- Entry uses averaged prob_up level confirmation.
 - No cooldown.
 - No separate long/short threshold math.
 - No OBV / volume / VWAP / candle-pattern external blockers.
@@ -87,6 +87,7 @@ DEFAULTS = {
     "short_entry_prob": 0.40,
     "min_prob_advantage": 0.0,
     "prob_smoothing_bars": 3,
+    "entry_confirmation_bars": 3,
     "prob_trail_drop": 0.05,
     "prob_exit_mode": "trailing",
     "long_fixed_exit_prob": 0.40,
@@ -126,6 +127,7 @@ class BotConfig:
     short_entry_prob: float = DEFAULTS["short_entry_prob"]
     min_prob_advantage: float = DEFAULTS["min_prob_advantage"]
     prob_smoothing_bars: int = DEFAULTS["prob_smoothing_bars"]
+    entry_confirmation_bars: int = DEFAULTS["entry_confirmation_bars"]
     prob_trail_drop: float = DEFAULTS["prob_trail_drop"]
     prob_exit_mode: str = DEFAULTS["prob_exit_mode"]
     long_fixed_exit_prob: float = DEFAULTS["long_fixed_exit_prob"]
@@ -240,6 +242,32 @@ def _align_timestamp_for_subtract(left: Any, right: Any) -> tuple[pd.Timestamp, 
     return left_ts, right_ts
 
 
+def _drop_incomplete_live_bar(df: pd.DataFrame, interval: str, now_et: datetime) -> tuple[pd.DataFrame, Optional[pd.Timestamp]]:
+    if df is None or df.empty:
+        return df, None
+    delta = {
+        "1min": pd.Timedelta(minutes=1),
+        "5min": pd.Timedelta(minutes=5),
+        "10min": pd.Timedelta(minutes=10),
+        "15min": pd.Timedelta(minutes=15),
+        "30min": pd.Timedelta(minutes=30),
+        "1h": pd.Timedelta(hours=1),
+    }.get((interval or "1min").lower())
+    if delta is None:
+        return df, None
+    latest_ts = pd.Timestamp(df.index[-1])
+    now_ts = pd.Timestamp(_as_et_aware(now_et) or now_et)
+    if latest_ts.tzinfo is not None and now_ts.tzinfo is None:
+        now_ts = now_ts.tz_localize(latest_ts.tz)
+    elif latest_ts.tzinfo is None and now_ts.tzinfo is not None:
+        now_ts = now_ts.tz_convert(_ET).tz_localize(None)
+    elif latest_ts.tzinfo is not None and now_ts.tzinfo is not None:
+        now_ts = now_ts.tz_convert(latest_ts.tz)
+    if now_ts < latest_ts + delta + pd.Timedelta(seconds=2):
+        return df.iloc[:-1].copy(), latest_ts
+    return df, None
+
+
 def _fetch_source_bars_for_bot(runner: StockBaseRunner, bot: PaperStockTradeBot, interval: str, cfg: BotConfig) -> pd.DataFrame:
     kwargs = {
         "interval": interval,
@@ -309,6 +337,10 @@ def _load_bot_config(bot: PaperStockTradeBot) -> BotConfig:
     cfg.prob_smoothing_bars = max(
         1,
         _safe_int(js.get("prob_smoothing_bars", cfg.prob_smoothing_bars), cfg.prob_smoothing_bars),
+    )
+    cfg.entry_confirmation_bars = max(
+        1,
+        _safe_int(js.get("entry_confirmation_bars", cfg.entry_confirmation_bars), cfg.entry_confirmation_bars),
     )
     cfg.prob_trail_drop = _safe_float(
         js.get("prob_trail_drop", cfg.prob_trail_drop),
@@ -644,7 +676,7 @@ def log_trade_decision(
                 "features_used": len(feat_cols or []),
                 "action": decision,
                 "reason": reason,
-                "entry_rule": (f"PROB_AVG_{cfg.prob_smoothing_bars}_CROSS_LONG_{cfg.long_entry_prob:.2f}_SHORT_{cfg.short_entry_prob:.2f}"),
+                "entry_rule": (f"PROB_AVG_{cfg.prob_smoothing_bars}_CONFIRM_{cfg.entry_confirmation_bars}_LONG_{cfg.long_entry_prob:.2f}_SHORT_{cfg.short_entry_prob:.2f}"),
                 "exit_rules": ["HARD_STOP", "TRAILING_PROFIT", "PROB_TRAIL_OR_FIXED", "EOD_OPTIONAL"],
                 "prob_up": _round_log_value(prob_up),
                 "prob_down": _round_log_value(prob_down),
@@ -715,13 +747,38 @@ def should_enter_trade(
     prob_up_avg_prev: Optional[float],
     cfg: BotConfig,
     allow_short: bool = True,
+    long_streak: int = 0,
+    short_streak: int = 0,
 ) -> Tuple[bool, str, str]:
     decision = evaluate_entry(
         prob_up_avg=prob_up_avg,
         prob_up_avg_prev=prob_up_avg_prev,
         cfg=config_from_obj(cfg, allow_short=allow_short),
+        long_streak=long_streak,
+        short_streak=short_streak,
     )
     return decision.should_act, decision.action, decision.reason
+
+
+def _prob_avg_streaks(prob_avg: pd.Series, cfg: BotConfig) -> tuple[int, int]:
+    long_streak = 0
+    short_streak = 0
+    for value in reversed(prob_avg.tolist()):
+        if not np.isfinite(value):
+            break
+        value = float(value)
+        if value >= cfg.long_entry_prob:
+            if short_streak:
+                break
+            long_streak += 1
+            continue
+        if value <= cfg.short_entry_prob:
+            if long_streak:
+                break
+            short_streak += 1
+            continue
+        break
+    return long_streak, short_streak
 
 
 def should_exit_trade(
@@ -837,6 +894,31 @@ def run_algoMM_bot_tick(
                     reason = f"NO_BARS_UP_TO_{anchor_ts}"
                     log_trade_decision(log_file, decision, prob_up, prob_down, data_len, bar_close_px, bar_open_px, cfg=cfg, reason=reason)
                     return
+        else:
+            df, dropped_live_bar = _drop_incomplete_live_bar(df, interval, now_et)
+            if df is None or df.empty:
+                decision = "NO_CLOSED_BARS"
+                reason = f"WAITING_FOR_BAR_CLOSE dropped={dropped_live_bar}"
+                log_trade_decision(log_file, decision, prob_up, prob_down, 0, bar_close_px, bar_open_px, cfg=cfg, reason=reason)
+                return
+            if not runner.is_market_open_now():
+                decision = "MARKET_CLOSED"
+                reason = f"OUTSIDE_LIVE_WINDOW_{_fmt_est(now_et)}"
+                log_trade_decision(log_file, decision, prob_up, prob_down, len(df), bar_close_px, bar_open_px, cfg=cfg, reason=reason, df=df)
+                return
+            latest_bar_et = _as_et_aware(df.index[-1])
+            if latest_bar_et is None:
+                decision = "STALE_PRICE_DATA"
+                reason = f"UNPARSEABLE_LATEST_BAR_TS_{df.index[-1]}"
+                log_trade_decision(log_file, decision, prob_up, prob_down, len(df), bar_close_px, bar_open_px, cfg=cfg, reason=reason, df=df)
+                return
+            bar_age = now_et - latest_bar_et
+            max_age = runner.max_age_for_interval(interval)
+            if bar_age > max_age:
+                decision = "STALE_PRICE_DATA"
+                reason = f"LATEST_BAR_AGE_{int(bar_age.total_seconds())}s_GT_{int(max_age.total_seconds())}s latest={_fmt_est(latest_bar_et)}"
+                log_trade_decision(log_file, decision, prob_up, prob_down, len(df), bar_close_px, bar_open_px, cfg=cfg, reason=reason, df=df)
+                return
 
         # Live should behave like replay when the scheduler wakes up after one
         # or more closed candles: process each missed bar sequentially instead
@@ -963,6 +1045,7 @@ def run_algoMM_bot_tick(
         prob_down = 1.0 - prob_up
         prob_up_avg = float(prob_avg.iloc[-1])
         prob_up_avg_prev = float(prob_avg.iloc[-2])
+        long_streak, short_streak = _prob_avg_streaks(prob_avg, cfg)
 
         if not np.isfinite(prob_up_avg) or not np.isfinite(prob_up_avg_prev):
             decision = "NO_VALID_PROB"
@@ -988,6 +1071,8 @@ def run_algoMM_bot_tick(
                 prob_up_avg_prev=prob_up_avg_prev,
                 cfg=cfg,
                 allow_short=allow_short,
+                long_streak=long_streak,
+                short_streak=short_streak,
             )
 
             if not should_enter:

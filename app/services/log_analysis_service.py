@@ -12,6 +12,7 @@ ACTION_RE = re.compile(
     r"NO_DATA|RESAMPLE_FAILED|INVALID_PRICE|NO_FEATURES|NO_INFER_FEATURES|"
     r"NO_TRAIN_FEATURES|BAD_TRAIN_FEATURES|ONE_CLASS_TRAINING|STALE_FEATURES|"
     r"NO_PROBS|NO_SMOOTHED_PROB|NO_VALID_PROB|PROB_ALIGN_SHORT|OPEN_FAILED|"
+    r"MARKET_CLOSED|STALE_PRICE_DATA|NO_CLOSED_BARS|FEATURE_BUILDER_UNSAFE|"
     r"EXIT_[A-Z0-9_]+|ERROR(?::[^|\n]*)?"
     r")\b"
 )
@@ -36,8 +37,16 @@ def _safe_int(value: Any):
 
 
 def _symbol_from_filename(path: Path) -> Optional[str]:
-    match = re.match(r"bot_(?:\d+|unknown)_([^_]+)_", path.name)
-    return match.group(1) if match else None
+    parts = path.stem.split("_")
+    if len(parts) < 3 or parts[0] != "bot":
+        return None
+    for part in parts[2:]:
+        if not part:
+            continue
+        if part.startswith("Algo") or part in {"1min", "5min", "10min", "15min", "30min", "1h", "1d", "1wk", "candles", "decisions"}:
+            return None
+        return part
+    return None
 
 
 def _parse_date(value: Any) -> Optional[date]:
@@ -237,7 +246,7 @@ def parse_pretty_algo_log(path: Path) -> List[Dict[str, Any]]:
         if position:
             row["position"] = position.group(1).strip()
 
-        features_match = re.search(r"(?:Features|features):\s*(.*)", block)
+        features_match = re.search(r"(?:Features|features)\s*[:=]\s*(.*)", block)
         if features_match:
             row["features"] = features_match.group(1).strip()
 
@@ -246,11 +255,22 @@ def parse_pretty_algo_log(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def _path_kind(path: Path) -> str:
+    name = path.name
+    if name.endswith("_candles.jsonl"):
+        return "candles"
+    if name.endswith("_decisions.jsonl"):
+        return "decisions"
+    return "log"
+
+
 def find_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
     candidates = []
     for folder in [base_dir / "logs", base_dir / "data"]:
         if folder.exists():
             candidates.extend(folder.rglob("bot_*_Algo*.log"))
+            candidates.extend(folder.rglob("bot_*_Algo*_decisions.jsonl"))
+            candidates.extend(folder.rglob("bot_*_candles.jsonl"))
 
     paths = sorted(set(candidates))
     if symbol:
@@ -264,15 +284,16 @@ def find_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
 
 def latest_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
     paths = find_algo_logs(base_dir, symbol=symbol)
-    latest_by_symbol: Dict[str, Path] = {}
+    latest_by_symbol_kind: Dict[tuple[str, str], Path] = {}
 
     for path in paths:
         path_symbol = (_symbol_from_filename(path) or "UNKNOWN").upper()
-        current = latest_by_symbol.get(path_symbol)
+        key = (path_symbol, _path_kind(path))
+        current = latest_by_symbol_kind.get(key)
         if current is None or path.stat().st_mtime > current.stat().st_mtime:
-            latest_by_symbol[path_symbol] = path
+            latest_by_symbol_kind[key] = path
 
-    return sorted(latest_by_symbol.values(), key=lambda path: path.name)
+    return sorted(latest_by_symbol_kind.values(), key=lambda path: path.name)
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -374,8 +395,13 @@ def normalize_reason(reason: str) -> str:
         "GUARDRAILS_NOT_HIT",
         "PROB_TRAIL_DROP",
         "NO_PREVIOUS_PROB_AVG_FOR_CROSS",
+        "NO_PREVIOUS_PROB_AVG",
         "BULLISH_BUT_NO_NEW_LONG_CROSS",
         "BEARISH_BUT_NO_NEW_SHORT_CROSS",
+        "BULLISH_BUT_CONFIRMATION",
+        "BEARISH_BUT_CONFIRMATION",
+        "LONG_BLOCKED_BY_DOWN_FLOW_REGIME",
+        "SHORT_BLOCKED_BY_UP_FLOW_REGIME",
     ):
         if token in reason:
             return token
