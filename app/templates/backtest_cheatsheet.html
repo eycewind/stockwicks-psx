@@ -313,6 +313,7 @@ function rowParams(r) {
   if (r.prob_exit_mode) parts.push(`Exit ${r.prob_exit_mode}`);
   if (r.long_fixed_exit_prob !== null && r.long_fixed_exit_prob !== undefined) parts.push(`LFix ${Number(r.long_fixed_exit_prob).toFixed(2)}`);
   if (r.short_fixed_exit_prob !== null && r.short_fixed_exit_prob !== undefined) parts.push(`SFix ${Number(r.short_fixed_exit_prob).toFixed(2)}`);
+  if (r.entry_confirmation_bars !== null && r.entry_confirmation_bars !== undefined) parts.push(`Confirm ${Number(r.entry_confirmation_bars)}`);
   return parts.join(" | ");
 }
 
@@ -396,6 +397,7 @@ function replayText(r) {
     `Trailing Profit %: ${r.trailing_profit_pct || r.per_share_trailing_profit_pct}`,
     `Long Entry Avg Prob: ${r.long_entry_prob}`,
     `Short Entry Avg Prob: ${r.short_entry_prob}`,
+    `Entry Confirmation Bars: ${r.entry_confirmation_bars || 1}`,
     `Probability Trail Drop: ${r.prob_trail_drop}`,
     `Prob Exit Mode: ${r.prob_exit_mode}`,
     `Backtest Method: ${r.backtest_method_label || r.backtest_method || "Validation-picked holdout scan"}`,
@@ -428,6 +430,7 @@ function replayParams(r) {
   add("trailing_profit_pct", r.trailing_profit_pct || r.per_share_trailing_profit_pct);
   add("long_entry_prob", r.long_entry_prob);
   add("short_entry_prob", r.short_entry_prob);
+  add("entry_confirmation_bars", r.entry_confirmation_bars || 1);
   add("prob_trail_drop", r.prob_trail_drop);
   add("prob_exit_mode", r.prob_exit_mode);
   add("long_fixed_exit_prob", r.long_fixed_exit_prob);

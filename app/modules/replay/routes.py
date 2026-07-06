@@ -1173,6 +1173,7 @@ DEFAULT_REPLAY_MM_CONFIG = {
     "long_entry_prob": 0.60,
     "short_entry_prob": 0.40,
     "prob_smoothing_bars": 3,
+    "entry_confirmation_bars": 1,
     "prob_trail_drop": 0.05,
     "prob_exit_mode": "trailing",
     "long_fixed_exit_prob": 0.40,
@@ -1224,6 +1225,7 @@ def _build_mm_replay_config(
     short_fixed_exit_prob: float | None,
     long_entry_prob: float | None,
     short_entry_prob: float | None,
+    entry_confirmation_bars: int | None = None,
 ) -> dict:
     algo_name = (algo_name or "Algo1_MM").strip()
     if algo_name == "AlgoMM":
@@ -1268,6 +1270,16 @@ def _build_mm_replay_config(
             DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"],
         ),
         "prob_smoothing_bars": DEFAULT_REPLAY_MM_CONFIG["prob_smoothing_bars"],
+        "entry_confirmation_bars": max(
+            1,
+            int(
+                _safe_float_form(
+                    entry_confirmation_bars,
+                    DEFAULT_REPLAY_MM_CONFIG["entry_confirmation_bars"],
+                    min_value=1.0,
+                )
+            ),
+        ),
         "prob_trail_drop": _safe_float_form(
             prob_trail_drop,
             DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"],
@@ -1884,6 +1896,7 @@ def start_replay(
     short_fixed_exit_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"]),
     long_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"]),
     short_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"]),
+    entry_confirmation_bars: int = Form(DEFAULT_REPLAY_MM_CONFIG["entry_confirmation_bars"]),
     allow_short_selling: str = Form(None),
     eod_auto_close: str = Form(None),
     db: Session = Depends(get_db),
@@ -1976,6 +1989,7 @@ def start_replay(
                 short_fixed_exit_prob=short_fixed_exit_prob,
                 long_entry_prob=long_entry_prob,
                 short_entry_prob=short_entry_prob,
+                entry_confirmation_bars=entry_confirmation_bars,
             ),
             separators=(",", ":"),
             sort_keys=True,

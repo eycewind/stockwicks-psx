@@ -284,6 +284,7 @@ def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
                                             "long_fixed_exit_prob": long_fixed_exit_prob,
                                             "short_fixed_exit_prob": short_fixed_exit_prob,
                                             "prob_smoothing_bars": 3,
+                                            "entry_confirmation_bars": 1,
                                             "min_prob_advantage": 0.03 if is_algo4 else 0.0,
                                         }
                                     )
@@ -891,6 +892,7 @@ def run_cheatsheet(
                         "long_fixed_exit_prob",
                         "short_fixed_exit_prob",
                         "prob_smoothing_bars",
+                        "entry_confirmation_bars",
                         "min_prob_advantage",
                     )
                     if key in candidate
