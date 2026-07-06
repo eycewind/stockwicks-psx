@@ -850,7 +850,12 @@ async function pollScanJob(jobId, options = {}) {
       if (data.status === "failed") {
         activePolls[pollKey] = null;
         activeJobId = null;
-        setStatus(statusId, data.error || "Strategy scan failed.", "error");
+        if (data.result) {
+          renderScanResult(data.result, statusId);
+          await loadOptimizerHistory();
+          renderCachePairs(cacheData || data.result || {});
+        }
+        setStatus(statusId, data.message || data.error || "Strategy scan failed.", "error");
         buttons.forEach((button) => { button.disabled = false; });
         document.getElementById("stopBatchBtn").disabled = true;
         return;

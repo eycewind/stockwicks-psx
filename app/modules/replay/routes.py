@@ -729,15 +729,16 @@ def _optimizer_timeout_seconds(env_name: str, default: int) -> int:
 
 def _is_schwab_market_auth_error(value: object) -> bool:
     text = str(value or "").lower()
-    return (
-        "schwab market" in text
-        and (
-            "token" in text
-            or "unauthorized" in text
-            or "401" in text
-            or "reconnect schwab market data" in text
-        )
+    auth_markers = (
+        "no valid schwab access token",
+        "schwab market token",
+        "schwab market-data token",
+        "market-data token",
+        "reconnect schwab market data",
+        "unauthorized",
+        "401",
     )
+    return "schwab" in text and any(marker in text for marker in auth_markers)
 
 
 def _prefetch_optimizer_symbol_data(
@@ -1100,8 +1101,22 @@ def _run_qqq_batch_job(
             )
         )
 
+        data_failed = (
+            not auth_blocked
+            and len(attempted_symbol_set) >= len(symbols)
+            and tested_combinations <= 0
+            and not all_best
+        )
+        if data_failed and not errors:
+            errors.append(
+                "No optimizer combinations ran. Check Schwab price data, token freshness, "
+                "symbol support, and History Days."
+            )
+
         if auth_blocked:
             status = "auth_failed"
+        elif data_failed:
+            status = "data_failed"
         else:
             status = "complete" if len(attempted_symbol_set) >= len(symbols) else "partial"
         result = _build_optimizer_cache_result(
@@ -1121,12 +1136,15 @@ def _run_qqq_batch_job(
             message = f"Custom batch complete. Saved {len(all_best)} recommendations."
         elif status == "auth_failed":
             message = "Custom batch stopped: reconnect Schwab Market Data, then rerun optimizer."
+        elif status == "data_failed":
+            message = "Custom batch failed before any optimizer combinations ran. Check Skipped Items."
         else:
             message = f"Custom partial run complete. Attempted {result['completed_symbol_count']}/{len(symbols)} symbols."
         _update_cheatsheet_job(
             job_id,
-            status="succeeded",
+            status="failed" if status in {"auth_failed", "data_failed"} else "succeeded",
             result=result,
+            error=message if status in {"auth_failed", "data_failed"} else None,
             message=message,
         )
     except Exception as exc:
