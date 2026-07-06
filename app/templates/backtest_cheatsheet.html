@@ -420,7 +420,19 @@ function replayParams(r) {
   const add = (key, value) => {
     if (value !== null && value !== undefined && String(value) !== "") params.set(key, String(value));
   };
+  const datePart = (value) => {
+    const raw = String(value || "");
+    if (!raw) return "";
+    const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+  };
   add("symbol", r.symbol);
+  add("start_date", datePart(r.first_test_bar));
+  add("end_date", datePart(r.last_test_bar));
+  add("replay_trade_start_at", r.first_test_bar);
+  add("replay_trade_end_at", r.last_test_bar);
   add("interval", r.interval);
   add("algo_name", r.algo_name);
   add("trade_size", fd.get("trade_size") || "100");

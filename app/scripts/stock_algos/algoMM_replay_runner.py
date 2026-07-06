@@ -166,6 +166,21 @@ def _as_et(ts: Any) -> datetime:
     return ts.astimezone(_ET)
 
 
+def _parse_config_time_et(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        ts = pd.Timestamp(text)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(_ET)
+        else:
+            ts = ts.tz_convert(_ET)
+        return ts.to_pydatetime()
+    except Exception:
+        return None
+
+
 def _normalize_ohlcv_df(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
@@ -276,6 +291,7 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
         ("long_entry_prob", _safe_float),
         ("short_entry_prob", _safe_float),
         ("prob_smoothing_bars", _safe_int),
+        ("entry_confirmation_bars", _safe_int),
         ("prob_trail_drop", _safe_float),
         ("prob_exit_mode", lambda v, d: str(v or d)),
         ("long_fixed_exit_prob", _safe_float),
@@ -340,6 +356,7 @@ def _load_replay_config(session: ReplaySession) -> Tuple[Any, Any, Dict[str, Any
             cfg.obv_slope_threshold = float(getattr(live, "DEFAULTS", {}).get("obv_slope_threshold", 0.1))
 
     cfg.prob_smoothing_bars = max(1, int(getattr(cfg, "prob_smoothing_bars", 3) or 3))
+    cfg.entry_confirmation_bars = max(1, int(getattr(cfg, "entry_confirmation_bars", 1) or 1))
     cfg.k_forward = max(1, int(getattr(cfg, "k_forward", 3) or 3))
     cfg.stop_loss_usd = _safe_float(
         js.get("stop_loss_usd", js.get("hard_stop_usd", getattr(cfg, "hard_stop_usd", 300.0))),
@@ -670,6 +687,8 @@ def run_algoMM_replay_tick(
         interval = session.interval or "1min"
         allow_short = _safe_bool(js.get("allow_short_selling", js.get("allow_short", True)), True)
         core_cfg = config_from_obj(cfg, allow_short=allow_short)
+        trade_start_at = _parse_config_time_et(js.get("replay_trade_start_at"))
+        trade_end_at = _parse_config_time_et(js.get("replay_trade_end_at"))
 
         bar_time = provider.bar_time(bar_idx)
         now_et = _as_et(bar_time)
@@ -1020,6 +1039,26 @@ def run_algoMM_replay_tick(
         if open_trade is not None:
             update_open_trade_mark_replay(db, open_trade, bar_close_px, commit=True)
 
+        if trade_end_at is not None and now_et >= trade_end_at and open_trade is not None:
+            exit_view = _make_open_trade_adapter(open_trade, session_id)
+            exec_price = live.get_smart_execution_price(df)
+            close_position_replay(
+                db=db,
+                trade=open_trade,
+                price=float(exec_price),
+                bar_time=now_et.replace(tzinfo=None),
+                reason="OPTIMIZER_TEST_WINDOW_END",
+            )
+            db.commit()
+            _clear_algo_state(live, session_id)
+            decision = "EXIT_OPTIMIZER_TEST_WINDOW_END"
+            reason = (
+                f"optimizer_test_window_end={trade_end_at.isoformat()} "
+                f"side={getattr(exit_view, 'position_side', '')}"
+            )
+            open_trade = None
+            return finish("ok")
+
         # Exact once-per-bar duplicate protection from production, keyed by replay session id.
         bar_key = str(df.index[-1])
         last_bar_map = getattr(live, "_LAST_BAR_TS", None)
@@ -1031,6 +1070,15 @@ def run_algoMM_replay_tick(
             last_bar_map[session.id] = bar_key
 
         if open_trade is None:
+            if trade_start_at is not None and now_et < trade_start_at:
+                decision = "WAIT_OPTIMIZER_TEST_WINDOW"
+                reason = f"before_optimizer_test_start={trade_start_at.isoformat()}"
+                return finish("ok")
+            if trade_end_at is not None and now_et >= trade_end_at:
+                decision = "AFTER_OPTIMIZER_TEST_WINDOW"
+                reason = f"after_optimizer_test_end={trade_end_at.isoformat()}"
+                return finish("ok")
+
             entry_decision = evaluate_entry(
                 prob_up_avg=float(prob_up_avg),
                 prob_up_avg_prev=float(prob_up_avg_prev) if prob_up_avg_prev is not None else None,

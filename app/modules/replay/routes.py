@@ -1210,6 +1210,16 @@ def _checkbox_on(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _safe_iso_datetime_form(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+    except Exception:
+        return text[:64]
+
+
 def _build_mm_replay_config(
     *,
     algo_name: str,
@@ -1226,6 +1236,8 @@ def _build_mm_replay_config(
     long_entry_prob: float | None,
     short_entry_prob: float | None,
     entry_confirmation_bars: int | None = None,
+    replay_trade_start_at: str | None = None,
+    replay_trade_end_at: str | None = None,
 ) -> dict:
     algo_name = (algo_name or "Algo1_MM").strip()
     if algo_name == "AlgoMM":
@@ -1340,6 +1352,8 @@ def _build_mm_replay_config(
         "replay_force_retrain_each_bar": False,
         "daily_loss_limit_usd": DEFAULT_REPLAY_MM_CONFIG["daily_loss_limit_usd"],
         "once_per_bar": True,
+        "replay_trade_start_at": _safe_iso_datetime_form(replay_trade_start_at),
+        "replay_trade_end_at": _safe_iso_datetime_form(replay_trade_end_at),
 
         # Algo1-3 stay model-only; Algo4 keeps legacy production blockers above.
     }
@@ -1439,6 +1453,9 @@ def _serialize_session(s: ReplaySession) -> dict:
             "short_entry_prob": float(cfg.get("short_entry_prob", DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"])),
             "prob_exit_mode": str(cfg.get("prob_exit_mode", DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"])),
             "prob_trail_drop": float(cfg.get("prob_trail_drop", DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"])),
+            "entry_confirmation_bars": int(cfg.get("entry_confirmation_bars", DEFAULT_REPLAY_MM_CONFIG["entry_confirmation_bars"])),
+            "replay_trade_start_at": cfg.get("replay_trade_start_at"),
+            "replay_trade_end_at": cfg.get("replay_trade_end_at"),
             "long_fixed_exit_prob": float(
                 cfg.get(
                     "long_fixed_exit_prob",
@@ -1897,6 +1914,8 @@ def start_replay(
     long_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"]),
     short_entry_prob: float = Form(DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"]),
     entry_confirmation_bars: int = Form(DEFAULT_REPLAY_MM_CONFIG["entry_confirmation_bars"]),
+    replay_trade_start_at: str = Form(""),
+    replay_trade_end_at: str = Form(""),
     allow_short_selling: str = Form(None),
     eod_auto_close: str = Form(None),
     db: Session = Depends(get_db),
@@ -1990,6 +2009,8 @@ def start_replay(
                 long_entry_prob=long_entry_prob,
                 short_entry_prob=short_entry_prob,
                 entry_confirmation_bars=entry_confirmation_bars,
+                replay_trade_start_at=replay_trade_start_at,
+                replay_trade_end_at=replay_trade_end_at,
             ),
             separators=(",", ":"),
             sort_keys=True,

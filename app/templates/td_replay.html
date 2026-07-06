@@ -153,6 +153,9 @@
           <label>End Date</label>
           <input type="date" name="end_date" id="f_end" required>
         </div>
+        <input type="hidden" name="replay_trade_start_at" id="f_replay_trade_start_at">
+        <input type="hidden" name="replay_trade_end_at" id="f_replay_trade_end_at">
+        <input type="hidden" name="entry_confirmation_bars" id="f_entry_confirmation_bars" value="1">
         <div>
           <label>Interval</label>
           <select name="interval" id="f_interval">
@@ -220,7 +223,7 @@
             id="f_long_entry_prob"
             value="0.60"
           >
-          <div class="field-help">Enter long when smoothed prob crosses above this.</div>
+          <div class="field-help">Enter long when smoothed avg probability is at or above this.</div>
         </div>
         <div>
           <label>Short Entry Avg Prob</label>
@@ -233,7 +236,7 @@
             id="f_short_entry_prob"
             value="0.40"
           >
-          <div class="field-help">Enter short when smoothed prob crosses below this.</div>
+          <div class="field-help">Enter short when smoothed avg probability is at or below this.</div>
         </div>
         <div>
           <label>Probability Exit Mode</label>
@@ -461,6 +464,11 @@ function applyOptimizerReplayParams() {
     trailing_profit_pct: "f_trailing_profit_pct",
     long_entry_prob: "f_long_entry_prob",
     short_entry_prob: "f_short_entry_prob",
+    entry_confirmation_bars: "f_entry_confirmation_bars",
+    replay_trade_start_at: "f_replay_trade_start_at",
+    replay_trade_end_at: "f_replay_trade_end_at",
+    start_date: "f_start",
+    end_date: "f_end",
     prob_exit_mode: "f_prob_exit_mode",
     prob_trail_drop: "f_prob_trail_drop",
     long_fixed_exit_prob: "f_long_fixed_exit_prob",
