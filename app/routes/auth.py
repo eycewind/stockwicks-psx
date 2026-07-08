@@ -210,7 +210,7 @@ def login(
         httponly=True,
         secure=True,
         samesite="Lax",
-        max_age=3600
+        max_age=settings.access_token_expire_minutes * 60,
     )
     return response
 

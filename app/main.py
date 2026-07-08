@@ -89,7 +89,11 @@ app.add_middleware(
 )
 
 # Sessions
-app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.secret_key,
+    max_age=settings.access_token_expire_minutes * 60,
+)
 
 # -------------------------------------------------------------------
 # Request logging
