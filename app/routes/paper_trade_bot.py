@@ -931,6 +931,39 @@ def restart_paper_trade_bot(
     return RedirectResponse(url=prefixed_url(request, "/auth/papertradebot"), status_code=302)
 
 
+@router.post("/auth/papertradebot/save-size/{bot_id}")
+def save_paper_trade_bot_size(
+    bot_id: int,
+    request: Request,
+    trade_size: float = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    bot = (
+        db.query(PaperStockTradeBot)
+        .filter_by(id=bot_id, user_id=user.id)
+        .first()
+    )
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    if trade_size <= 0:
+        raise HTTPException(status_code=400, detail="Trade size must be greater than zero")
+
+    bot.trade_size = float(trade_size)
+
+    # Keep the legacy quantity column aligned for older code paths. Open
+    # positions store their own quantity, so this only affects future entries.
+    if hasattr(bot, "quantity"):
+        bot.quantity = int(trade_size)
+
+    bot.updated_at = datetime.utcnow()
+    db.commit()
+
+    logging.info(f"Bot #{bot.id} size changed to {trade_size} for {user.email}")
+    return RedirectResponse(url=prefixed_url(request, "/auth/papertradebot"), status_code=302)
+
+
 @router.post("/auth/papertradebot/save-size-restart/{bot_id}")
 def save_size_and_restart_paper_trade_bot(
     bot_id: int,

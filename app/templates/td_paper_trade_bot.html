@@ -412,21 +412,18 @@
         <td>{{ b.interval }}</td>
         <td>{{ b.algo_name }}</td>
         <td>
-          {% if b.is_active and b.status == "RUNNING" %}
-            {{ b.trade_size }}
-          {% else %}
-            <form id="restart-size-form-{{ b.id }}"
-                  method="post"
-                  action="{{ url_prefix }}/auth/papertradebot/save-size-restart/{{ b.id }}"
-                  style="display:flex;gap:6px;align-items:center;">
-              <input type="number"
-                     name="trade_size"
-                     value="{{ b.trade_size }}"
-                     min="1"
-                     step="1"
-                     style="width:72px;background:#111532;color:white;border:1px solid #3b3b70;border-radius:6px;padding:4px;">
-            </form>
-          {% endif %}
+          <form id="size-form-{{ b.id }}"
+                method="post"
+                action="{{ url_prefix }}/auth/papertradebot/{% if b.is_active and b.status == 'RUNNING' %}save-size{% else %}save-size-restart{% endif %}/{{ b.id }}"
+                style="display:flex;gap:6px;align-items:center;">
+            <input type="number"
+                   name="trade_size"
+                   value="{{ b.trade_size }}"
+                   min="1"
+                   step="1"
+                   title="Applies to future entries only; open positions keep their original quantity."
+                   style="width:72px;background:#111532;color:white;border:1px solid #3b3b70;border-radius:6px;padding:4px;">
+          </form>
         </td>
         <td>{{ b.status }}</td>
         <td>{{ b.updated_at }}</td>
@@ -466,6 +463,11 @@
         </td>
 <td>
   {% if b.is_active and b.status == "RUNNING" %}
+    <button class="btn btn-restart"
+            type="submit"
+            form="size-form-{{ b.id }}">
+      Save Size
+    </button>
     <!-- Running: show Stop + Delete -->
     <form method="post" action="{{ url_prefix }}/auth/papertradebot/stop/{{ b.id }}" style="display:inline;">
       <button class="btn btn-stop">🛑 Stop</button>
@@ -474,7 +476,7 @@
     <!-- Stopped/inactive: save size and restart -->
     <button class="btn btn-restart"
             type="submit"
-            form="restart-size-form-{{ b.id }}">
+            form="size-form-{{ b.id }}">
       💾 Save + Restart
     </button>
   {% endif %}
