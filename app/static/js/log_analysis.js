@@ -94,6 +94,9 @@ async function loadSummary() {
     .map(([k, v]) => `<div>${safeText(k)}: <strong>${v}</strong></div>`)
     .join("");
 
+  const errorCount = data.errors || 0;
+  const errorClass = errorCount > 0 ? "color:#ff8080;" : "color:#57e6c2;";
+
   cards.innerHTML = `
     <div class="card">
       <div class="card-body">
@@ -106,6 +109,13 @@ async function loadSummary() {
       <div class="card-body">
         <h5>Symbols</h5>
         ${symbolHtml || "<div>No symbols found</div>"}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h5>Log Errors</h5>
+        <h2 style="${errorClass}">${errorCount}</h2>
       </div>
     </div>
 
@@ -369,6 +379,7 @@ async function loadDiagnostics() {
 
   const reasons = summary.by_reason || {};
   const actions = summary.by_action || {};
+  const errorRows = summary.error_rows || [];
 
   const cooldown = reasons.COOLDOWN || 0;
   const blockedProb = reasons.BOTH_PROBS_BELOW_THRESHOLDS || 0;
@@ -388,6 +399,24 @@ async function loadDiagnostics() {
     .reduce((sum, [, v]) => sum + v, 0);
 
   let warnings = "";
+  let errorHtml = "";
+
+  if (errorRows.length) {
+    errorHtml = `
+      <p><strong>Errors found in bot logs:</strong></p>
+      <ul>
+        ${errorRows.map(row => `
+          <li>
+            <strong>${safeText(row.symbol || "UNKNOWN")}</strong>
+            ${safeText(row.time || "")}
+            ${row.source_file ? `(${safeText(row.source_file)})` : ""}
+            <br>${safeText(row.action || "ERROR")}
+            ${row.reason ? `: ${safeText(row.reason)}` : ""}
+          </li>
+        `).join("")}
+      </ul>
+    `;
+  }
 
   if (cooldown > 0) {
     warnings += `
@@ -426,6 +455,8 @@ async function loadDiagnostics() {
   }
 
   diagnosticsBox.innerHTML = `
+    ${errorHtml || "<p><strong>Errors found in bot logs:</strong> none.</p>"}
+
     <p><strong>Model / rule-layer diagnostics:</strong></p>
     <ul>
       ${warnings || "<li>No major blocking rule found in summary.</li>"}

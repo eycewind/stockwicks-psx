@@ -1,6 +1,7 @@
 # /var/www/stockwicks/app/scripts/stock_algos/algo3_runner.py
 
 import os
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -44,16 +45,29 @@ def log_bot_decision(bot, data_len, last_bar, decision):
 
         timestamp_str = datetime.now(_ET).strftime("%Y-%m-%d %H:%M:%S %Z")
 
-        log_message = f"[{timestamp_str}] ACTION: {decision}\n"
-        log_message += f"\tData Fetched: {data_len} candles\n"
-
         smi_val = last_bar.get("SMI", "N/A") if hasattr(last_bar, "get") else "N/A"
         smi_str = f"{smi_val:.2f}" if isinstance(smi_val, (int, float)) else str(smi_val)
 
-        log_message += f"\tAlgo3 State: SMI={smi_str}\n"
-
         buy_signal = last_bar.get("Buy_Signal", "N/A") if hasattr(last_bar, "get") else "N/A"
         sell_signal = last_bar.get("Sell_Signal", "N/A") if hasattr(last_bar, "get") else "N/A"
+        close_val = last_bar.get("close", "N/A") if hasattr(last_bar, "get") else "N/A"
+        open_val = last_bar.get("open", "N/A") if hasattr(last_bar, "get") else "N/A"
+        interval = getattr(bot, "interval", "") or ""
+        symbol = str(getattr(bot, "symbol", "") or "").upper()
+        feature_snapshot = {
+            "smi": smi_val,
+            "buy_signal": 1.0 if buy_signal is True else 0.0,
+            "sell_signal": 1.0 if sell_signal is True else 0.0,
+        }
+
+        log_message = "\n" + "=" * 88 + "\n"
+        log_message += f"{timestamp_str} | {symbol} {interval} | {decision} | INDICATOR_STATE\n"
+        log_message += f"algo={bot.algo_name} feature_set=SMI\n"
+        log_message += f"close={close_val} open={open_val} rows={data_len} position=UNKNOWN\n"
+        log_message += "features=" + json.dumps(feature_snapshot, default=str) + "\n"
+        log_message += f"[{timestamp_str}] ACTION: {decision}\n"
+        log_message += f"\tData Fetched: {data_len} candles\n"
+        log_message += f"\tAlgo3 State: SMI={smi_str}\n"
 
         log_message += f"\tSignals: Buy={buy_signal}, Sell={sell_signal}\n"
         log_message += "-" * 40 + "\n"

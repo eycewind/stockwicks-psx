@@ -31,6 +31,7 @@ Logging:
 """
 
 import os
+import json
 import logging
 from datetime import datetime
 
@@ -131,7 +132,31 @@ def log_bot_decision(bot, data_len, last_bar, decision, now_et=None, latest_bar_
             now_et = datetime.now(_ET)
 
         timestamp_str = now_et.strftime("%Y-%m-%d %H:%M:%S %Z")
-        log_message = f"[{timestamp_str}] ACTION: {decision}\n"
+        close_val = last_bar.get("close", "N/A")
+        open_val = last_bar.get("open", "N/A")
+        macd_val = last_bar.get("macd", "N/A")
+        sig_val = last_bar.get("macd_signal", "N/A")
+        hist_val = last_bar.get("macd_hist", "N/A")
+        atr_val = last_bar.get("ATR14", "N/A")
+        buy_signal = last_bar.get("Buy_Signal", "N/A")
+        sell_signal = last_bar.get("Sell_Signal", "N/A")
+        interval = getattr(bot, "interval", "") or ""
+        symbol = str(getattr(bot, "symbol", "") or "").upper()
+        feature_snapshot = {
+            "macd": macd_val,
+            "macd_signal": sig_val,
+            "macd_hist": hist_val,
+            "atr14": atr_val,
+            "buy_signal": 1.0 if buy_signal is True else 0.0,
+            "sell_signal": 1.0 if sell_signal is True else 0.0,
+        }
+
+        log_message = "\n" + "=" * 88 + "\n"
+        log_message += f"{timestamp_str} | {symbol} {interval} | {decision} | INDICATOR_STATE\n"
+        log_message += f"algo={bot.algo_name} feature_set=MACD\n"
+        log_message += f"close={close_val} open={open_val} rows={data_len} position=UNKNOWN\n"
+        log_message += "features=" + json.dumps(feature_snapshot, default=str) + "\n"
+        log_message += f"[{timestamp_str}] ACTION: {decision}\n"
         log_message += f"\tData Fetched: {data_len} candles\n"
 
         if latest_bar_time is not None:
@@ -141,12 +166,6 @@ def log_bot_decision(bot, data_len, last_bar, decision, now_et=None, latest_bar_
             age = now_et - latest_bar_time
             log_message += f"\tBar Age: {age}\n"
 
-        close_val = last_bar.get("close", "N/A")
-        macd_val = last_bar.get("macd", "N/A")
-        sig_val = last_bar.get("macd_signal", "N/A")
-        hist_val = last_bar.get("macd_hist", "N/A")
-        atr_val = last_bar.get("ATR14", "N/A")
-
         log_message += (
             f"\tMACD State: Close={_fmt_num(close_val)}, "
             f"MACD={_fmt_num(macd_val)}, "
@@ -155,8 +174,8 @@ def log_bot_decision(bot, data_len, last_bar, decision, now_et=None, latest_bar_
             f"ATR14={_fmt_num(atr_val)}\n"
         )
         log_message += (
-            f"\tSignals: Buy={last_bar.get('Buy_Signal', 'N/A')}, "
-            f"Sell={last_bar.get('Sell_Signal', 'N/A')}\n"
+            f"\tSignals: Buy={buy_signal}, "
+            f"Sell={sell_signal}\n"
         )
         log_message += "-" * 40 + "\n"
 

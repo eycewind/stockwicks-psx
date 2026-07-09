@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import joblib
@@ -13,6 +15,52 @@ DEFAULT_MODEL_MAX_AGE_MINUTES = 30.0
 DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN = 30
 
 VALID_MODEL_REFRESH_MODES = {"fixed", "scheduled", "adaptive", "every_bar"}
+
+
+def _is_writable_dir(path: str) -> bool:
+    try:
+        os.makedirs(path, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix=".write-test-", dir=path, delete=True):
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _fallback_model_path(model_path: str) -> str:
+    filename = os.path.basename(model_path)
+    fallback_dir = os.getenv("MODEL_FALLBACK_DIR", "").strip()
+    if not fallback_dir:
+        data_dir = os.getenv("DATA_DIR", "").strip()
+        if data_dir:
+            fallback_dir = os.path.join(data_dir, "models")
+        else:
+            requested_dir = Path(model_path).expanduser().resolve().parent
+            client_root = requested_dir.parent if requested_dir.name == "models" else requested_dir
+            fallback_dir = str(client_root / "data" / "models")
+    return os.path.join(fallback_dir, filename)
+
+
+def resolve_writable_model_path(model_path: str, logger: Any = None) -> str:
+    requested_dir = os.path.dirname(model_path) or "."
+    if _is_writable_dir(requested_dir):
+        return model_path
+
+    fallback_path = _fallback_model_path(model_path)
+    fallback_dir = os.path.dirname(fallback_path) or "."
+    if _is_writable_dir(fallback_dir):
+        if logger:
+            logger.warning(
+                "[AlgoMM] MODEL_DIR is not writable (%s). Using fallback model path %s",
+                requested_dir,
+                fallback_path,
+            )
+        return fallback_path
+
+    raise PermissionError(
+        f"Neither MODEL_DIR ({requested_dir}) nor fallback model directory "
+        f"({fallback_dir}) is writable"
+    )
 
 
 def normalize_model_refresh_mode(value: Any, default: str = DEFAULT_MODEL_REFRESH_MODE) -> str:
@@ -154,6 +202,8 @@ def load_or_train_model_with_policy(
 ):
     feat_names = list(feat_names)
     mode = normalize_model_refresh_mode(getattr(cfg, "model_refresh_mode", None))
+    requested_model_path = model_path
+    model_path = resolve_writable_model_path(model_path, logger)
 
     pack: dict[str, Any] | None = None
     if os.path.exists(model_path):
@@ -183,6 +233,8 @@ def load_or_train_model_with_policy(
             logger.info("[AlgoMM] Retraining model %s refresh_mode=%s reason=%s", model_path, mode, reason)
     elif logger:
         logger.info("[AlgoMM] Training new model for %s %s refresh_mode=%s", symbol, interval, mode)
+        if model_path != requested_model_path:
+            logger.info("[AlgoMM] Requested model path %s redirected to %s", requested_model_path, model_path)
 
     from sklearn.ensemble import HistGradientBoostingClassifier
 

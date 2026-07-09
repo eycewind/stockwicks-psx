@@ -8,14 +8,20 @@ from typing import Any, Dict, List, Optional
 
 ACTION_RE = re.compile(
     r"\b("
-    r"OPEN_LONG|OPEN_SHORT|HOLD_POSITION|NO_ENTRY_SIGNAL|SAME_BAR_SKIP|COOLDOWN|"
+    r"OPEN_LONG|OPEN_SHORT|HOLD_POSITION|HOLD_OPEN_TRADE|NO_ENTRY_SIGNAL|NO_SIGNAL|SAME_BAR_SKIP|COOLDOWN|"
     r"NO_DATA|RESAMPLE_FAILED|INVALID_PRICE|NO_FEATURES|NO_INFER_FEATURES|"
     r"NO_TRAIN_FEATURES|BAD_TRAIN_FEATURES|ONE_CLASS_TRAINING|STALE_FEATURES|"
     r"NO_PROBS|NO_SMOOTHED_PROB|NO_VALID_PROB|PROB_ALIGN_SHORT|OPEN_FAILED|"
     r"MARKET_CLOSED|STALE_PRICE_DATA|NO_CLOSED_BARS|FEATURE_BUILDER_UNSAFE|"
+    r"INSUFFICIENT_DATA_FOR_SIGNALS|INSUFFICIENT_DATA|SIGNAL_GEN_FAILED|"
+    r"ALREADY_PROCESSED_BAR|NOT_ENOUGH_SIGNAL_ROWS|SELL_SIGNAL_SHORT_DISABLED|"
+    r"CLOSE_LONG(?:_[A-Z0-9_]+)?|CLOSE_SHORT(?:_[A-Z0-9_]+)?|"
+    r"END_OF_DAY_CLOSE(?:_[A-Z0-9_]+)?|EOD_NO_OPEN_TRADE|EOD_NO_POSITION|"
     r"EXIT_[A-Z0-9_]+|ERROR(?::[^|\n]*)?"
     r")\b"
 )
+
+ERROR_ACTION_RE = re.compile(r"^(?:ERROR|LOG_PARSE_ERROR)\b", re.IGNORECASE)
 
 
 def _safe_float(value: Any):
@@ -131,6 +137,10 @@ def normalize_row(row: Dict[str, Any], path: Optional[Path] = None) -> Dict[str,
     if out.get("reason") is not None:
         out["reason"] = str(out["reason"]).strip()
 
+    action_text = str(out.get("action") or "")
+    reason_text = str(out.get("reason") or "")
+    out["is_error"] = bool(ERROR_ACTION_RE.search(action_text) or "EXCEPTION:" in reason_text or "ERROR:" in reason_text)
+
     if out.get("ts_et") and not out.get("time"):
         out["time"] = out.get("ts_et")
     if out.get("datetime") and not out.get("time"):
@@ -196,6 +206,8 @@ def parse_pretty_algo_log(path: Path) -> List[Dict[str, Any]]:
             "symbol": r"Symbol:\s*(\S+)",
             "time": r"Time:\s*(.*)",
             "data_candles": r"Data:\s*(\d+)\s*candles",
+            "latest_bar_time": r"Latest Bar Time:\s*(.*)",
+            "bar_age": r"Bar Age:\s*(.*)",
             "interval": r"Interval:\s*(\S*)",
             "action": r"ACTION:\s*(.*)",
             "reason": r"REASON:\s*(.*)",
@@ -249,6 +261,35 @@ def parse_pretty_algo_log(path: Path) -> List[Dict[str, Any]]:
         features_match = re.search(r"(?:Features|features)\s*[:=]\s*(.*)", block)
         if features_match:
             row["features"] = features_match.group(1).strip()
+
+        indicator_features: Dict[str, Any] = {}
+        smi_state = re.search(r"Algo3 State:\s*SMI=([^\s,\n]+)", block)
+        if smi_state:
+            indicator_features["smi"] = smi_state.group(1)
+
+        macd_state = re.search(
+            r"MACD State:\s*Close=([^,\n]+),\s*MACD=([^,\n]+),\s*Signal=([^,\n]+),\s*Hist=([^,\n]+),\s*ATR14=([^\s,\n]+)",
+            block,
+        )
+        if macd_state:
+            indicator_features.update({
+                "close": macd_state.group(1),
+                "macd": macd_state.group(2),
+                "macd_signal": macd_state.group(3),
+                "macd_hist": macd_state.group(4),
+                "atr14": macd_state.group(5),
+            })
+            row.setdefault("close", macd_state.group(1))
+
+        signals = re.search(r"Signals:\s*Buy=([^,\n]+),\s*Sell=([^\s,\n]+)", block)
+        if signals:
+            indicator_features["buy_signal"] = 1.0 if signals.group(1).strip() == "True" else 0.0
+            indicator_features["sell_signal"] = 1.0 if signals.group(2).strip() == "True" else 0.0
+
+        if indicator_features:
+            existing_features = _parse_features(row.get("features") or {})
+            existing_features.update({k: _safe_float(v) for k, v in indicator_features.items()})
+            row["features"] = existing_features
 
         rows.append(normalize_row(row, path))
 
@@ -415,6 +456,7 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     by_reason: Dict[str, int] = {}
     by_symbol: Dict[str, int] = {}
     decisions = _decision_rows(rows)
+    errors = error_rows(rows)
 
     for row in decisions:
         action = row.get("action") or "UNKNOWN"
@@ -430,7 +472,24 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "by_action": by_action,
         "by_reason": by_reason,
         "by_symbol": by_symbol,
+        "errors": len(errors),
+        "error_rows": errors[:25],
     }
+
+
+def error_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    errors = []
+    for row in _decision_rows(rows):
+        if not row.get("is_error"):
+            continue
+        errors.append({
+            "time": row.get("bar_time") or row.get("time") or row.get("log_time"),
+            "symbol": row.get("symbol"),
+            "source_file": row.get("source_file"),
+            "action": row.get("action"),
+            "reason": row.get("reason"),
+        })
+    return errors
 
 
 def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -486,7 +545,13 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "features": row.get("features") or {},
         })
 
-        if action in event_actions or str(action or "").startswith("EXIT_"):
+        action_text = str(action or "")
+        if (
+            action in event_actions
+            or action_text.startswith("EXIT_")
+            or action_text.startswith("CLOSE_")
+            or action_text.startswith("END_OF_DAY_CLOSE")
+        ):
             events.append({
                 "time": time_value,
                 "symbol": row.get("symbol"),
