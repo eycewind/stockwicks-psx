@@ -163,6 +163,15 @@ database_exists() {
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}'" | grep -q 1
 }
 
+table_exists() {
+  local db_name="$1"
+  local table_name="$2"
+  if [[ "${APPLY}" -eq 0 ]]; then
+    return 0
+  fi
+  sudo -u postgres psql -d "${db_name}" -tAc "SELECT to_regclass('public.${table_name}') IS NOT NULL;" | grep -q t
+}
+
 discover_client_slugs() {
   if [[ "${APPLY}" -eq 0 ]]; then
     echo "${ADMIN_CLIENT}"
@@ -206,10 +215,15 @@ revoke_client_db() {
   local client="$1"
   local db_name="stockwicks_${client}"
   local sql
+  local table_name
+  for table_name in users paper_stock_trade_bots paper_stock_bot_live_mirror_history; do
+    if table_exists "${db_name}" "${table_name}"; then
+      psql_postgres -d "${db_name}" -c "REVOKE SELECT ON TABLE ${table_name} FROM \"${REPORT_USER}\";"
+    else
+      echo "WARN: table ${db_name}.public.${table_name} does not exist; skipping SELECT revoke."
+    fi
+  done
   sql=$(cat <<SQL
-REVOKE SELECT ON TABLE users FROM "${REPORT_USER}";
-REVOKE SELECT ON TABLE paper_stock_trade_bots FROM "${REPORT_USER}";
-REVOKE SELECT ON TABLE paper_stock_bot_live_mirror_history FROM "${REPORT_USER}";
 REVOKE USAGE ON SCHEMA public FROM "${REPORT_USER}";
 REVOKE CONNECT ON DATABASE "${db_name}" FROM "${REPORT_USER}";
 SQL

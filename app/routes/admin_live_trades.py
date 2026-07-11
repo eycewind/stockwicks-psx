@@ -159,6 +159,12 @@ def _fetch_client_rows(
         filters.append("m.user_id = :user_id")
         params["user_id"] = user_id
 
+    table_check = text("SELECT to_regclass('public.paper_stock_bot_live_mirror_history') IS NOT NULL")
+    with _client_connection(slug) as conn:
+        has_mirror_table = bool(conn.execute(table_check).scalar())
+    if not has_mirror_table:
+        return []
+
     sql = text(f"""
         SELECT
             m.id,
