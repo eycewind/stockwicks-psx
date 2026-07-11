@@ -8,7 +8,9 @@ set -euo pipefail
 #   sudo bash app/scripts/deploy_admin_live_trades.sh --apply
 #
 # Default is a dry run. Add --apply to change Postgres grants, .env, admin user,
-# and restart the web service.
+# and restart the web service. On apply, this script saves .env to
+# .admin_live_trades_backups/ before editing it. Roll back with:
+#   sudo bash app/scripts/rollback_admin_live_trades.sh --apply
 
 CLIENTS_ROOT="${CLIENTS_ROOT:-/var/stockwicks/clients}"
 ADMIN_CLIENT="${ADMIN_CLIENT:-}"
@@ -92,6 +94,7 @@ done
 ROOT="$(pwd)"
 [[ -f "${ROOT}/app/main.py" ]] || die "Run from a StockWicks client root containing app/main.py"
 [[ -f "${ROOT}/.env" ]] || die "Missing .env in ${ROOT}"
+BACKUP_DIR="${ROOT}/.admin_live_trades_backups"
 
 if [[ -z "${ADMIN_CLIENT}" ]]; then
   ADMIN_CLIENT="$(basename "${ROOT}")"
@@ -151,6 +154,18 @@ run_or_print() {
     printf ' %q' "$@"
     printf '\n'
   fi
+}
+
+backup_env() {
+  local stamp
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  if [[ "${APPLY}" -eq 0 ]]; then
+    echo "DRY RUN: backup ${ROOT}/.env to ${BACKUP_DIR}/.env.${stamp}.bak"
+    return
+  fi
+  mkdir -p "${BACKUP_DIR}"
+  cp -a "${ROOT}/.env" "${BACKUP_DIR}/.env.${stamp}.bak"
+  echo "Backed up .env to ${BACKUP_DIR}/.env.${stamp}.bak"
 }
 
 psql_postgres() {
@@ -255,6 +270,7 @@ for client in "${VALID_CLIENTS[@]}"; do
   grant_client_db "${client}"
 done
 mark_admin_user
+backup_env
 upsert_env_line "ADMIN_CLIENT_SLUGS" "${CLIENT_SLUGS}"
 upsert_env_line "ADMIN_CLIENT_DATABASE_URL_TEMPLATE" "${REPORT_DSN_TEMPLATE}"
 validate_app_import
