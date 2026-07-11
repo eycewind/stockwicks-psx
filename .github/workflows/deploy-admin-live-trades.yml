@@ -134,20 +134,27 @@ jobs:
             ADMIN_USER='${{ github.event.inputs.admin_user }}' \
             bash app/scripts/deploy_admin_live_trades.sh --apply --admin-client ashakil
 
+          HEALTH_OK=0
           for attempt in {1..30}; do
-            if curl -fsS --max-time 5 '${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz'; then
-              echo
-              echo "Public health ok"
-              exit 0
+            set +e
+            curl -fsS --max-time 5 '${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz'
+            CURL_STATUS=$?
+            set -e
+            if [[ "${CURL_STATUS}" -eq 0 ]]; then
+              HEALTH_OK=1
+              break
             fi
-            if [[ "${attempt}" -eq 30 ]]; then
-              echo "Public health failed after ${attempt} attempts" >&2
-              sudo systemctl status --no-pager stockwicks-ashakil-web || true
-              sudo journalctl -u stockwicks-ashakil-web -n 80 --no-pager || true
-              exit 1
-            fi
+            echo "Public health attempt ${attempt}/30 failed with curl status ${CURL_STATUS}; retrying..."
             sleep 2
           done
+          if [[ "${HEALTH_OK}" -ne 1 ]]; then
+            echo "Public health failed after retries" >&2
+            sudo systemctl status --no-pager stockwicks-ashakil-web || true
+            sudo journalctl -u stockwicks-ashakil-web -n 80 --no-pager || true
+            exit 1
+          fi
+          echo
+          echo "Public health ok"
           SSH
 
       - name: Roll back admin setup
@@ -167,18 +174,25 @@ jobs:
           sudo env ADMIN_CLIENT_SLUGS='${{ github.event.inputs.clients }}' \
             ADMIN_USER='${{ github.event.inputs.admin_user }}' \
             bash app/scripts/rollback_admin_live_trades.sh --apply --admin-client ashakil ${CLEANUP_FLAGS}
+          HEALTH_OK=0
           for attempt in {1..30}; do
-            if curl -fsS --max-time 5 '${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz'; then
-              echo
-              echo "Public health ok"
-              exit 0
+            set +e
+            curl -fsS --max-time 5 '${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz'
+            CURL_STATUS=$?
+            set -e
+            if [[ "${CURL_STATUS}" -eq 0 ]]; then
+              HEALTH_OK=1
+              break
             fi
-            if [[ "${attempt}" -eq 30 ]]; then
-              echo "Public health failed after ${attempt} attempts" >&2
-              sudo systemctl status --no-pager stockwicks-ashakil-web || true
-              sudo journalctl -u stockwicks-ashakil-web -n 80 --no-pager || true
-              exit 1
-            fi
+            echo "Public health attempt ${attempt}/30 failed with curl status ${CURL_STATUS}; retrying..."
             sleep 2
           done
+          if [[ "${HEALTH_OK}" -ne 1 ]]; then
+            echo "Public health failed after retries" >&2
+            sudo systemctl status --no-pager stockwicks-ashakil-web || true
+            sudo journalctl -u stockwicks-ashakil-web -n 80 --no-pager || true
+            exit 1
+          fi
+          echo
+          echo "Public health ok"
           SSH
