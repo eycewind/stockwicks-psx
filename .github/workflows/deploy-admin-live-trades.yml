@@ -49,8 +49,21 @@ jobs:
             --exclude 'venv' \
             --exclude 'data' \
             --exclude 'logs' \
-            --exclude 'models' \
+            --exclude '/models' \
             ./ release/
+
+          for required in \
+            app/main.py \
+            app/database/connection.py \
+            app/models/__init__.py \
+            app/models/user.py \
+            app/routes/admin_live_trades.py
+          do
+            test -f "release/${required}" || {
+              echo "Release missing required file: ${required}" >&2
+              exit 1
+            }
+          done
 
       - name: Configure SSH
         run: |
@@ -81,6 +94,18 @@ jobs:
 
           [[ -d "${APP_PATH}" ]] || { echo "Missing APP_PATH=${APP_PATH}" >&2; exit 1; }
           [[ -d "${RELEASE_SRC}/app" ]] || { echo "Missing release app=${RELEASE_SRC}/app" >&2; exit 1; }
+          for required in \
+            app/main.py \
+            app/database/connection.py \
+            app/models/__init__.py \
+            app/models/user.py \
+            app/routes/admin_live_trades.py
+          do
+            [[ -f "${RELEASE_SRC}/${required}" ]] || {
+              echo "Release missing required file before deploy: ${required}" >&2
+              exit 1
+            }
+          done
 
           TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
           BACKUP_DIR="/var/stockwicks/releases/ashakil/admin_live_trades_backup_${TIMESTAMP}"
@@ -90,7 +115,7 @@ jobs:
             --exclude '.env' \
             --exclude 'data' \
             --exclude 'logs' \
-            --exclude 'models' \
+            --exclude '/models' \
             --exclude '__pycache__' \
             --exclude '*.pyc' \
             "${APP_PATH}/" "${BACKUP_DIR}/"
