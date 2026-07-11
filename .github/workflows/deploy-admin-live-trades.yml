@@ -1,0 +1,133 @@
+name: Deploy Admin Live Trades
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Deploy or rollback"
+        required: true
+        type: choice
+        default: deploy
+        options:
+          - deploy
+          - rollback
+      clients:
+        description: "Comma-separated client slugs for admin report"
+        required: true
+        default: "ashakil,haithaima,yzia"
+      admin_user:
+        description: "Admin username to grant/remove admin flag"
+        required: true
+        default: "ratadmin"
+      full_cleanup:
+        description: "Rollback only: also revoke report grants and unset admin"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  deploy-admin-live-trades:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compile tracked Python files
+        run: |
+          git ls-files -z '*.py' | xargs -0 python -m py_compile
+
+      - name: Package release
+        run: |
+          mkdir -p release
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.env' \
+            --exclude 'venv' \
+            --exclude 'data' \
+            --exclude 'logs' \
+            --exclude 'models' \
+            ./ release/
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload release to VPS
+        run: |
+          RELEASE_ID="admin-live-trades-${GITHUB_SHA::8}-$(date +%Y%m%d%H%M%S)"
+          echo "RELEASE_ID=${RELEASE_ID}" >> "$GITHUB_ENV"
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "mkdir -p /tmp/stockwicks-${RELEASE_ID}"
+
+          rsync -az -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.VPS_PORT }}" \
+            release/ \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/stockwicks-${RELEASE_ID}/"
+
+      - name: Deploy code and run admin setup
+        if: ${{ github.event.inputs.mode == 'deploy' }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" <<'SSH'
+          set -euo pipefail
+          APP_PATH='${{ secrets.ASHAKIL_APP_PATH }}'
+          RELEASE_SRC="/tmp/stockwicks-${{ env.RELEASE_ID }}"
+
+          [[ -d "${APP_PATH}" ]] || { echo "Missing APP_PATH=${APP_PATH}" >&2; exit 1; }
+          [[ -d "${RELEASE_SRC}/app" ]] || { echo "Missing release app=${RELEASE_SRC}/app" >&2; exit 1; }
+
+          TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+          BACKUP_DIR="/var/stockwicks/releases/ashakil/admin_live_trades_backup_${TIMESTAMP}"
+          sudo mkdir -p "${BACKUP_DIR}"
+          sudo rsync -a \
+            --exclude 'venv' \
+            --exclude '.env' \
+            --exclude 'data' \
+            --exclude 'logs' \
+            --exclude 'models' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            "${APP_PATH}/" "${BACKUP_DIR}/"
+
+          sudo rsync -a --delete \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude 'cache' \
+            --exclude 'data' \
+            --exclude 'logs' \
+            "${RELEASE_SRC}/app/" "${APP_PATH}/app/"
+          sudo chown -R www-data:www-data "${APP_PATH}/app"
+
+          cd "${APP_PATH}"
+          sudo env ADMIN_CLIENT_SLUGS='${{ github.event.inputs.clients }}' \
+            ADMIN_USER='${{ github.event.inputs.admin_user }}' \
+            bash app/scripts/deploy_admin_live_trades.sh --apply --admin-client ashakil
+
+          curl -fsS --max-time 20 '${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz'
+          SSH
+
+      - name: Roll back admin setup
+        if: ${{ github.event.inputs.mode == 'rollback' }}
+        run: |
+          CLEANUP_FLAGS=""
+          if [[ "${{ github.event.inputs.full_cleanup }}" == "true" ]]; then
+            CLEANUP_FLAGS="--revoke-grants --unset-admin"
+          fi
+
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.VPS_PORT }}" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" <<SSH
+          set -euo pipefail
+          APP_PATH='${{ secrets.ASHAKIL_APP_PATH }}'
+          RELEASE_SRC="/tmp/stockwicks-${{ env.RELEASE_ID }}"
+          sudo install -m 755 "${RELEASE_SRC}/app/scripts/rollback_admin_live_trades.sh" "${APP_PATH}/app/scripts/rollback_admin_live_trades.sh"
+          cd "\${APP_PATH}"
+          sudo env ADMIN_CLIENT_SLUGS='${{ github.event.inputs.clients }}' \
+            ADMIN_USER='${{ github.event.inputs.admin_user }}' \
+            bash app/scripts/rollback_admin_live_trades.sh --apply --admin-client ashakil ${CLEANUP_FLAGS}
+          curl -fsS --max-time 20 '${{ secrets.ASHAKIL_PUBLIC_URL }}/healthz'
+          SSH
