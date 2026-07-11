@@ -251,6 +251,7 @@ def admin_live_trades_page(
 ):
     today = date.today()
     return templates.TemplateResponse(
+        request,
         "admin/live_trades.html",
         {
             "request": request,
