@@ -113,6 +113,7 @@ for client in "${CLIENTS[@]}"; do
 done
 [[ ${#VALID_CLIENTS[@]} -gt 0 ]] || die "No valid clients configured"
 CLIENT_SLUGS="$(IFS=','; echo "${VALID_CLIENTS[*]}")"
+EXISTING_CLIENTS=()
 
 extract_env_value() {
   local key="$1"
@@ -178,6 +179,14 @@ psql_postgres() {
   fi
 }
 
+database_exists() {
+  local db_name="$1"
+  if [[ "${APPLY}" -eq 0 ]]; then
+    return 0
+  fi
+  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}'" | grep -q 1
+}
+
 ensure_report_role() {
   local sql
   sql=$(cat <<SQL
@@ -208,6 +217,24 @@ GRANT SELECT ON TABLE paper_stock_bot_live_mirror_history TO "${REPORT_USER}";
 SQL
 )
   psql_postgres -d "${db_name}" -c "${sql}"
+}
+
+filter_existing_clients() {
+  local client
+  local db_name
+  EXISTING_CLIENTS=()
+  for client in "${VALID_CLIENTS[@]}"; do
+    db_name="stockwicks_${client}"
+    if database_exists "${db_name}"; then
+      EXISTING_CLIENTS+=("${client}")
+    else
+      echo "WARN: database ${db_name} does not exist; skipping client ${client}."
+    fi
+  done
+  if [[ ${#EXISTING_CLIENTS[@]} -eq 0 ]]; then
+    die "No configured client databases exist. Checked: ${CLIENT_SLUGS}"
+  fi
+  CLIENT_SLUGS="$(IFS=','; echo "${EXISTING_CLIENTS[*]}")"
 }
 
 mark_admin_user() {
@@ -266,7 +293,8 @@ restart_web() {
 }
 
 ensure_report_role
-for client in "${VALID_CLIENTS[@]}"; do
+filter_existing_clients
+for client in "${EXISTING_CLIENTS[@]}"; do
   grant_client_db "${client}"
 done
 mark_admin_user

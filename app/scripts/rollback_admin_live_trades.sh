@@ -162,6 +162,14 @@ psql_postgres() {
   fi
 }
 
+database_exists() {
+  local db_name="$1"
+  if [[ "${APPLY}" -eq 0 ]]; then
+    return 0
+  fi
+  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}'" | grep -q 1
+}
+
 restore_env() {
   if [[ -z "${BACKUP_FILE}" ]]; then
     echo "WARN: no .env backup found; skipping env restore."
@@ -184,6 +192,16 @@ REVOKE CONNECT ON DATABASE "${db_name}" FROM "${REPORT_USER}";
 SQL
 )
   psql_postgres -d "${db_name}" -c "${sql}"
+}
+
+revoke_client_if_exists() {
+  local client="$1"
+  local db_name="stockwicks_${client}"
+  if database_exists "${db_name}"; then
+    revoke_client_db "${client}"
+  else
+    echo "WARN: database ${db_name} does not exist; skipping revoke for ${client}."
+  fi
 }
 
 unset_admin_user() {
@@ -209,7 +227,7 @@ restart_web() {
 restore_env
 if [[ "${REVOKE_GRANTS}" -eq 1 ]]; then
   for client in "${VALID_CLIENTS[@]}"; do
-    revoke_client_db "${client}"
+    revoke_client_if_exists "${client}"
   done
 fi
 if [[ "${UNSET_ADMIN}" -eq 1 ]]; then

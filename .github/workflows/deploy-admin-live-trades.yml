@@ -14,7 +14,7 @@ on:
       clients:
         description: "Comma-separated client slugs for admin report"
         required: true
-        default: "ashakil,haithaima,yzia"
+        default: "ashakil,yzia"
       admin_user:
         description: "Admin username to grant/remove admin flag"
         required: true
