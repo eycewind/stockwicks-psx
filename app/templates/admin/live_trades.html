@@ -122,7 +122,10 @@
     </div>
     <div class="field">
       <label for="symbol">Symbol</label>
-      <input id="symbol" name="symbol" type="text" value="ALL" placeholder="ALL">
+      <input id="symbol" name="symbol" type="text" value="ALL" placeholder="ALL" list="symbolOptions">
+      <datalist id="symbolOptions">
+        <option value="ALL"></option>
+      </datalist>
     </div>
     <div class="field">
       <label for="user_id">User ID</label>
@@ -189,6 +192,20 @@ const clsPnl = (value) => Number(value || 0) >= 0 ? "pos" : "neg";
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 }[c]));
+const knownSymbols = new Set(["ALL"]);
+
+function updateSymbolOptions(trades) {
+  for (const row of trades || []) {
+    const symbol = String(row.symbol || "").trim().toUpperCase();
+    if (symbol) knownSymbols.add(symbol);
+  }
+  const datalist = document.getElementById("symbolOptions");
+  datalist.innerHTML = Array.from(knownSymbols).sort((a, b) => {
+    if (a === "ALL") return -1;
+    if (b === "ALL") return 1;
+    return a.localeCompare(b);
+  }).map(symbol => `<option value="${esc(symbol)}"></option>`).join("");
+}
 
 async function loadTrades() {
   const form = document.getElementById("filters");
@@ -228,6 +245,7 @@ async function loadTrades() {
 
   const tradeRows = document.getElementById("tradeRows");
   const trades = data.trades || [];
+  updateSymbolOptions(trades);
   tradeRows.innerHTML = trades.length ? trades.map(row => `
     <tr>
       <td>${esc(row.client)}</td>
