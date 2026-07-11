@@ -119,6 +119,9 @@
             <a href="{{ url_prefix }}/replay-simulator">Replay</a>
             <a href="{{ url_prefix }}/analysis/strategy-optimizer">Strategy Optimizer</a>
              <a href="{{ url_prefix }}/analysis/logs">Trade History Analysis</a>
+            {% if nav_user and nav_user.is_admin %}
+                <a href="{{ url_prefix }}/admin/live-trades">Admin Trades</a>
+            {% endif %}
             <a href="{{ url_prefix }}/account">Account</a>
             {% if is_logged_in %}
                 <a href="{{ url_prefix }}/auth/logout">Logout</a>

@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Live Trades{% endblock %}
+
+{% block head %}
+<style>
+  .admin-shell {
+    padding: 24px;
+    max-width: 1500px;
+    margin: 0 auto;
+  }
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(130px, 1fr)) auto;
+    gap: 12px;
+    align-items: end;
+    background: #111827;
+    border: 1px solid #263244;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .field label {
+    display: block;
+    color: #9ca3af;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .field input, .field select {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #0f172a;
+    color: #fff;
+    padding: 10px;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .metric {
+    background: #111827;
+    border: 1px solid #263244;
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .metric span {
+    display: block;
+    color: #9ca3af;
+    font-size: 12px;
+  }
+  .metric strong {
+    display: block;
+    margin-top: 8px;
+    font-size: 22px;
+  }
+  .panel {
+    margin-top: 16px;
+    background: #111827;
+    border: 1px solid #263244;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .panel h2 {
+    font-size: 18px;
+    margin: 0;
+    padding: 14px 16px;
+    border-bottom: 1px solid #263244;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    border-bottom: 1px solid #263244;
+    padding: 10px;
+    text-align: left;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  th {
+    color: #9ca3af;
+    background: #0f172a;
+  }
+  .muted { color: #9ca3af; }
+  .pos { color: #4ade80; }
+  .neg { color: #f87171; }
+  .scroll { overflow-x: auto; }
+  .error-list {
+    margin-top: 12px;
+    color: #fca5a5;
+  }
+  @media (max-width: 1100px) {
+    .toolbar, .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="admin-shell">
+  <h1>Admin Live Schwab Trades</h1>
+
+  <form id="filters" class="toolbar">
+    <div class="field">
+      <label for="client">Client</label>
+      <select id="client" name="client">
+        <option value="ALL">All clients</option>
+        {% for client in clients %}
+          <option value="{{ client }}">{{ client }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="start">Start</label>
+      <input id="start" name="start" type="date" value="{{ default_start }}">
+    </div>
+    <div class="field">
+      <label for="end">End</label>
+      <input id="end" name="end" type="date" value="{{ default_end }}">
+    </div>
+    <div class="field">
+      <label for="symbol">Symbol</label>
+      <input id="symbol" name="symbol" type="text" value="ALL" placeholder="ALL">
+    </div>
+    <div class="field">
+      <label for="user_id">User ID</label>
+      <input id="user_id" name="user_id" type="number" min="1" placeholder="All">
+    </div>
+    <div class="field">
+      <label for="limit">Limit</label>
+      <input id="limit" name="limit" type="number" min="1" max="10000" value="1000">
+    </div>
+    <button class="btn btn-primary" type="submit">Apply</button>
+  </form>
+
+  <section class="summary-grid" id="summary">
+    <div class="metric"><span>Symbol</span><strong data-key="symbol">ALL</strong></div>
+    <div class="metric"><span>Total trades</span><strong data-key="total_trades">0</strong></div>
+    <div class="metric"><span>Wins</span><strong data-key="wins">0</strong></div>
+    <div class="metric"><span>Losses</span><strong data-key="losses">0</strong></div>
+    <div class="metric"><span>Success</span><strong data-key="success_rate">0%</strong></div>
+    <div class="metric"><span>P/L</span><strong data-key="pnl">$0.00</strong></div>
+  </section>
+
+  <div id="errors" class="error-list"></div>
+
+  <section class="panel">
+    <h2>Client Summary</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Client</th><th>Trades</th><th>Wins</th><th>Losses</th><th>Success</th><th>P/L</th></tr>
+        </thead>
+        <tbody id="clientRows">
+          <tr><td colspan="6" class="muted">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Live Mirror Trades</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Client</th><th>User</th><th>Symbol</th><th>Side</th><th>Qty</th>
+            <th>Entry</th><th>Exit</th><th>P/L</th><th>Entry Time</th><th>Exit Time</th>
+            <th>Bot</th><th>Schwab Order</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tradeRows">
+          <tr><td colspan="13" class="muted">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const prefix = "{{ url_prefix }}";
+const fmtMoney = (value) => {
+  const n = Number(value || 0);
+  return `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
+};
+const clsPnl = (value) => Number(value || 0) >= 0 ? "pos" : "neg";
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, c => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[c]));
+
+async function loadTrades() {
+  const form = document.getElementById("filters");
+  const params = new URLSearchParams(new FormData(form));
+  if (!params.get("user_id")) params.delete("user_id");
+  const res = await fetch(`${prefix}/admin/live-trades/json?${params.toString()}`, {
+    headers: { "Accept": "application/json" }
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Unable to load admin trades");
+
+  const summary = data.summary || {};
+  document.querySelector('[data-key="symbol"]').textContent = summary.symbol || "ALL";
+  document.querySelector('[data-key="total_trades"]').textContent = summary.total_trades || 0;
+  document.querySelector('[data-key="wins"]').textContent = summary.wins || 0;
+  document.querySelector('[data-key="losses"]').textContent = summary.losses || 0;
+  document.querySelector('[data-key="success_rate"]').textContent = `${Number(summary.success_rate || 0).toFixed(2)}%`;
+  const pnlEl = document.querySelector('[data-key="pnl"]');
+  pnlEl.textContent = fmtMoney(summary.pnl);
+  pnlEl.className = clsPnl(summary.pnl);
+
+  const errors = document.getElementById("errors");
+  errors.innerHTML = (data.errors || []).map(e => `<div>${esc(e.client)}: ${esc(e.error)}</div>`).join("");
+
+  const clientRows = document.getElementById("clientRows");
+  const clients = data.client_summaries || [];
+  clientRows.innerHTML = clients.length ? clients.map(row => `
+    <tr>
+      <td>${esc(row.client)}</td>
+      <td>${esc(row.total_trades)}</td>
+      <td>${esc(row.wins)}</td>
+      <td>${esc(row.losses)}</td>
+      <td>${Number(row.success_rate || 0).toFixed(2)}%</td>
+      <td class="${clsPnl(row.pnl)}">${fmtMoney(row.pnl)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="6" class="muted">No trades.</td></tr>`;
+
+  const tradeRows = document.getElementById("tradeRows");
+  const trades = data.trades || [];
+  tradeRows.innerHTML = trades.length ? trades.map(row => `
+    <tr>
+      <td>${esc(row.client)}</td>
+      <td>${esc(row.user_id)} ${row.username ? `(${esc(row.username)})` : ""}</td>
+      <td>${esc(row.symbol)}</td>
+      <td>${esc(row.side)}</td>
+      <td>${esc(row.quantity)}</td>
+      <td>${fmtMoney(row.entry_price)}</td>
+      <td>${fmtMoney(row.exit_price)}</td>
+      <td class="${clsPnl(row.profit_loss)}">${fmtMoney(row.profit_loss)}</td>
+      <td>${esc(row.entry_time)}</td>
+      <td>${esc(row.exit_time)}</td>
+      <td>#${esc(row.bot_id)} ${row.algo_name ? esc(row.algo_name) : ""}</td>
+      <td>${esc(row.schwab_order_id)}</td>
+      <td>${esc(row.mirror_status)}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="13" class="muted">No trades.</td></tr>`;
+}
+
+document.getElementById("filters").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await loadTrades();
+  } catch (error) {
+    document.getElementById("errors").innerHTML = `<div>${esc(error.message)}</div>`;
+  }
+});
+
+loadTrades().catch(error => {
+  document.getElementById("errors").innerHTML = `<div>${esc(error.message)}</div>`;
+});
+</script>
+{% endblock %}
