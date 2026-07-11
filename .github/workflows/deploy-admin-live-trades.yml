@@ -12,9 +12,9 @@ on:
           - deploy
           - rollback
       clients:
-        description: "Comma-separated client slugs for admin report"
+        description: "auto, or comma-separated client slugs"
         required: true
-        default: "ashakil,yzia"
+        default: "auto"
       admin_user:
         description: "Admin username to grant/remove admin flag"
         required: true

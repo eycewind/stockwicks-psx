@@ -10,7 +10,7 @@ set -euo pipefail
 ADMIN_CLIENT="${ADMIN_CLIENT:-}"
 ADMIN_USER="${ADMIN_USER:-ratadmin}"
 REPORT_USER="${REPORT_USER:-stockwicks_reporter}"
-CLIENT_SLUGS="${ADMIN_CLIENT_SLUGS:-ashakil,haithaima,yzia}"
+CLIENT_SLUGS="${ADMIN_CLIENT_SLUGS:-auto}"
 APPLY=0
 RESTART=1
 BACKUP_FILE=""
@@ -30,7 +30,7 @@ Usage:
 Options:
   --apply                 Make changes. Without this, print the plan only.
   --admin-client SLUG     Client hosting the admin UI. Default: current folder name.
-  --clients a,b,c         Client DB slugs to revoke from if --revoke-grants is used.
+  --clients auto|a,b,c    Client DB slugs to revoke from if --revoke-grants is used.
   --admin-user USERNAME   User to unset if --unset-admin is used. Default: ratadmin.
   --report-user USER      Read-only Postgres role. Default: stockwicks_reporter.
   --backup PATH           Restore this .env backup instead of latest.
@@ -113,14 +113,7 @@ fi
 [[ "${ADMIN_CLIENT}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "Invalid admin client slug: ${ADMIN_CLIENT}"
 [[ "${REPORT_USER}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || die "Invalid Postgres role name: ${REPORT_USER}"
 
-IFS=',' read -r -a CLIENTS <<< "${CLIENT_SLUGS}"
 VALID_CLIENTS=()
-for client in "${CLIENTS[@]}"; do
-  client="$(echo "${client}" | xargs)"
-  [[ -n "${client}" ]] || continue
-  [[ "${client}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "Invalid client slug: ${client}"
-  VALID_CLIENTS+=("${client}")
-done
 
 if [[ -z "${BACKUP_FILE}" ]]; then
   if compgen -G "${BACKUP_DIR}/.env.*.bak" >/dev/null; then
@@ -168,6 +161,36 @@ database_exists() {
     return 0
   fi
   sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name}'" | grep -q 1
+}
+
+discover_client_slugs() {
+  if [[ "${APPLY}" -eq 0 ]]; then
+    echo "${ADMIN_CLIENT}"
+    return
+  fi
+  sudo -u postgres psql -tAc "
+    SELECT regexp_replace(datname, '^stockwicks_', '')
+    FROM pg_database
+    WHERE datname LIKE 'stockwicks\_%' ESCAPE '\'
+    ORDER BY datname;
+  " | awk 'NF { gsub(/^[ \t]+|[ \t]+$/, ""); print }'
+}
+
+resolve_requested_clients() {
+  VALID_CLIENTS=()
+  if [[ "${CLIENT_SLUGS}" == "auto" || "${CLIENT_SLUGS}" == "ALL" || "${CLIENT_SLUGS}" == "all" ]]; then
+    mapfile -t VALID_CLIENTS < <(discover_client_slugs)
+  else
+    local client
+    IFS=',' read -r -a CLIENTS <<< "${CLIENT_SLUGS}"
+    for client in "${CLIENTS[@]}"; do
+      client="$(echo "${client}" | xargs)"
+      [[ -n "${client}" ]] || continue
+      [[ "${client}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "Invalid client slug: ${client}"
+      VALID_CLIENTS+=("${client}")
+    done
+  fi
+  [[ ${#VALID_CLIENTS[@]} -gt 0 ]] || die "No valid clients configured"
 }
 
 restore_env() {
@@ -226,6 +249,7 @@ restart_web() {
 
 restore_env
 if [[ "${REVOKE_GRANTS}" -eq 1 ]]; then
+  resolve_requested_clients
   for client in "${VALID_CLIENTS[@]}"; do
     revoke_client_if_exists "${client}"
   done
