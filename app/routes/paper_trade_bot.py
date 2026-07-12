@@ -1,9 +1,10 @@
 # app/routes/paper_trade_bot.py
 # app/routes/paper_trade_bot.py
 import sys, os, logging, json
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 import pytz
+import requests
 
 from fastapi import APIRouter, Depends, Request, Form, HTTPException, Query
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -23,6 +24,7 @@ from app.models.paper_trading_bot import (
     PaperStockBotOpenTrade,
     PaperStockBotTradeHistory,
 )
+from app.models.schwab_accounts import SchwabAccount
 from app.utils.stock.market_price import get_live_price
 from app.scripts.ml.model_refresh_policy import (
     DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN,
@@ -66,6 +68,9 @@ templates = Jinja2Templates(directory="app/templates")
 logging.basicConfig(level=logging.INFO)
 ET = pytz.timezone("US/Eastern")
 UTC = pytz.UTC
+SCHWAB_TRADER_BASE = os.getenv("SCHWAB_TRADER_BASE", "https://api.schwabapi.com/trader/v1")
+SCHWAB_HTTP_TIMEOUT = int(os.getenv("SCHWAB_HTTP_TIMEOUT", "20"))
+DEFAULT_PAPER_BOT_BALANCE = 1_000_000.0
 
 import re
 from pathlib import Path
@@ -316,6 +321,98 @@ def _hist_pl_value(row) -> float:
                 pass
     return 0.0
 
+
+def _unsanitize_token(value: str | None) -> str | None:
+    return value.replace(" ", "+") if value else None
+
+
+def _load_user_trade_token(user_id: int) -> str | None:
+    user_dir = data_dir() / str(user_id)
+    for path in (user_dir / "schwab_trade_token.json", user_dir / "trade_token.json"):
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text())
+            token = _unsanitize_token(payload.get("access_token"))
+            if token:
+                return token
+        except Exception as exc:
+            logging.warning("[DASH] Could not read Schwab token file %s: %s", path, exc)
+    return None
+
+
+def _default_schwab_account_hash(db: Session, user_id: int) -> str | None:
+    row = (
+        db.query(SchwabAccount)
+        .filter(SchwabAccount.user_id == user_id)
+        .order_by(SchwabAccount.is_default.desc(), SchwabAccount.id.desc())
+        .first()
+    )
+    return getattr(row, "account_hash", None) if row else None
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_schwab_balance(account_payload: Any) -> float | None:
+    account = account_payload
+    if isinstance(account_payload, list):
+        account = account_payload[0] if account_payload else {}
+
+    securities_account = {}
+    if isinstance(account, dict):
+        securities_account = account.get("securitiesAccount") or account
+
+    current_balances = securities_account.get("currentBalances") or {}
+    initial_balances = securities_account.get("initialBalances") or {}
+
+    for balances in (current_balances, initial_balances, securities_account):
+        if not isinstance(balances, dict):
+            continue
+        for key in (
+            "liquidationValue",
+            "cashBalance",
+            "availableFunds",
+            "buyingPower",
+            "moneyMarketFund",
+        ):
+            parsed = _to_float(balances.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _get_user_account_balance(db: Session, user_id: int) -> float | None:
+    account_hash = _default_schwab_account_hash(db, user_id)
+    token = _load_user_trade_token(user_id)
+    if not account_hash or not token:
+        return None
+
+    try:
+        resp = requests.get(
+            f"{SCHWAB_TRADER_BASE}/accounts/{account_hash}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            timeout=SCHWAB_HTTP_TIMEOUT,
+        )
+        if resp.status_code >= 400:
+            logging.warning(
+                "[DASH] Schwab balance lookup failed for user_id=%s: %s %s",
+                user_id,
+                resp.status_code,
+                resp.text[:300],
+            )
+            return None
+        return _extract_schwab_balance(resp.json())
+    except Exception as exc:
+        logging.warning("[DASH] Schwab balance lookup failed for user_id=%s: %s", user_id, exc)
+        return None
+
 @router.get("/auth/papertradebot", name="paper_trading_bot_dashboard")
 def paper_trade_bot_dashboard(
     request: Request,
@@ -396,7 +493,8 @@ def paper_trade_bot_dashboard(
     # =========================================================================
 
     # Realized P/L summary (robust to column name differences)
-    starting_balance = 10000000.0
+    account_balance = _get_user_account_balance(db, user.id)
+    starting_balance = account_balance if account_balance is not None else DEFAULT_PAPER_BOT_BALANCE
     total_pl = sum(_hist_pl_value(t) for t in closed_trades)
     pl_percent = (total_pl / starting_balance) * 100 if starting_balance else 0.0
     paper_account = {"initial_balance": starting_balance, "current_balance": starting_balance + total_pl}
