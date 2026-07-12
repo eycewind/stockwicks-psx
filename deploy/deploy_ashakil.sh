@@ -30,15 +30,15 @@ if [[ ! -d "${APP_PATH}" ]]; then
   exit 1
 fi
 
-mkdir -p "${RELEASES_DIR}"
+sudo mkdir -p "${RELEASES_DIR}"
 sudo install -d -o www-data -g www-data -m 2775 "${APP_PATH}/models"
 sudo chown -R www-data:www-data "${APP_PATH}/models"
 sudo find "${APP_PATH}/models" -type d -exec chmod 2775 {} +
 sudo find "${APP_PATH}/models" -type f -exec chmod 0664 {} +
 
 echo "Backing up current app to ${BACKUP_DIR}"
-mkdir -p "${BACKUP_DIR}"
-rsync -a \
+sudo mkdir -p "${BACKUP_DIR}"
+sudo rsync -a --no-owner --no-group \
   --exclude 'venv' \
   --exclude '.env' \
   --exclude 'data' \
@@ -60,13 +60,14 @@ for required_file in "${REQUIRED_FILES[@]}"; do
   fi
 done
 
-rsync -a --delete \
+sudo rsync -a --no-owner --no-group --delete \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude 'cache' \
   --exclude 'data' \
   --exclude 'logs' \
   "${RELEASE_SRC}/app/" "${APP_PATH}/app/"
+sudo chown -R www-data:www-data "${APP_PATH}/app"
 
 for required_file in "${REQUIRED_FILES[@]}"; do
   if [[ ! -f "${APP_PATH}/${required_file}" ]]; then
