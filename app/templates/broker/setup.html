@@ -3,95 +3,115 @@
 {% block title %}Broker Setup{% endblock %}
 
 {% block content %}
-<div style="max-width: 900px; margin: 60px auto;">
-  <h1>Broker Setup</h1>
-  <p>Connect your Schwab APIs for this client workspace.</p>
+<style>
+  .broker-page {
+    max-width: 1040px;
+    margin: 56px auto;
+  }
 
-  <div style="display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:28px;">
+  .broker-header {
+    margin-bottom: 28px;
+  }
 
-    <div style="background:#17173a; padding:26px; border-radius:12px;">
-      <h2>Schwab Market Data API</h2>
+  .broker-header h1 {
+    margin: 0 0 8px;
+    font-size: 42px;
+    line-height: 1.1;
+  }
 
-      <p><strong>Status:</strong>
-        {% if broker_status.market_data_connected %}
-          Connected
-        {% else %}
-          Not Connected
-        {% endif %}
-      </p>
+  .broker-header p {
+    margin: 0;
+    color: #c7d2fe;
+    font-size: 18px;
+  }
 
-      <p><strong>Purpose:</strong> Quotes, candles, and price history.</p>
+  .broker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+  }
 
-      <a class="btn btn-primary" href="{{ url_prefix }}/broker/schwab/market/start">
-        {% if broker_status.market_data_connected %}
-          Reconnect Market Data
-        {% else %}
-          Connect Market Data
-        {% endif %}
-      </a>
-    </div>
+  .broker-tile {
+    min-height: 210px;
+    background: #17173a;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 24px;
+    text-decoration: none;
+    transition: border-color 120ms ease, transform 120ms ease;
+  }
 
-    <div style="background:#17173a; padding:26px; border-radius:12px;">
-      <h2>Schwab Trading API</h2>
+  .broker-tile:hover {
+    border-color: rgba(255, 255, 255, 0.32);
+    transform: translateY(-2px);
+  }
 
-      <p><strong>Status:</strong>
-        {% if broker_status.trading_connected %}
-          Connected
-        {% else %}
-          Not Connected
-        {% endif %}
-      </p>
+  .broker-icon {
+    width: 104px;
+    height: 72px;
+    border-radius: 8px;
+    align-items: center;
+    display: flex;
+    font-size: 26px;
+    font-weight: 800;
+    justify-content: center;
+    overflow: hidden;
+  }
 
-      <p><strong>Token:</strong> {{ broker_status.token_status }}</p>
+  .broker-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #fff;
+  }
 
-      {% if broker_status.account_number_masked %}
-        <p><strong>Account:</strong> {{ broker_status.account_number_masked }}</p>
-      {% endif %}
+  .broker-name {
+    font-size: 26px;
+    font-weight: 800;
+    margin-top: 22px;
+  }
 
-      {% if broker_status.access_expires_at %}
-        <p><strong>Access Expires:</strong> {{ broker_status.access_expires_at }}</p>
-      {% endif %}
+  .broker-status {
+    color: #d1d5db;
+    font-size: 15px;
+    margin-top: 8px;
+  }
 
-      <a class="btn btn-primary" href="{{ url_prefix }}/broker/schwab/trade/start">
-        {% if broker_status.trading_connected %}
-          Reconnect Trading
-        {% else %}
-          Connect Trading
-        {% endif %}
-      </a>
-    </div>
+  .broker-footer {
+    margin-top: 28px;
+  }
+</style>
 
+<div class="broker-page">
+  <div class="broker-header">
+    <h1>Broker Setup</h1>
+    <p>Select a broker integration for this client workspace.</p>
   </div>
 
-
-  <div style="background:#17173a; padding:26px; border-radius:12px; margin-top:24px;">
-    <h2>Schwab Trading Workspace</h2>
-
-    <p>
-      Submit orders, cancel orders, review open positions,
-      inspect open orders, and view order history.
-    </p>
-
-    <div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:18px;">
-      <a class="btn btn-primary" href="{{ url_prefix }}/broker/trading">
-        Open Trading Workspace
+  <div class="broker-grid">
+    {% for broker in brokers %}
+      <a class="broker-tile" href="{{ url_prefix }}{{ broker.setup_path }}" aria-label="Open {{ broker.name }} setup">
+        <div>
+          <div class="broker-icon" style="background: {{ broker.accent }};">
+            {% if broker.logo_path %}
+              <img src="{{ url_prefix }}{{ broker.logo_path }}" alt="{{ broker.name }} logo">
+            {% else %}
+              {{ broker.initials }}
+            {% endif %}
+          </div>
+          <div class="broker-name">{{ broker.name }}</div>
+          <div class="broker-status">{{ broker.status }}</div>
+        </div>
+        <span class="btn btn-secondary" style="align-self:flex-start; margin-top:24px;">Open Setup</span>
       </a>
-
-      <form method="post" action="{{ url_prefix }}/broker/schwab/sync-accounts" style="display:inline;">
-        <button class="btn btn-secondary" type="submit">
-          Sync Accounts
-        </button>
-      </form>
-    </div>
-  </div>
-  <div style="background:#111827; padding:24px; border-radius:12px; margin-top:24px;">
-    <h3>Commercial MVP Rules</h3>
-    <p>Raw Schwab tokens are never shown in the UI.</p>
-    <p>Market data and trading use separate Schwab API connections.</p>
-    <p>This client uses its own token storage and database.</p>
+    {% endfor %}
   </div>
 
-  <div style="margin-top:30px;">
+  <div class="broker-footer">
     <a class="btn btn-secondary" href="{{ url_prefix }}/auth/dashboard">Back to Dashboard</a>
   </div>
 </div>

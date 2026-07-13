@@ -36,6 +36,39 @@ SCHWAB_TOKEN_HEADERS = {
     "User-Agent": "StockWicks/1.0",
 }
 
+BROKER_CATALOG = {
+    "schwab": {
+        "slug": "schwab",
+        "name": "Charles Schwab",
+        "short_name": "Schwab",
+        "initials": "CS",
+        "accent": "#00a86b",
+        "logo_path": "/static/images/brokers/charles-schwab.jpg",
+        "setup_path": "/broker/schwab/setup",
+        "status": "Available",
+    },
+    "tradier": {
+        "slug": "tradier",
+        "name": "Tradier",
+        "short_name": "Tradier",
+        "initials": "TR",
+        "accent": "#006cff",
+        "logo_path": "/static/images/brokers/tradier.jpg",
+        "setup_path": "/broker/tradier/setup",
+        "status": "Coming soon",
+    },
+    "interactive_brokers": {
+        "slug": "interactive_brokers",
+        "name": "Interactive Brokers",
+        "short_name": "IBKR",
+        "initials": "IB",
+        "accent": "#d71920",
+        "logo_path": "/static/images/brokers/interactive-brokers.jpg",
+        "setup_path": "/broker/interactive-brokers/setup",
+        "status": "Coming soon",
+    },
+}
+
 
 def _data_dir() -> Path:
     return data_dir()
@@ -139,6 +172,13 @@ def _prefixed_url(request: Request, path: str) -> str:
     if not path.startswith("/"):
         path = "/" + path
     return f"{prefix}{path}" if prefix else path
+
+
+def _allowed_brokers() -> list[dict]:
+    raw = os.getenv("ALLOWED_BROKERS", "schwab,tradier,interactive_brokers")
+    wanted = [item.strip().lower().replace("-", "_") for item in raw.split(",") if item.strip()]
+    brokers = [BROKER_CATALOG[key] for key in wanted if key in BROKER_CATALOG]
+    return brokers or [BROKER_CATALOG["schwab"]]
 
 
 def _api_settings(api_kind: str) -> dict:
@@ -367,6 +407,23 @@ def _start_oauth(request: Request, current_user: User, api_kind: str):
 @router.get("/setup", response_class=HTMLResponse, name="broker_setup")
 def broker_setup_page(
     request: Request,
+    current_user=Depends(get_current_user),
+):
+    return templates.TemplateResponse(
+        request,
+        "broker/setup.html",
+        {
+            "request": request,
+            "user": current_user,
+            "brokers": _allowed_brokers(),
+            "url_prefix": _client_prefix(request),
+        },
+    )
+
+
+@router.get("/schwab/setup", response_class=HTMLResponse, name="broker_schwab_setup")
+def broker_schwab_setup_page(
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -395,11 +452,46 @@ def broker_setup_page(
 
     return templates.TemplateResponse(
         request,
-        "broker/setup.html",
+        "broker/schwab_setup.html",
         {
             "request": request,
             "user": current_user,
             "broker_status": broker_status,
+            "url_prefix": _client_prefix(request),
+        },
+    )
+
+
+@router.get("/tradier/setup", response_class=HTMLResponse, name="broker_tradier_setup")
+def broker_tradier_setup_page(
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    return templates.TemplateResponse(
+        request,
+        "broker/broker_placeholder.html",
+        {
+            "request": request,
+            "user": current_user,
+            "broker": BROKER_CATALOG["tradier"],
+            "url_prefix": _client_prefix(request),
+        },
+    )
+
+
+@router.get("/interactive-brokers/setup", response_class=HTMLResponse, name="broker_interactive_brokers_setup")
+def broker_interactive_brokers_setup_page(
+    request: Request,
+    current_user=Depends(get_current_user),
+):
+    return templates.TemplateResponse(
+        request,
+        "broker/broker_placeholder.html",
+        {
+            "request": request,
+            "user": current_user,
+            "broker": BROKER_CATALOG["interactive_brokers"],
+            "url_prefix": _client_prefix(request),
         },
     )
 
@@ -466,7 +558,7 @@ def broker_callback_old(
 def _token_saved_response(api_kind: str) -> HTMLResponse:
     label = "Market Data" if api_kind == "market" else "Trading"
     dashboard_url = _public_client_url("/auth/dashboard")
-    setup_url = _public_client_url("/broker/setup")
+    setup_url = _public_client_url("/broker/schwab/setup")
 
     html = f"""
     <!doctype html>
@@ -499,7 +591,7 @@ def _token_saved_response(api_kind: str) -> HTMLResponse:
           <p>
             <a href="{dashboard_url}">Go to Dashboard</a>
             &nbsp;|&nbsp;
-            <a href="{setup_url}">Back to Broker Setup</a>
+            <a href="{setup_url}">Back to Schwab Setup</a>
           </p>
         </div>
       </body>
@@ -644,7 +736,7 @@ def broker_disconnect(
         connection.last_refresh_error = None
 
     db.commit()
-    return RedirectResponse(url=_prefixed_url(request, "/broker/setup?disconnected=1"), status_code=303)
+    return RedirectResponse(url=_prefixed_url(request, "/broker/schwab/setup?disconnected=1"), status_code=303)
 
 
 
@@ -897,7 +989,7 @@ def broker_sync_schwab_accounts(
     # Return an app-local path only. NGINX proxy_redirect will add the client prefix.
     # Do NOT use _prefixed_url() here or the browser gets duplicate client prefixes.
     return RedirectResponse(
-        url=f"/broker/setup?accounts_synced=1&created={created}&updated={updated}",
+        url=f"/broker/schwab/setup?accounts_synced=1&created={created}&updated={updated}",
         status_code=303,
     )
 

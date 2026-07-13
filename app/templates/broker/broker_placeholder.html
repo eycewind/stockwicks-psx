@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}{{ broker.name }} Setup{% endblock %}
+
+{% block content %}
+<style>
+  .broker-detail {
+    max-width: 880px;
+    margin: 60px auto;
+  }
+
+  .broker-shell {
+    background: #17173a;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 30px;
+  }
+
+  .broker-mark {
+    width: 112px;
+    height: 72px;
+    border-radius: 8px;
+    color: #fff;
+    align-items: center;
+    display: flex;
+    font-size: 26px;
+    font-weight: 800;
+    justify-content: center;
+    margin-bottom: 22px;
+    overflow: hidden;
+  }
+
+  .broker-mark img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #fff;
+  }
+
+  .broker-detail h1 {
+    font-size: 40px;
+    line-height: 1.1;
+    margin: 0 0 12px;
+  }
+
+  .broker-status-line {
+    color: #d1d5db;
+    font-size: 18px;
+    margin-bottom: 28px;
+  }
+
+  .broker-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+</style>
+
+<div class="broker-detail">
+  <div style="margin-bottom: 24px;">
+    <a class="btn btn-secondary" href="{{ url_prefix }}/broker/setup">All Brokers</a>
+  </div>
+
+  <div class="broker-shell">
+    <div class="broker-mark" style="background: {{ broker.accent }};">
+      {% if broker.logo_path %}
+        <img src="{{ url_prefix }}{{ broker.logo_path }}" alt="{{ broker.name }} logo">
+      {% else %}
+        {{ broker.initials }}
+      {% endif %}
+    </div>
+    <h1>{{ broker.name }} Setup</h1>
+    <div class="broker-status-line">Status: {{ broker.status }}</div>
+
+    <p>
+      {{ broker.name }} is available in the broker selector. The connection flow,
+      account sync, and trading workspace for this broker still need API wiring.
+    </p>
+
+    <div class="broker-actions">
+      <button class="btn btn-secondary" type="button" disabled>Connect {{ broker.short_name }}</button>
+      <a class="btn btn-primary" href="{{ url_prefix }}/broker/setup">Choose Another Broker</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
