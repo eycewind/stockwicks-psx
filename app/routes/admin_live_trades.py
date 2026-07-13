@@ -203,6 +203,72 @@ def _fetch_client_rows(
     return payload
 
 
+def _fetch_client_open_positions(
+    *,
+    slug: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    symbol: str | None,
+    user_id: int | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    filters = [
+        "p.entry_time >= :start_dt",
+        "p.entry_time < :end_dt",
+    ]
+    params: dict[str, Any] = {
+        "start_dt": start_dt,
+        "end_dt": end_dt,
+        "limit": limit,
+    }
+    if symbol:
+        filters.append("upper(p.symbol) = :symbol")
+        params["symbol"] = symbol.upper()
+    if user_id is not None:
+        filters.append("p.user_id = :user_id")
+        params["user_id"] = user_id
+
+    table_check = text("SELECT to_regclass('public.paper_stock_bot_open_trades') IS NOT NULL")
+    with _client_connection(slug) as conn:
+        has_open_table = bool(conn.execute(table_check).scalar())
+    if not has_open_table:
+        return []
+
+    sql = text(f"""
+        SELECT
+            p.id,
+            p.user_id,
+            u.username,
+            u.email,
+            p.bot_id,
+            b.algo_name,
+            p.symbol,
+            p.position_side,
+            p.quantity,
+            p.entry_price,
+            p.current_price,
+            p.unrealized_pl,
+            p.entry_time,
+            p.created_at,
+            p.updated_at
+        FROM paper_stock_bot_open_trades p
+        LEFT JOIN users u ON u.id = p.user_id
+        LEFT JOIN paper_stock_trade_bots b ON b.id = p.bot_id
+        WHERE {" AND ".join(filters)}
+        ORDER BY p.updated_at DESC NULLS LAST, p.entry_time DESC, p.id DESC
+        LIMIT :limit
+    """)
+
+    with _client_connection(slug) as conn:
+        rows = conn.execute(sql, params).mappings().all()
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["client"] = slug
+        payload.append(item)
+    return payload
+
+
 def _summarize(rows: list[dict[str, Any]], selected_symbol: str | None) -> dict[str, Any]:
     pnl = sum(float(r.get("profit_loss") or 0.0) for r in rows)
     wins = sum(1 for r in rows if float(r.get("profit_loss") or 0.0) > 0)
@@ -230,6 +296,24 @@ def _client_summaries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _summarize_open_positions(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    unrealized_pl = sum(float(r.get("unrealized_pl") or 0.0) for r in rows)
+    return {
+        "open_positions": len(rows),
+        "unrealized_pl": round(unrealized_pl, 2),
+    }
+
+
+def _client_open_summaries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row.get("client") or "unknown"), []).append(row)
+    return [
+        {"client": slug, **_summarize_open_positions(client_rows)}
+        for slug, client_rows in sorted(grouped.items())
+    ]
+
+
 def _format_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -239,6 +323,20 @@ def _format_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if isinstance(value, datetime):
                 item[key] = value.strftime("%Y-%m-%d %H:%M:%S")
         item["profit_loss"] = round(float(item.get("profit_loss") or 0.0), 2)
+        out.append(item)
+    return out
+
+
+def _format_open_positions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        for key in ("entry_time", "created_at", "updated_at"):
+            value = item.get(key)
+            if isinstance(value, datetime):
+                item[key] = value.strftime("%Y-%m-%d %H:%M:%S")
+        for key in ("entry_price", "current_price", "unrealized_pl"):
+            item[key] = round(float(item.get(key) or 0.0), 2)
         out.append(item)
     return out
 
@@ -276,6 +374,7 @@ def admin_live_trades_json(
     start_dt, end_dt = _date_bounds(start, end)
     selected_symbol = _normalize_filter(symbol)
     rows: list[dict[str, Any]] = []
+    open_positions: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     clients = _selected_clients(client)
 
@@ -292,11 +391,23 @@ def admin_live_trades_json(
                     limit=per_client_limit,
                 )
             )
+            open_positions.extend(
+                _fetch_client_open_positions(
+                    slug=slug,
+                    start_dt=start_dt,
+                    end_dt=end_dt,
+                    symbol=selected_symbol,
+                    user_id=user_id,
+                    limit=per_client_limit,
+                )
+            )
         except Exception as exc:
             errors.append({"client": slug, "error": str(exc)})
 
     rows.sort(key=lambda r: (r.get("exit_time") or datetime.min, r.get("id") or 0), reverse=True)
     rows = rows[:limit]
+    open_positions.sort(key=lambda r: (r.get("updated_at") or datetime.min, r.get("id") or 0), reverse=True)
+    open_positions = open_positions[:limit]
 
     return JSONResponse(
         {
@@ -309,7 +420,10 @@ def admin_live_trades_json(
                 "user_id": user_id,
             },
             "summary": _summarize(rows, selected_symbol),
+            "open_summary": _summarize_open_positions(open_positions),
             "client_summaries": _client_summaries(rows),
+            "client_open_summaries": _client_open_summaries(open_positions),
+            "open_positions": _format_open_positions(open_positions),
             "trades": _format_rows(rows),
             "errors": errors,
         }
