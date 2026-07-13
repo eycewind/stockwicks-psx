@@ -247,7 +247,7 @@ SQL
 )
   psql_postgres -d "${db_name}" -c "${sql}"
 
-  for table_name in users paper_stock_trade_bots paper_stock_bot_live_mirror_history; do
+  for table_name in users paper_stock_trade_bots paper_stock_bot_live_mirror_history paper_stock_bot_open_trades; do
     if table_exists "${db_name}" "${table_name}"; then
       psql_postgres -d "${db_name}" -c "GRANT SELECT ON TABLE ${table_name} TO \"${REPORT_USER}\";"
     else
