@@ -36,7 +36,7 @@
   }
   .summary-grid {
     display: grid;
-    grid-template-columns: repeat(8, minmax(120px, 1fr));
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
     gap: 12px;
     margin-top: 16px;
   }
@@ -145,8 +145,6 @@
     <div class="metric"><span>Losses</span><strong data-key="losses">0</strong></div>
     <div class="metric"><span>Success</span><strong data-key="success_rate">0%</strong></div>
     <div class="metric"><span>P/L</span><strong data-key="pnl">$0.00</strong></div>
-    <div class="metric"><span>Open Positions</span><strong data-key="open_positions">0</strong></div>
-    <div class="metric"><span>Unrealized P/L</span><strong data-key="unrealized_pl">$0.00</strong></div>
   </section>
 
   <div id="errors" class="error-list"></div>
@@ -160,24 +158,6 @@
         </thead>
         <tbody id="clientRows">
           <tr><td colspan="6" class="muted">Loading...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section class="panel">
-    <h2>Open Positions</h2>
-    <div class="scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Client</th><th>User</th><th>Symbol</th><th>Side</th><th>Qty</th>
-            <th>Entry</th><th>Current</th><th>Unrealized P/L</th><th>Entry Time</th>
-            <th>Updated</th><th>Bot</th>
-          </tr>
-        </thead>
-        <tbody id="openPositionRows">
-          <tr><td colspan="11" class="muted">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -246,11 +226,6 @@ async function loadTrades() {
   const pnlEl = document.querySelector('[data-key="pnl"]');
   pnlEl.textContent = fmtMoney(summary.pnl);
   pnlEl.className = clsPnl(summary.pnl);
-  const openSummary = data.open_summary || {};
-  document.querySelector('[data-key="open_positions"]').textContent = openSummary.open_positions || 0;
-  const unrealizedEl = document.querySelector('[data-key="unrealized_pl"]');
-  unrealizedEl.textContent = fmtMoney(openSummary.unrealized_pl);
-  unrealizedEl.className = clsPnl(openSummary.unrealized_pl);
 
   const errors = document.getElementById("errors");
   errors.innerHTML = (data.errors || []).map(e => `<div>${esc(e.client)}: ${esc(e.error)}</div>`).join("");
@@ -270,24 +245,7 @@ async function loadTrades() {
 
   const tradeRows = document.getElementById("tradeRows");
   const trades = data.trades || [];
-  const openPositions = data.open_positions || [];
-  updateSymbolOptions([...openPositions, ...trades]);
-  const openPositionRows = document.getElementById("openPositionRows");
-  openPositionRows.innerHTML = openPositions.length ? openPositions.map(row => `
-    <tr>
-      <td>${esc(row.client)}</td>
-      <td>${esc(row.user_id)} ${row.username ? `(${esc(row.username)})` : ""}</td>
-      <td>${esc(row.symbol)}</td>
-      <td>${esc(row.position_side)}</td>
-      <td>${esc(row.quantity)}</td>
-      <td>${fmtMoney(row.entry_price)}</td>
-      <td>${fmtMoney(row.current_price)}</td>
-      <td class="${clsPnl(row.unrealized_pl)}">${fmtMoney(row.unrealized_pl)}</td>
-      <td>${esc(row.entry_time)}</td>
-      <td>${esc(row.updated_at)}</td>
-      <td>#${esc(row.bot_id)} ${row.algo_name ? esc(row.algo_name) : ""}</td>
-    </tr>
-  `).join("") : `<tr><td colspan="11" class="muted">No open positions.</td></tr>`;
+  updateSymbolOptions(trades);
   tradeRows.innerHTML = trades.length ? trades.map(row => `
     <tr>
       <td>${esc(row.client)}</td>
