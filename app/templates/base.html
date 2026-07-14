@@ -2,6 +2,7 @@
 {% set client_slug = request.app.state.client_slug|default("client") if request is defined else "client" %}
 {% set nav_user = user|default(none) %}
 {% set is_logged_in = nav_user or (request is defined and (request.session.get("user_id") or request.cookies.get("access_token"))) %}
+{% set current_path = request.url.path if request is defined else "" %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,56 +21,122 @@
         }
         .navbar {
             background: #152033;
-            padding: 14px 30px;
+            min-height: 72px;
+            padding: 12px 28px;
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            gap: 28px;
+            box-sizing: border-box;
         }
         .brand {
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 12px;
+            flex: 0 0 auto;
             color: #00d9ff;
-            font-size: 24px;
+            font-size: 22px;
             font-weight: 700;
             text-decoration: none;
+            min-width: 0;
         }
         .brand img {
-            height: 36px;
+            height: 40px;
+            width: 112px;
+            object-fit: contain;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
         }
         .commercial-badge {
             display: inline-block;
-            padding: 4px 10px;
+            padding: 5px 12px;
             border-radius: 999px;
             background: #ff6a00;
             color: #ffffff;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 700;
-            letter-spacing: 0.4px;
+            letter-spacing: 0;
             text-transform: uppercase;
+            white-space: nowrap;
         }
         .client-badge {
             display: inline-block;
-            padding: 4px 10px;
+            padding: 5px 12px;
             border-radius: 999px;
             background: #334155;
             color: #ffffff;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 700;
-            letter-spacing: 0.4px;
+            letter-spacing: 0;
+            white-space: nowrap;
         }
         .nav-links {
             display: flex;
-            gap: 24px;
             align-items: center;
+            justify-content: center;
+            gap: 6px;
+            flex: 1 1 auto;
+            min-width: 0;
+            flex-wrap: wrap;
         }
-        .nav-links a {
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            flex: 0 0 auto;
+        }
+        .nav-links a,
+        .nav-actions a {
             color: #ffffff;
             text-decoration: none;
-            font-size: 18px;
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1;
+            padding: 10px 12px;
+            border-radius: 8px;
+            white-space: nowrap;
+            transition: background 120ms ease, color 120ms ease;
         }
-        .nav-links a:hover {
+        .nav-links a:hover,
+        .nav-actions a:hover {
+            background: rgba(255, 255, 255, 0.08);
             color: #00d9ff;
+        }
+        .nav-links a.active,
+        .nav-actions a.active {
+            background: rgba(0, 217, 255, 0.14);
+            color: #5eead4;
+        }
+        .nav-actions .logout-link {
+            color: #fca5a5;
+        }
+        @media (max-width: 1180px) {
+            .navbar {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 12px;
+            }
+            .nav-links,
+            .nav-actions {
+                justify-content: flex-start;
+                width: 100%;
+            }
+        }
+        @media (max-width: 640px) {
+            .navbar {
+                padding: 12px 16px;
+            }
+            .brand {
+                flex-wrap: wrap;
+            }
+            .brand span:first-of-type {
+                font-size: 20px;
+            }
+            .nav-links a,
+            .nav-actions a {
+                font-size: 14px;
+                padding: 9px 10px;
+            }
         }
         .container {
             padding: 32px;
@@ -109,22 +176,25 @@
         </a>
 
         <div class="nav-links">
-            <a href="{{ url_prefix }}/auth/dashboard">Dashboard</a>
-            <a href="{{ url_prefix }}/auth/papertradebot">Trade Bot</a>
+            <a href="{{ url_prefix }}/auth/dashboard" class="{% if current_path.startswith(url_prefix ~ '/auth/dashboard') %}active{% endif %}">Dashboard</a>
+            <a href="{{ url_prefix }}/auth/papertradebot" class="{% if current_path.startswith(url_prefix ~ '/auth/papertradebot') %}active{% endif %}">Bot</a>
             {# Hidden for now; uncomment if the SPX menu should return.
             <a href="{{ url_prefix }}/options/spx-0dte-trades">SPX 0DTE Bot</a>
             <a href="{{ url_prefix }}/options/spx-0dte">SPX 0DTE Pick</a>
             #}
-            <a href="{{ url_prefix }}/broker/setup">Broker Setup</a>
-            <a href="{{ url_prefix }}/replay-simulator">Replay</a>
-            <a href="{{ url_prefix }}/analysis/strategy-optimizer">Strategy Optimizer</a>
-             <a href="{{ url_prefix }}/analysis/logs">Trade History Analysis</a>
+            <a href="{{ url_prefix }}/broker/setup" class="{% if current_path.startswith(url_prefix ~ '/broker') %}active{% endif %}">Broker</a>
+            <a href="{{ url_prefix }}/replay-simulator" class="{% if current_path.startswith(url_prefix ~ '/replay-simulator') %}active{% endif %}">Replay</a>
+            <a href="{{ url_prefix }}/analysis/strategy-optimizer" class="{% if current_path.startswith(url_prefix ~ '/analysis/strategy-optimizer') %}active{% endif %}">Optimizer</a>
+            <a href="{{ url_prefix }}/analysis/logs" class="{% if current_path.startswith(url_prefix ~ '/analysis/logs') %}active{% endif %}">History</a>
             {% if nav_user and nav_user.is_admin %}
-                <a href="{{ url_prefix }}/admin/live-trades">Admin Trades</a>
+                <a href="{{ url_prefix }}/admin/live-trades" class="{% if current_path.startswith(url_prefix ~ '/admin/live-trades') %}active{% endif %}">Admin</a>
             {% endif %}
-            <a href="{{ url_prefix }}/account">Account</a>
+        </div>
+
+        <div class="nav-actions">
+            <a href="{{ url_prefix }}/account" class="{% if current_path.startswith(url_prefix ~ '/account') %}active{% endif %}">Account</a>
             {% if is_logged_in %}
-                <a href="{{ url_prefix }}/auth/logout">Logout</a>
+                <a class="logout-link" href="{{ url_prefix }}/auth/logout">Logout</a>
             {% else %}
                 <a href="{{ url_prefix }}/auth/register">Register</a>
                 <a href="{{ url_prefix }}/auth/login">Login</a>
