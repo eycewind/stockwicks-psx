@@ -352,24 +352,35 @@ def stop_evaluation(
     if not rows:
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
 
-    stopped = 0
-    for row in rows:
-        if str(row.status or "").upper() in {"COMPLETED", "STOPPED", "ERROR"}:
-            continue
-        try:
-            stop_session(db, int(row.id))
-        except Exception:
-            row.status = "STOPPED"
-            row.error_message = "Sparkie stop requested."
-            row.updated_at = datetime.utcnow()
-            db.commit()
-        stopped += 1
+    stopped = _stop_sparkie_rows(db, rows, reason="Sparkie stop requested.")
 
     return {
         "ok": True,
         "job_id": job_id,
         "stopped_sessions": stopped,
         "message": "Sparkie stop requested for active replay sessions.",
+    }
+
+
+@router.post("/stop-all")
+def stop_all_evaluations(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    rows = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user.id)
+        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
+        .filter(ReplaySession.status.in_(("PENDING", "QUEUED", "STARTING", "RUNNING")))
+        .order_by(ReplaySession.id.desc())
+        .all()
+    )
+    stopped = _stop_sparkie_rows(db, rows, reason="Sparkie stop-all requested.")
+
+    return {
+        "ok": True,
+        "stopped_sessions": stopped,
+        "message": f"Sparkie stop-all requested for {stopped} active replay sessions.",
     }
 
 
@@ -511,6 +522,33 @@ def _sparkie_rows_for_job(db: Session, user_id: int, job_id: str) -> list[Replay
         .order_by(ReplaySession.id.desc())
         .all()
     )
+
+
+def _stop_sparkie_rows(db: Session, rows: list[ReplaySession], *, reason: str) -> int:
+    stopped = 0
+    for row in rows:
+        if str(row.status or "").upper() in {"COMPLETED", "STOPPED", "ERROR"}:
+            continue
+        try:
+            from app.tasks.replay_tasks import stop_replay_session_task
+
+            stop_replay_session_task.apply_async(args=(int(row.id),), queue="replay")
+        except Exception:
+            pass
+        try:
+            stop_session(db, int(row.id))
+        except Exception:
+            pass
+
+        row.status = "STOPPED"
+        row.error_message = reason
+        row.updated_at = datetime.utcnow()
+        row.stopped_at = datetime.utcnow()
+        stopped += 1
+
+    if stopped:
+        db.commit()
+    return stopped
 
 
 def _sparkie_job_summary(

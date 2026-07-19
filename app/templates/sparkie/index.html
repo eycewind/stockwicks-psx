@@ -269,6 +269,7 @@
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" id="runBtn">Run Sparkie Evaluation</button>
           <button class="btn btn-secondary" type="button" id="stopBtn" style="display:none;">Stop Sparkie Evaluation</button>
+          <button class="btn btn-secondary" type="button" id="stopAllBtn">Stop All Sparkie Sessions</button>
           <button class="btn btn-secondary" type="button" id="launchBtn">Check Launch Plan</button>
         </div>
       </form>
@@ -304,7 +305,7 @@
       </div>
       <div class="sparkie-step">
         <strong>3. Sparkie runs the replay tests</strong>
-        Sparkie queues symbol, interval, and algo combinations through the replay engine.
+        Sparkie should use fast optimizer/backtest-style scans to narrow candidates, then queue only finalist symbol, interval, and algo combinations through Replay.
       </div>
       <div class="sparkie-step">
         <strong>4. User reviews Sparkie decision</strong>
@@ -318,6 +319,7 @@
   const urlPrefix = {{ url_prefix|tojson }};
   const resultBox = document.getElementById("sparkieResult");
   const stopBtn = document.getElementById("stopBtn");
+  const stopAllBtn = document.getElementById("stopAllBtn");
   const historyBox = document.getElementById("sparkieHistory");
   const sparkieJobStorageKey = "stockwicks.sparkie.activeJobId";
   const sparkieSnapshotStorageKey = "stockwicks.sparkie.lastSnapshot";
@@ -642,6 +644,31 @@
     } catch (error) {
       resultBox.textContent = error.message || String(error);
       stopBtn.disabled = false;
+    }
+  });
+
+  stopAllBtn.addEventListener("click", async () => {
+    stopAllBtn.disabled = true;
+    resultBox.textContent = "Stopping all active Sparkie sessions...";
+    try {
+      const data = await postJson("/api/sparkie/stop-all", {});
+      clearSparkieActiveJob();
+      activeJobId = null;
+      stopBtn.style.display = "none";
+      if (statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
+      resultBox.innerHTML = renderSummary({
+        can_start: true,
+        status: "stopped",
+        next_step: data.message || "Sparkie stop-all requested.",
+      });
+      await loadSparkieHistory();
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+    } finally {
+      stopAllBtn.disabled = false;
     }
   });
 
