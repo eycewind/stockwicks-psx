@@ -131,6 +131,13 @@ def _safe_json(resp: requests.Response) -> Any:
     return None
 
 
+def _schwab_iso8601(dt: datetime) -> str:
+    """Format datetimes the way Schwab's Trader API expects them."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 _GET_CACHE: dict[tuple[Any, ...], tuple[float, Any]] = {}
 
 
@@ -153,6 +160,13 @@ def _cached_get_json(
 
     resp = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
     if resp.status_code >= 400:
+        log.error(
+            "Schwab GET failed: status=%s url=%s params=%s body=%s",
+            resp.status_code,
+            url,
+            params,
+            (resp.text or "")[:1000],
+        )
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
     data = _safe_json(resp) or []
@@ -366,10 +380,10 @@ def list_account_orders(
 
     # Defaults: last 30 days if not set
     if not fromEnteredTime or not toEnteredTime:
-        end = datetime.utcnow().replace(tzinfo=timezone.utc)
+        end = datetime.now(timezone.utc)
         start = end - timedelta(days=30)
-        fromEnteredTime = start.isoformat().replace("+00:00", "Z")
-        toEnteredTime = end.isoformat().replace("+00:00", "Z")
+        fromEnteredTime = _schwab_iso8601(start)
+        toEnteredTime = _schwab_iso8601(end)
 
     params: Dict[str, str] = {
         "fromEnteredTime": fromEnteredTime,
@@ -461,10 +475,10 @@ def list_all_orders(
     url = f"{SCHWAB_TRADER_BASE}/orders"
 
     if not fromEnteredTime or not toEnteredTime:
-        end = datetime.utcnow().replace(tzinfo=timezone.utc)
+        end = datetime.now(timezone.utc)
         start = end - timedelta(days=30)
-        fromEnteredTime = start.isoformat().replace("+00:00", "Z")
-        toEnteredTime = end.isoformat().replace("+00:00", "Z")
+        fromEnteredTime = _schwab_iso8601(start)
+        toEnteredTime = _schwab_iso8601(end)
 
     params: Dict[str, str] = {
         "fromEnteredTime": fromEnteredTime,
