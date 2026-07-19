@@ -6,8 +6,10 @@ from app.routes.auth import get_current_user
 from app.trading.sparkie import (
     AgentLaunchRequest,
     GoalRequest,
+    SparkiePerformanceRequest,
     assess_goal_feasibility,
     build_agent_launch_plan,
+    build_performance_preview,
 )
 
 
@@ -24,6 +26,15 @@ class GoalFeasibilityRequest(BaseModel):
 class SparkieLaunchRequest(GoalFeasibilityRequest):
     requested_mode: Literal["paper", "live_mirror"] = "paper"
     acknowledged_live_risk: bool = False
+
+
+class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
+    start_date: str | None = None
+    end_date: str | None = None
+    lookback_days: int | None = Field(None, gt=0)
+    symbols: list[str] = Field(default_factory=list)
+    intervals: list[str] = Field(default_factory=list)
+    algos: list[str] = Field(default_factory=list)
 
 
 @router.post("/goal-feasibility")
@@ -44,6 +55,43 @@ def goal_feasibility(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return result.to_dict()
+
+
+@router.post("/performance-preview")
+def performance_preview(
+    payload: SparkiePerformanceApiRequest,
+    _user=Depends(get_current_user),
+):
+    try:
+        result = build_performance_preview(
+            SparkiePerformanceRequest(
+                account_equity=payload.account_equity,
+                target_profit=payload.target_profit,
+                target_period=payload.target_period,
+                start_date=_parse_date(payload.start_date, "start_date"),
+                end_date=_parse_date(payload.end_date, "end_date"),
+                lookback_days=payload.lookback_days,
+                symbols=tuple(payload.symbols or ()),
+                intervals=tuple(payload.intervals or ()),
+                algos=tuple(payload.algos or ()),
+                confidence_level=payload.confidence_level,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return result.to_dict()
+
+
+def _parse_date(value: str | None, field_name: str):
+    if not value:
+        return None
+    try:
+        from datetime import date
+
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be YYYY-MM-DD") from exc
 
 
 @router.post("/launch-plan")
