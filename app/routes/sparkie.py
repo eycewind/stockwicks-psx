@@ -11,11 +11,11 @@ from typing import Literal
 from app.database.connection import get_db
 from app.models.replay import ReplayOpenTrade, ReplaySession, ReplayTradeHistory
 from app.routes.auth import get_current_user
-from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 from app.modules.replay.routes import (
     ALLOWED_MM_ALGOS,
     DEFAULT_REPLAY_MM_CONFIG,
     _build_mm_replay_config,
+    _load_optimizer_cache,
 )
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
@@ -599,39 +599,48 @@ def _sparkie_backtest_scan(
 ) -> dict:
     top_rows: list[dict] = []
     errors: list[str] = []
-    tested_combinations = 0
     allowed_algos = set(algos or ALLOWED_MM_ALGOS)
-    builder_days = max(int(lookback_days or 30), 30)
-    trade_size = _sparkie_trade_size(account_equity)
+    allowed_symbols = set(symbols or [])
+    allowed_intervals = set(intervals or [])
+    optimizer_cache = _load_optimizer_cache()
 
-    for symbol in symbols:
-        try:
-            result = run_cheatsheet(
-                CheatSheetRequest(
-                    symbol=symbol,
-                    intervals=tuple(intervals or ("5min",)),
-                    user_id=user_id,
-                    trade_size=trade_size,
-                    builder_days=builder_days,
-                    profile="quick",
-                    allow_short=True,
-                    eod_close=True,
-                )
-            )
-        except Exception as exc:
-            errors.append(f"{symbol}: {str(exc)[:500]}")
+    if not optimizer_cache:
+        return {
+            "status": "missing_cache",
+            "method": "cached_optimizer_prefilter",
+            "symbols_scanned": 0,
+            "intervals": intervals,
+            "algos_requested": algos,
+            "tested_combinations": 0,
+            "candidate_count": 0,
+            "finalist_count": 0,
+            "finalist_combos": [],
+            "top": [],
+            "errors": [
+                "No cached Optimizer/backtest results found. Run Strategy Optimizer first, or uncheck the Sparkie backtest prefilter."
+            ],
+            "message": "Sparkie needs cached Optimizer results before it can prefilter Replay finalists.",
+        }
+
+    candidate_rows = list(optimizer_cache.get("top") or [])
+    if not candidate_rows:
+        candidate_rows = list(
+            optimizer_cache.get("best_by_symbol_algo")
+            or optimizer_cache.get("best_by_algo")
+            or []
+        )
+
+    for row in candidate_rows:
+        symbol = str(row.get("symbol") or "").upper()
+        interval = str(row.get("interval") or "").lower()
+        algo_name = str(row.get("algo_name") or "")
+        if symbol not in allowed_symbols:
             continue
-
-        tested_combinations += int(result.get("tested_combinations") or 0)
-        errors.extend(str(error)[:500] for error in result.get("errors") or [])
-        for row in result.get("top") or []:
-            algo_name = str(row.get("algo_name") or "")
-            interval = str(row.get("interval") or "")
-            if algo_name not in allowed_algos:
-                continue
-            if interval not in intervals:
-                continue
-            top_rows.append(_sparkie_backtest_row(row))
+        if interval not in allowed_intervals:
+            continue
+        if algo_name not in allowed_algos:
+            continue
+        top_rows.append(_sparkie_backtest_row(row))
 
     top_rows.sort(
         key=lambda row: (
@@ -660,20 +669,21 @@ def _sparkie_backtest_scan(
 
     return {
         "status": "completed",
-        "method": "fast_backtest_prefilter",
-        "symbols_scanned": len(symbols),
+        "method": "cached_optimizer_prefilter",
+        "source_run_id": optimizer_cache.get("run_id") or "latest",
+        "symbols_scanned": len({row.get("symbol") for row in top_rows if row.get("symbol")}),
         "intervals": intervals,
         "algos_requested": algos,
-        "tested_combinations": tested_combinations,
+        "tested_combinations": int(optimizer_cache.get("tested_combinations") or 0),
         "candidate_count": len(top_rows),
         "finalist_count": len(finalist_combos),
         "finalist_combos": finalist_combos,
         "top": top_rows[:20],
         "errors": errors[:30],
         "message": (
-            f"Sparkie backtest scan picked {len(finalist_combos)} finalist replay combo(s)."
+            f"Sparkie picked {len(finalist_combos)} Replay finalist combo(s) from cached Optimizer results."
             if finalist_combos
-            else "Sparkie backtest scan found no finalist replay combos."
+            else "Sparkie found no cached Optimizer finalists for these symbols, intervals, and algos."
         ),
     }
 

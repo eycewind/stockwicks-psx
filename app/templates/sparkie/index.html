@@ -269,7 +269,7 @@
         <div class="sparkie-row">
           <label class="sparkie-check">
             <input id="useBacktestPrefilter" type="checkbox" checked>
-            <span>Run fast backtest scan first, then Replay finalists only.</span>
+            <span>Use cached Optimizer/backtest results, then Replay finalists only.</span>
           </label>
           <div class="sparkie-field">
             <label for="replayFinalists">Replay finalists</label>
@@ -319,7 +319,7 @@
       </div>
       <div class="sparkie-step">
         <strong>3. Sparkie runs the replay tests</strong>
-        Sparkie should use fast optimizer/backtest-style scans to narrow candidates, then queue only finalist symbol, interval, and algo combinations through Replay.
+        Sparkie uses cached Optimizer/backtest results to narrow candidates, then queues only finalist symbol, interval, and algo combinations through Replay.
       </div>
       <div class="sparkie-step">
         <strong>4. User reviews Sparkie decision</strong>
@@ -364,18 +364,25 @@
       headers: {"Content-Type": "application/json", "Accept": "application/json"},
       body: JSON.stringify(payload)
     });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || "Sparkie request failed.");
-    }
-    return data;
+    return parseJsonResponse(response);
   }
 
   async function getJson(path) {
     const response = await fetch(`${urlPrefix}${path}`, {
       headers: {"Accept": "application/json"}
     });
-    const data = await response.json();
+    return parseJsonResponse(response);
+  }
+
+  async function parseJsonResponse(response) {
+    const text = await response.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (error) {
+      const snippet = text.replace(/\s+/g, " ").slice(0, 160);
+      throw new Error(`Sparkie API returned non-JSON HTTP ${response.status}. ${snippet}`);
+    }
     if (!response.ok) {
       throw new Error(data.detail || "Sparkie request failed.");
     }
@@ -562,12 +569,20 @@
   }
 
   function statusBanner(data) {
-    const done = data.status === "completed";
+    const status = String(data.status || "").toLowerCase();
+    const done = status === "completed";
+    const blocked = status === "blocked" || status === "error" || data.ok === false;
     const pct = Number(data.percent_complete || 0);
-    const title = done ? "Sparkie is done." : "Sparkie is still running.";
+    const title = done
+      ? "Sparkie is done."
+      : blocked
+        ? "Sparkie is blocked."
+        : "Sparkie is still running.";
     const detail = done
       ? "Review the best result and session rows below before considering Live Mirror."
-      : "Keep this page open. Sparkie refreshes every 5 seconds. If no progress appears after 12 minutes, sessions will be marked stale.";
+      : blocked
+        ? (data.message || data.next_step || "Review the notes below, adjust setup, and run Sparkie again.")
+        : "Keep this page open. Sparkie refreshes every 5 seconds. If no progress appears after 12 minutes, sessions will be marked stale.";
     return `
       <div class="sparkie-status-banner">
         <strong>${escapeHtml(title)}</strong>
