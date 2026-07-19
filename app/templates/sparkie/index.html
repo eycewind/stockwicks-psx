@@ -298,7 +298,10 @@
         <h2>History</h2>
         <p class="sparkie-muted">Last 10 Sparkie evaluations. You can pull any previous result anytime.</p>
       </div>
-      <button class="btn btn-secondary" type="button" id="historyBtn">Refresh History</button>
+      <div class="sparkie-actions" style="margin-top:0;">
+        <button class="btn btn-secondary" type="button" id="historyBtn">Refresh History</button>
+        <button class="btn btn-danger" type="button" id="clearHistoryBtn">Clear Sparkie History</button>
+      </div>
     </div>
     <div class="sparkie-history" id="sparkieHistory">Loading Sparkie history...</div>
   </section>
@@ -332,6 +335,7 @@
   const stopBtn = document.getElementById("stopBtn");
   const stopAllBtn = document.getElementById("stopAllBtn");
   const historyBox = document.getElementById("sparkieHistory");
+  const clearHistoryBtn = document.getElementById("clearHistoryBtn");
   const sparkieJobStorageKey = "stockwicks.sparkie.activeJobId";
   const sparkieSnapshotStorageKey = "stockwicks.sparkie.lastSnapshot";
   let activeJobId = null;
@@ -396,6 +400,15 @@
       localStorage.removeItem(sparkieJobStorageKey);
     } catch (error) {
       console.warn("Sparkie active job could not be cleared", error);
+    }
+  }
+
+  function clearSparkieBrowserState() {
+    try {
+      localStorage.removeItem(sparkieJobStorageKey);
+      localStorage.removeItem(sparkieSnapshotStorageKey);
+    } catch (error) {
+      console.warn("Sparkie browser state could not be cleared", error);
     }
   }
 
@@ -720,6 +733,33 @@
   });
 
   document.getElementById("historyBtn").addEventListener("click", loadSparkieHistory);
+
+  clearHistoryBtn.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "Clear all Sparkie history for this user? This removes Sparkie replay sessions and trades from history."
+    );
+    if (!confirmed) return;
+
+    clearHistoryBtn.disabled = true;
+    resultBox.textContent = "Clearing Sparkie history...";
+    try {
+      const data = await postJson("/api/sparkie/history/clear", {confirm: true});
+      clearSparkieBrowserState();
+      activeJobId = null;
+      latestRunPreview = null;
+      stopBtn.style.display = "none";
+      if (statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
+      resultBox.textContent = "Sparkie history cleared. Enter fresh criteria and run a new evaluation.";
+      historyBox.innerHTML = `<div class="sparkie-muted">${escapeHtml(data.message || "Sparkie history cleared.")}</div>`;
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+    } finally {
+      clearHistoryBtn.disabled = false;
+    }
+  });
 
   historyBox.addEventListener("click", (event) => {
     const button = event.target.closest("[data-sparkie-job]");

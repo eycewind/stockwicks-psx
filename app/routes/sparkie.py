@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 
 from app.database.connection import get_db
-from app.models.replay import ReplaySession
+from app.models.replay import ReplayOpenTrade, ReplaySession, ReplayTradeHistory
 from app.routes.auth import get_current_user
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 from app.modules.replay.routes import (
@@ -62,6 +62,10 @@ class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
     max_sessions: int = Field(12, ge=1, le=30)
     use_backtest_prefilter: bool = True
     replay_finalists: int = Field(3, ge=1, le=12)
+
+
+class SparkieClearHistoryRequest(BaseModel):
+    confirm: bool = False
 
 
 @page_router.get("/auth/sparkie", response_class=HTMLResponse)
@@ -409,6 +413,55 @@ def stop_all_evaluations(
         "ok": True,
         "stopped_sessions": stopped,
         "message": f"Sparkie stop-all requested for {stopped} active replay sessions.",
+    }
+
+
+@router.post("/history/clear")
+def clear_history(
+    payload: SparkieClearHistoryRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation is required to clear Sparkie history.")
+
+    rows = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user.id)
+        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
+        .order_by(ReplaySession.id.desc())
+        .all()
+    )
+    if not rows:
+        return {
+            "ok": True,
+            "deleted_sessions": 0,
+            "stopped_sessions": 0,
+            "message": "Sparkie history is already clean.",
+        }
+
+    stopped = _stop_sparkie_rows(db, rows, reason="Sparkie history cleared.")
+    session_ids = [int(row.id) for row in rows if row.id is not None]
+
+    db.query(ReplayOpenTrade).filter(ReplayOpenTrade.session_id.in_(session_ids)).delete(
+        synchronize_session=False
+    )
+    db.query(ReplayTradeHistory).filter(ReplayTradeHistory.session_id.in_(session_ids)).delete(
+        synchronize_session=False
+    )
+    deleted = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user.id)
+        .filter(ReplaySession.id.in_(session_ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+    return {
+        "ok": True,
+        "deleted_sessions": deleted,
+        "stopped_sessions": stopped,
+        "message": f"Cleared {deleted} Sparkie replay session(s).",
     }
 
 
