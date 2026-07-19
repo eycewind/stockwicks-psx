@@ -269,7 +269,7 @@
         <div class="sparkie-row">
           <label class="sparkie-check">
             <input id="useBacktestPrefilter" type="checkbox" checked>
-            <span>Use cached Optimizer/backtest results, then Replay finalists only.</span>
+            <span>Let Sparkie run Optimizer/backtest first, then Replay finalists only.</span>
           </label>
           <div class="sparkie-field">
             <label for="replayFinalists">Replay finalists</label>
@@ -319,7 +319,7 @@
       </div>
       <div class="sparkie-step">
         <strong>3. Sparkie runs the replay tests</strong>
-        Sparkie uses cached Optimizer/backtest results to narrow candidates, then queues only finalist symbol, interval, and algo combinations through Replay.
+        Sparkie runs or reuses Optimizer/backtest results to narrow candidates, then queues only finalist symbol, interval, and algo combinations through Replay.
       </div>
       <div class="sparkie-step">
         <strong>4. User reviews Sparkie decision</strong>
