@@ -16,6 +16,8 @@ from app.modules.replay.routes import (
     DEFAULT_REPLAY_MM_CONFIG,
     _build_mm_replay_config,
 )
+from app.scripts.replay.data_ingest import fetch_and_save
+from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.trading.sparkie import (
     AgentLaunchRequest,
     GoalRequest,
@@ -165,6 +167,41 @@ def run_evaluation(
     if not combos:
         raise HTTPException(status_code=400, detail="Enter at least one symbol, interval, and algo.")
 
+    data_errors = _prepare_replay_data(
+        user_id=user.id,
+        symbols=symbols,
+        intervals=intervals,
+        start_date=preview.start_date,
+        end_date=preview.end_date,
+    )
+    runnable_symbols = [symbol for symbol in symbols if symbol not in data_errors]
+    combos = [
+        (symbol, interval, algo)
+        for symbol, interval, algo in combos
+        if symbol in runnable_symbols
+    ]
+    skipped_sessions = [
+        {
+            "session_id": None,
+            "symbol": symbol,
+            "interval": ",".join(intervals),
+            "algo_name": ",".join(algos),
+            "status": "DATA_ERROR",
+            "error": error,
+        }
+        for symbol, error in data_errors.items()
+    ]
+
+    if not combos:
+        return {
+            "ok": False,
+            "status": "blocked",
+            "job_id": None,
+            "message": "Sparkie could not prepare replay data for the selected symbols.",
+            "preview": preview.to_dict(),
+            "sessions": skipped_sessions,
+        }
+
     trade_size = _sparkie_trade_size(payload.account_equity)
     sessions = []
     job_id = f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
@@ -180,6 +217,7 @@ def run_evaluation(
         cfg["sparkie_target_profit"] = float(payload.target_profit)
         cfg["sparkie_target_period"] = payload.target_period
         cfg["sparkie_account_equity"] = float(payload.account_equity)
+        cfg["sparkie_confidence_level"] = float(payload.confidence_level)
 
         session = ReplaySession(
             user_id=user.id,
@@ -240,7 +278,7 @@ def run_evaluation(
         "job_id": job_id,
         "message": "Sparkie queued replay sessions. It will compare results after the replay workers finish.",
         "preview": preview.to_dict(),
-        "sessions": queued,
+        "sessions": skipped_sessions + queued,
         "next_step": "Wait for sessions to complete, then review Sparkie results before considering Live Mirror.",
     }
 
@@ -264,6 +302,7 @@ def evaluation_status(
     if not rows:
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
 
+    preview = _sparkie_preview_from_sessions(rows)
     sessions = []
     completed = 0
     total_profit = 0.0
@@ -287,15 +326,18 @@ def evaluation_status(
             }
         )
 
+    status = "completed" if completed == len(rows) else "running"
     return {
         "ok": True,
         "job_id": job_id,
-        "status": "completed" if completed == len(rows) else "running",
+        "status": status,
         "completed_sessions": completed,
         "total_sessions": len(rows),
         "total_profit_loss": round(total_profit, 2),
         "total_trades": total_trades,
+        "preview": preview,
         "sessions": sessions,
+        "next_step": _sparkie_status_next_step(status, total_profit, total_trades),
     }
 
 
@@ -338,6 +380,58 @@ def _clean_algos(values: list[str]) -> list[str]:
     return algos or ["Algo1_MM"]
 
 
+def _prepare_replay_data(
+    *,
+    user_id: int,
+    symbols: list[str],
+    intervals: list[str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for symbol in symbols:
+        try:
+            fetch_and_save(user_id=user_id, symbol=symbol, days=30, force=False)
+            _validate_replay_symbol_range(
+                user_id=user_id,
+                symbol=symbol,
+                intervals=intervals,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception:
+            try:
+                fetch_and_save(user_id=user_id, symbol=symbol, days=30, force=True)
+                _validate_replay_symbol_range(
+                    user_id=user_id,
+                    symbol=symbol,
+                    intervals=intervals,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as exc:
+                errors[symbol] = str(exc)[:500]
+    return errors
+
+
+def _validate_replay_symbol_range(
+    *,
+    user_id: int,
+    symbol: str,
+    intervals: list[str],
+    start_date: str,
+    end_date: str,
+) -> None:
+    for interval in intervals:
+        ReplayDataProvider(
+            user_id=user_id,
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval,
+        )
+
+
 def _sparkie_trade_size(account_equity: float) -> float:
     return float(max(1, int(float(account_equity) * 0.10)))
 
@@ -375,6 +469,73 @@ def _replay_session_pnl(db: Session, session_id: int) -> tuple[float, int]:
     rows = db.query(ReplayTradeHistory.profit_loss).filter_by(session_id=session_id).all()
     values = [float(row[0] or 0.0) for row in rows]
     return sum(values), len(values)
+
+
+def _sparkie_preview_from_sessions(rows: list[ReplaySession]) -> dict:
+    first = rows[0]
+    cfg = _parse_config_json(first.config_json)
+    account_equity = float(cfg.get("sparkie_account_equity") or 0.0)
+    target_profit = float(cfg.get("sparkie_target_profit") or 0.0)
+    target_period = str(cfg.get("sparkie_target_period") or "daily")
+    confidence_level = float(cfg.get("sparkie_confidence_level") or 0.60)
+
+    if account_equity <= 0 or target_profit <= 0:
+        return {
+            "account_equity": account_equity,
+            "target_profit_for_window": 0.0,
+            "meets_minimum_equity": False,
+            "feasibility": {},
+            "start_date": first.start_date,
+            "end_date": first.end_date,
+        }
+
+    symbols = tuple(sorted({row.symbol for row in rows if row.symbol}))
+    intervals = tuple(sorted({row.interval for row in rows if row.interval}))
+    algos = tuple(sorted({row.algo_name for row in rows if row.algo_name}))
+    try:
+        preview = build_performance_preview(
+            SparkiePerformanceRequest(
+                account_equity=account_equity,
+                target_profit=target_profit,
+                target_period=target_period,  # type: ignore[arg-type]
+                start_date=_parse_date(first.start_date, "start_date"),
+                end_date=_parse_date(first.end_date, "end_date"),
+                symbols=symbols,
+                intervals=intervals,
+                algos=algos,
+                confidence_level=confidence_level,
+            )
+        )
+        return preview.to_dict()
+    except Exception:
+        return {
+            "account_equity": account_equity,
+            "target_profit_for_window": 0.0,
+            "meets_minimum_equity": account_equity >= 5000,
+            "feasibility": {},
+            "start_date": first.start_date,
+            "end_date": first.end_date,
+        }
+
+
+def _parse_config_json(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _sparkie_status_next_step(status: str, total_profit: float, total_trades: int) -> str:
+    if status != "completed":
+        return "Sparkie is still running replay sessions. Keep this page open or check back shortly."
+    if total_trades <= 0:
+        return "Sparkie finished but found no completed trades. Try a wider date range or different symbols."
+    if total_profit > 0:
+        return "Sparkie found positive replay P/L. Review drawdown and individual sessions before Live Mirror."
+    return "Sparkie did not find positive replay P/L. Stay in paper mode and adjust symbols, algos, or target."
 
 
 @router.post("/launch-plan")
