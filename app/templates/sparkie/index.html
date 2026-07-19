@@ -137,12 +137,6 @@
     color: #ffffff;
     margin-bottom: 4px;
   }
-  .sparkie-replay-tools {
-    display: none;
-    margin-top: 14px;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
   @media (max-width: 900px) {
     .sparkie-grid,
     .sparkie-row {
@@ -158,7 +152,7 @@
   <div class="sparkie-header">
     <div>
       <h1>Sparkie Agent</h1>
-      <p class="sparkie-muted">Use Sparkie to check whether the goal is reasonable, then open Replay with the first symbol/algo to run the historical paper test.</p>
+      <p class="sparkie-muted">Give Sparkie the goal once. Sparkie checks the account gate, queues replay tests, and reports what happened.</p>
     </div>
     <div class="sparkie-pill">Minimum account equity: $5,000</div>
   </div>
@@ -229,7 +223,7 @@
         </label>
 
         <div class="sparkie-actions">
-          <button class="btn btn-primary" type="button" id="previewBtn">Step 1: Check Criteria</button>
+          <button class="btn btn-primary" type="button" id="runBtn">Run Sparkie Evaluation</button>
           <button class="btn btn-secondary" type="button" id="launchBtn">Check Launch Plan</button>
         </div>
       </form>
@@ -237,11 +231,7 @@
 
     <section class="sparkie-panel">
       <h2>Result</h2>
-      <div class="sparkie-result" id="sparkieResult">Step 1: click Check Criteria. If Sparkie says replay_ready is true, use Step 2 to open Replay with the first symbol/algo from your list.</div>
-      <div class="sparkie-replay-tools" id="replayTools">
-        <button class="btn btn-primary" type="button" id="openReplayBtn">Step 2: Open Replay With These Settings</button>
-        <a class="btn btn-secondary" href="{{ url_prefix }}/auth/papertradebot">Open Paper Bot</a>
-      </div>
+      <div class="sparkie-result" id="sparkieResult">Enter the account size, target, symbols, intervals, and algos. Click Run Sparkie Evaluation once. Sparkie will queue the replay sessions for you.</div>
     </section>
   </div>
 
@@ -249,20 +239,20 @@
     <h2>How Sparkie Runs</h2>
     <div class="sparkie-steps">
       <div class="sparkie-step">
-        <strong>1. Check goal and minimum account size</strong>
-        Sparkie blocks paper and Live Mirror below $5,000.
+        <strong>1. User gives Sparkie the goal</strong>
+        Account size, target, symbols, intervals, algos, and date window.
       </div>
       <div class="sparkie-step">
-        <strong>2. Open Replay</strong>
-        Sparkie sends the first symbol, first interval, first algo, date window, and trade size into Replay.
+        <strong>2. Sparkie checks safety gates</strong>
+        Sparkie blocks paper and Live Mirror below $5,000 and rates the target.
       </div>
       <div class="sparkie-step">
-        <strong>3. Start Replay</strong>
-        Replay runs the historical paper test. Nothing goes to the broker.
+        <strong>3. Sparkie runs the replay tests</strong>
+        Sparkie queues symbol, interval, and algo combinations through the replay engine.
       </div>
       <div class="sparkie-step">
-        <strong>4. Review and decide</strong>
-        If paper/replay results look acceptable, restart from the normal Bot page with Live Mirror intentionally enabled.
+        <strong>4. User reviews Sparkie decision</strong>
+        Only after paper/replay evidence should the user intentionally enable Live Mirror.
       </div>
     </div>
   </section>
@@ -271,8 +261,8 @@
 <script>
   const urlPrefix = {{ url_prefix|tojson }};
   const resultBox = document.getElementById("sparkieResult");
-  const replayTools = document.getElementById("replayTools");
-  let latestPreview = null;
+  let activeJobId = null;
+  let statusTimer = null;
 
   function listFromInput(id) {
     return document.getElementById(id).value
@@ -343,42 +333,67 @@
     }</div>`;
   }
 
-  function replayUrlFromPreview() {
-    const symbols = listFromInput("symbols");
-    const intervals = listFromInput("intervals");
-    const algos = listFromInput("algos");
-    const symbol = symbols[0] || "AAPL";
-    const interval = intervals[0] || "5min";
-    const algo = algos[0] || "Algo1_MM";
-    const query = new URLSearchParams({
-      symbol,
-      interval,
-      algo_name: algo,
-      trade_size: String(Math.max(1, Math.floor(Number(document.getElementById("accountEquity").value) * 0.1))),
-      start_date: latestPreview?.start_date || "",
-      end_date: latestPreview?.end_date || "",
-      allow_short_selling: "on",
-      eod_auto_close: "on"
-    });
-    return `${urlPrefix}/replay-simulator?${query.toString()}`;
+  function evaluationPayload() {
+    return {
+      ...basePayload(),
+      lookback_days: Number(document.getElementById("lookbackDays").value),
+      symbols: listFromInput("symbols"),
+      intervals: listFromInput("intervals"),
+      algos: listFromInput("algos")
+    };
   }
 
-  document.getElementById("previewBtn").addEventListener("click", async () => {
-    resultBox.textContent = "Checking Sparkie performance criteria...";
+  function renderEvaluation(data) {
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const sessionRows = sessions.map((s) => (
+      `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${escapeHtml(s.algo_name)} · ${escapeHtml(s.status)} · P/L $${Number(s.profit_loss || 0).toLocaleString()}</strong></div>`
+    )).join("");
+    const header = renderSummary({
+      can_start: data.ok,
+      replay_ready: data.ok,
+      account_equity: data.preview?.account_equity,
+      meets_minimum_equity: data.preview?.meets_minimum_equity,
+      feasibility: data.preview?.feasibility || {},
+      target_profit_for_window: data.preview?.target_profit_for_window,
+      start_date: data.preview?.start_date,
+      end_date: data.preview?.end_date,
+      next_step: data.next_step || data.message
+    });
+    return `${header}<div style="height:12px"></div><div class="sparkie-summary">${sessionRows || ""}</div>`;
+  }
+
+  async function pollEvaluation(jobId) {
     try {
-      const data = await postJson("/api/sparkie/performance-preview", {
-        ...basePayload(),
-        lookback_days: Number(document.getElementById("lookbackDays").value),
-        symbols: listFromInput("symbols"),
-        intervals: listFromInput("intervals"),
-        algos: listFromInput("algos")
+      const response = await fetch(`${urlPrefix}/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`, {
+        headers: {"Accept": "application/json"}
       });
-      latestPreview = data;
-      showResult(data);
-      replayTools.style.display = data.replay_ready ? "flex" : "none";
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not load Sparkie evaluation status.");
+      resultBox.innerHTML = renderEvaluation(data);
+      if (data.status === "completed" && statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
     } catch (error) {
       resultBox.textContent = error.message || String(error);
-      replayTools.style.display = "none";
+      if (statusTimer) clearInterval(statusTimer);
+      statusTimer = null;
+    }
+  }
+
+  document.getElementById("runBtn").addEventListener("click", async () => {
+    resultBox.textContent = "Sparkie is checking criteria and queueing replay sessions...";
+    try {
+      const data = await postJson("/api/sparkie/run-evaluation", evaluationPayload());
+      activeJobId = data.job_id;
+      resultBox.innerHTML = renderEvaluation(data);
+      if (activeJobId) {
+        if (statusTimer) clearInterval(statusTimer);
+        statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
+        setTimeout(() => pollEvaluation(activeJobId), 1200);
+      }
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
     }
   });
 
@@ -396,12 +411,5 @@
     }
   });
 
-  document.getElementById("openReplayBtn").addEventListener("click", () => {
-    if (!latestPreview || !latestPreview.replay_ready) {
-      resultBox.textContent = "Run Step 1 first. Sparkie needs a valid criteria check before opening Replay.";
-      return;
-    }
-    window.location.href = replayUrlFromPreview();
-  });
 </script>
 {% endblock %}
