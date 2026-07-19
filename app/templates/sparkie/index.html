@@ -123,6 +123,30 @@
   .sparkie-bad {
     color: #fca5a5;
   }
+  .sparkie-status-banner {
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(14, 165, 233, 0.10);
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .sparkie-progress {
+    height: 10px;
+    background: rgba(148, 163, 184, 0.18);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 8px;
+  }
+  .sparkie-progress span {
+    display: block;
+    height: 100%;
+    background: #23c5d9;
+    width: 0%;
+  }
+  .sparkie-session-link {
+    color: #7dd3fc;
+    text-decoration: none;
+  }
   .sparkie-steps {
     display: grid;
     gap: 12px;
@@ -347,8 +371,9 @@
   function renderEvaluation(data) {
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
     const preview = data.preview && data.preview.account_equity ? data.preview : latestRunPreview;
+    const best = data.best_session;
     const sessionRows = sessions.map((s) => (
-      `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${escapeHtml(s.algo_name)} · ${escapeHtml(s.status)} · P/L $${Number(s.profit_loss || 0).toLocaleString()}${s.error_message || s.error ? ` · ${escapeHtml(s.error_message || s.error)}` : ""}</strong></div>`
+      `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${sessionLabel(s)}</strong></div>`
     )).join("");
     const header = renderSummary({
       can_start: data.ok,
@@ -364,10 +389,42 @@
     const totals = `
       <div class="sparkie-summary-row"><span>Status</span><strong>${escapeHtml(data.status || "")}</strong></div>
       <div class="sparkie-summary-row"><span>Sessions</span><strong>${escapeHtml(data.completed_sessions ?? 0)} / ${escapeHtml(data.total_sessions ?? sessions.length)}</strong></div>
+      <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.percent_complete || 0).toLocaleString()}%</strong></div>
       <div class="sparkie-summary-row"><span>Total P/L</span><strong>$${Number(data.total_profit_loss || 0).toLocaleString()}</strong></div>
       <div class="sparkie-summary-row"><span>Total trades</span><strong>${Number(data.total_trades || 0).toLocaleString()}</strong></div>
+      ${best ? `<div class="sparkie-summary-row"><span>Best result</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
     `;
-    return `${header}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
+    return `${statusBanner(data)}${header}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
+  }
+
+  function statusBanner(data) {
+    const done = data.status === "completed";
+    const pct = Number(data.percent_complete || 0);
+    const title = done ? "Sparkie is done." : "Sparkie is still running.";
+    const detail = done
+      ? "Review the best result and session rows below before considering Live Mirror."
+      : "Keep this page open. Sparkie refreshes every 5 seconds.";
+    return `
+      <div class="sparkie-status-banner">
+        <strong>${escapeHtml(title)}</strong>
+        <div class="sparkie-muted">${escapeHtml(detail)}</div>
+        <div class="sparkie-progress"><span style="width:${Math.max(0, Math.min(100, pct))}%"></span></div>
+      </div>
+    `;
+  }
+
+  function sessionLabel(session) {
+    const parts = [
+      escapeHtml(session.algo_name),
+      escapeHtml(session.status),
+      `P/L $${Number(session.profit_loss || 0).toLocaleString()}`
+    ];
+    if (session.trade_count !== undefined) parts.push(`${Number(session.trade_count || 0).toLocaleString()} trades`);
+    if (session.session_id) {
+      parts.push(`<a class="sparkie-session-link" href="${urlPrefix}/replay-simulator" title="Open Replay page">session #${escapeHtml(session.session_id)}</a>`);
+    }
+    if (session.error_message || session.error) parts.push(escapeHtml(session.error_message || session.error));
+    return parts.join(" · ");
   }
 
   async function pollEvaluation(jobId) {

@@ -327,14 +327,18 @@ def evaluation_status(
         )
 
     status = "completed" if completed == len(rows) else "running"
+    best_session = _best_sparkie_session(sessions)
+    percent_complete = round((completed / len(rows)) * 100.0, 1) if rows else 0.0
     return {
         "ok": True,
         "job_id": job_id,
         "status": status,
         "completed_sessions": completed,
         "total_sessions": len(rows),
+        "percent_complete": percent_complete,
         "total_profit_loss": round(total_profit, 2),
         "total_trades": total_trades,
+        "best_session": best_session,
         "preview": preview,
         "sessions": sessions,
         "next_step": _sparkie_status_next_step(status, total_profit, total_trades),
@@ -469,6 +473,17 @@ def _replay_session_pnl(db: Session, session_id: int) -> tuple[float, int]:
     rows = db.query(ReplayTradeHistory.profit_loss).filter_by(session_id=session_id).all()
     values = [float(row[0] or 0.0) for row in rows]
     return sum(values), len(values)
+
+
+def _best_sparkie_session(sessions: list[dict]) -> dict | None:
+    completed = [
+        session
+        for session in sessions
+        if str(session.get("status") or "").upper() in {"COMPLETED", "STOPPED"}
+    ]
+    if not completed:
+        return None
+    return max(completed, key=lambda session: float(session.get("profit_loss") or 0.0))
 
 
 def _sparkie_preview_from_sessions(rows: list[ReplaySession]) -> dict:
