@@ -490,6 +490,7 @@
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
     const preview = data.preview && data.preview.account_equity ? data.preview : latestRunPreview;
     const best = data.best_session;
+    const bestLabel = best && Number(best.profit_loss || 0) > 0 ? "Best result" : "Least bad result";
     const backtestScan = renderBacktestScan(data.backtest_scan);
     const sessionRows = sessions.map((s) => (
       `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${sessionLabel(s)}</strong></div>`
@@ -513,7 +514,7 @@
       <div class="sparkie-summary-row"><span>Total P/L</span><strong>$${Number(data.total_profit_loss || 0).toLocaleString()}</strong></div>
       <div class="sparkie-summary-row"><span>Total trades</span><strong>${Number(data.total_trades || 0).toLocaleString()}</strong></div>
       <div class="sparkie-summary-row"><span>Stale timeout</span><strong>Sessions with no progress for 12+ minutes are marked ERROR.</strong></div>
-      ${best ? `<div class="sparkie-summary-row"><span>Best result</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
+      ${best ? `<div class="sparkie-summary-row"><span>${escapeHtml(bestLabel)}</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
     `;
     return `${statusBanner(data)}${header}${backtestScan}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
   }

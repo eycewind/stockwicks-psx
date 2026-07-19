@@ -672,20 +672,7 @@ def _sparkie_backtest_scan(
         reverse=True,
     )
 
-    finalist_rows = top_rows[:finalist_count]
-    finalist_combos = [
-        {
-            "symbol": row["symbol"],
-            "interval": row["interval"],
-            "algo_name": row["algo_name"],
-            "score": row.get("score"),
-            "total_profit": row.get("total_profit"),
-            "win_rate": row.get("win_rate"),
-            "num_trades": row.get("num_trades"),
-            "max_drawdown": row.get("max_drawdown"),
-        }
-        for row in finalist_rows
-    ]
+    finalist_combos = _sparkie_unique_finalist_combos(top_rows, finalist_count)
 
     optimizer_job = None
     if not finalist_combos:
@@ -738,6 +725,35 @@ def _sparkie_backtest_row(row: dict) -> dict:
         "backtest_method_label",
     )
     return {key: row.get(key) for key in keys}
+
+
+def _sparkie_unique_finalist_combos(rows: list[dict], finalist_count: int) -> list[dict]:
+    finalists: list[dict] = []
+    seen_combos: set[tuple[str, str, str]] = set()
+    for row in rows:
+        key = (
+            str(row.get("symbol") or "").upper(),
+            str(row.get("interval") or "").lower(),
+            str(row.get("algo_name") or ""),
+        )
+        if not all(key) or key in seen_combos:
+            continue
+        seen_combos.add(key)
+        finalists.append(
+            {
+                "symbol": row["symbol"],
+                "interval": row["interval"],
+                "algo_name": row["algo_name"],
+                "score": row.get("score"),
+                "total_profit": row.get("total_profit"),
+                "win_rate": row.get("win_rate"),
+                "num_trades": row.get("num_trades"),
+                "max_drawdown": row.get("max_drawdown"),
+            }
+        )
+        if len(finalists) >= finalist_count:
+            break
+    return finalists
 
 
 def _queue_sparkie_optimizer_scan(
@@ -922,19 +938,24 @@ def _sparkie_job_summary(
     total_profit = 0.0
     total_trades = 0
     progress_units = 0.0
+    replay_session_count = 0
 
     for row in rows:
+        is_optimizer_placeholder = str(row.algo_name or "") == "OptimizerPrefilter"
         session_profit, trade_count = _replay_session_pnl(db, row.id)
-        total_profit += session_profit
-        total_trades += trade_count
+        if not is_optimizer_placeholder:
+            replay_session_count += 1
+            total_profit += session_profit
+            total_trades += trade_count
 
         status = str(row.status or "").upper()
-        terminal = status in {"COMPLETED", "STOPPED", "ERROR", "DATA_ERROR"}
-        if terminal:
-            completed += 1
-            progress_units += 1.0
-        else:
-            progress_units += _sparkie_session_progress(row)
+        terminal = status in {"COMPLETED", "STOPPED", "ERROR", "DATA_ERROR", "OPTIMIZED"}
+        if not is_optimizer_placeholder:
+            if terminal:
+                completed += 1
+                progress_units += 1.0
+            else:
+                progress_units += _sparkie_session_progress(row)
 
         sessions.append(
             {
@@ -954,12 +975,14 @@ def _sparkie_job_summary(
             }
         )
 
-    total_sessions = len(rows)
+    total_sessions = replay_session_count
     status = "completed" if total_sessions and completed == total_sessions else "running"
     if optimizer_scan and optimizer_scan.get("status") == "optimizing" and not any(
         str(row.algo_name or "") != "OptimizerPrefilter" for row in rows
     ):
         status = "optimizing"
+    elif not total_sessions and optimizer_scan and optimizer_scan.get("status") == "completed":
+        status = "completed"
     best_session = _best_sparkie_session(sessions)
     percent_complete = round((progress_units / total_sessions) * 100.0, 1) if total_sessions else 0.0
     created_at = min((row.created_at for row in rows if row.created_at), default=None)
@@ -1109,19 +1132,7 @@ def _sparkie_finalists_from_optimizer_result(
         ),
         reverse=True,
     )
-    return [
-        {
-            "symbol": row["symbol"],
-            "interval": row["interval"],
-            "algo_name": row["algo_name"],
-            "score": row.get("score"),
-            "total_profit": row.get("total_profit"),
-            "win_rate": row.get("win_rate"),
-            "num_trades": row.get("num_trades"),
-            "max_drawdown": row.get("max_drawdown"),
-        }
-        for row in rows[:finalist_count]
-    ]
+    return _sparkie_unique_finalist_combos(rows, finalist_count)
 
 
 def _queue_sparkie_replay_finalists(
