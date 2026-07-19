@@ -287,6 +287,8 @@
   const urlPrefix = {{ url_prefix|tojson }};
   const resultBox = document.getElementById("sparkieResult");
   const stopBtn = document.getElementById("stopBtn");
+  const sparkieJobStorageKey = "stockwicks.sparkie.activeJobId";
+  const sparkieSnapshotStorageKey = "stockwicks.sparkie.lastSnapshot";
   let activeJobId = null;
   let statusTimer = null;
   let latestRunPreview = null;
@@ -322,6 +324,42 @@
 
   function showResult(data) {
     resultBox.innerHTML = renderSummary(data);
+  }
+
+  function saveSparkieState(jobId, snapshot) {
+    try {
+      if (jobId) localStorage.setItem(sparkieJobStorageKey, jobId);
+      if (snapshot) localStorage.setItem(sparkieSnapshotStorageKey, JSON.stringify(snapshot));
+    } catch (error) {
+      console.warn("Sparkie state could not be saved", error);
+    }
+  }
+
+  function clearSparkieActiveJob() {
+    try {
+      localStorage.removeItem(sparkieJobStorageKey);
+    } catch (error) {
+      console.warn("Sparkie active job could not be cleared", error);
+    }
+  }
+
+  function loadSparkieSnapshot() {
+    try {
+      const raw = localStorage.getItem(sparkieSnapshotStorageKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      console.warn("Sparkie snapshot could not be loaded", error);
+      return null;
+    }
+  }
+
+  function loadSparkieActiveJob() {
+    try {
+      return localStorage.getItem(sparkieJobStorageKey);
+    } catch (error) {
+      console.warn("Sparkie active job could not be loaded", error);
+      return null;
+    }
   }
 
   function statusClass(value) {
@@ -390,6 +428,7 @@
     });
     const totals = `
       <div class="sparkie-summary-row"><span>Status</span><strong>${escapeHtml(data.status || "")}</strong></div>
+      <div class="sparkie-summary-row"><span>Job id</span><strong>${escapeHtml(data.job_id || activeJobId || "")}</strong></div>
       <div class="sparkie-summary-row"><span>Sessions</span><strong>${escapeHtml(data.completed_sessions ?? 0)} / ${escapeHtml(data.total_sessions ?? sessions.length)}</strong></div>
       <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.percent_complete || 0).toLocaleString()}%</strong></div>
       <div class="sparkie-summary-row"><span>Total P/L</span><strong>$${Number(data.total_profit_loss || 0).toLocaleString()}</strong></div>
@@ -439,11 +478,19 @@
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Could not load Sparkie evaluation status.");
+      latestRunPreview = data.preview || latestRunPreview;
       resultBox.innerHTML = renderEvaluation(data);
-      if (data.status === "completed" && statusTimer) {
-        clearInterval(statusTimer);
-        statusTimer = null;
+      saveSparkieState(jobId, data);
+      if (data.status === "completed") {
+        clearSparkieActiveJob();
         stopBtn.style.display = "none";
+        if (statusTimer) {
+          clearInterval(statusTimer);
+          statusTimer = null;
+        }
+      } else {
+        stopBtn.style.display = "inline-block";
+        stopBtn.disabled = false;
       }
     } catch (error) {
       resultBox.textContent = error.message || String(error);
@@ -459,6 +506,7 @@
       activeJobId = data.job_id;
       latestRunPreview = data.preview || null;
       resultBox.innerHTML = renderEvaluation(data);
+      saveSparkieState(activeJobId, data);
       if (activeJobId) {
         stopBtn.style.display = "inline-block";
         stopBtn.disabled = false;
@@ -479,6 +527,7 @@
       await postJson(`/api/sparkie/stop-evaluation/${encodeURIComponent(activeJobId)}`, {});
       await pollEvaluation(activeJobId);
       stopBtn.style.display = "none";
+      clearSparkieActiveJob();
     } catch (error) {
       resultBox.textContent = error.message || String(error);
       stopBtn.disabled = false;
@@ -498,6 +547,28 @@
       resultBox.textContent = error.message || String(error);
     }
   });
+
+  (function resumeSparkieEvaluation() {
+    const snapshot = loadSparkieSnapshot();
+    if (snapshot) {
+      latestRunPreview = snapshot.preview || latestRunPreview;
+      resultBox.innerHTML = renderEvaluation(snapshot);
+    }
+
+    const savedJobId = loadSparkieActiveJob();
+    if (!savedJobId) return;
+
+    activeJobId = savedJobId;
+    stopBtn.style.display = "inline-block";
+    stopBtn.disabled = false;
+    resultBox.insertAdjacentHTML(
+      "afterbegin",
+      `<div class="sparkie-status-banner"><strong>Resuming Sparkie job ${escapeHtml(savedJobId)}.</strong><div class="sparkie-muted">Sparkie will refresh this saved job and show the latest replay status.</div></div>`
+    );
+    if (statusTimer) clearInterval(statusTimer);
+    statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
+    setTimeout(() => pollEvaluation(activeJobId), 500);
+  })();
 
 </script>
 {% endblock %}
