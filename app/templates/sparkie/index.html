@@ -530,6 +530,7 @@
       <div style="height:12px"></div>
       <div class="sparkie-summary">
         <div class="sparkie-summary-row"><span>Backtest scan</span><strong>${escapeHtml(scan.message || scan.status || "")}</strong></div>
+        ${scan.optimizer_job_id ? `<div class="sparkie-summary-row"><span>Optimizer job</span><strong>${escapeHtml(scan.optimizer_job_id)} · ${escapeHtml(scan.status || "")}</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Scanned</span><strong>${Number(scan.symbols_scanned || 0).toLocaleString()} symbols · ${Number(scan.tested_combinations || 0).toLocaleString()} combinations · ${Number(scan.candidate_count || 0).toLocaleString()} candidates</strong></div>
         ${finalistRows || `<div class="sparkie-summary-row"><span>Finalists</span><strong>No replay finalists selected.</strong></div>`}
         ${errorText}
@@ -638,6 +639,12 @@
     try {
       const data = await getJson("/api/sparkie/history");
       historyBox.innerHTML = renderHistory(data);
+      if ((!data.jobs || !data.jobs.length) && !loadSparkieActiveJob()) {
+        clearSparkieBrowserState();
+        activeJobId = null;
+        latestRunPreview = null;
+        resultBox.textContent = "No Sparkie history yet. Enter criteria and run a fresh Sparkie evaluation.";
+      }
     } catch (error) {
       historyBox.textContent = error.message || String(error);
     }
@@ -783,13 +790,15 @@
   });
 
   (function resumeSparkieEvaluation() {
+    const savedJobId = loadSparkieActiveJob();
     const snapshot = loadSparkieSnapshot();
-    if (snapshot) {
+    if (savedJobId && snapshot && snapshot.job_id === savedJobId) {
       latestRunPreview = snapshot.preview || latestRunPreview;
       resultBox.innerHTML = renderEvaluation(snapshot);
+    } else if (!savedJobId) {
+      clearSparkieBrowserState();
     }
 
-    const savedJobId = loadSparkieActiveJob();
     if (!savedJobId) return;
 
     activeJobId = savedJobId;

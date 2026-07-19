@@ -188,36 +188,12 @@ def run_evaluation(
 
     job_id = f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
-    data_errors = _prepare_replay_data(
-        user_id=user.id,
-        symbols=symbols,
-        intervals=intervals,
-        start_date=preview.start_date,
-        end_date=preview.end_date,
-    )
-    runnable_symbols = [symbol for symbol in symbols if symbol not in data_errors]
-    combos = [
-        (symbol, interval, algo)
-        for symbol, interval, algo in combos
-        if symbol in runnable_symbols
-    ]
-    skipped_sessions = [
-        {
-            "session_id": None,
-            "symbol": symbol,
-            "interval": ",".join(intervals),
-            "algo_name": ",".join(algos),
-            "status": "DATA_ERROR",
-            "error": error,
-        }
-        for symbol, error in data_errors.items()
-    ]
-
+    skipped_sessions: list[dict] = []
     backtest_scan = None
     if payload.use_backtest_prefilter:
         backtest_scan = _sparkie_backtest_scan(
             user_id=user.id,
-            symbols=runnable_symbols,
+            symbols=symbols,
             intervals=intervals,
             algos=algos,
             account_equity=payload.account_equity,
@@ -232,6 +208,33 @@ def run_evaluation(
             ][: payload.max_sessions]
         else:
             combos = []
+
+    if combos:
+        symbols_to_prepare = sorted({symbol for symbol, _interval, _algo in combos})
+        data_errors = _prepare_replay_data(
+            user_id=user.id,
+            symbols=symbols_to_prepare,
+            intervals=intervals,
+            start_date=preview.start_date,
+            end_date=preview.end_date,
+        )
+        runnable_symbols = [symbol for symbol in symbols_to_prepare if symbol not in data_errors]
+        combos = [
+            (symbol, interval, algo)
+            for symbol, interval, algo in combos
+            if symbol in runnable_symbols
+        ]
+        skipped_sessions = [
+            {
+                "session_id": None,
+                "symbol": symbol,
+                "interval": ",".join(intervals),
+                "algo_name": ",".join(algos),
+                "status": "DATA_ERROR",
+                "error": error,
+            }
+            for symbol, error in data_errors.items()
+        ]
 
     if not combos:
         if payload.use_backtest_prefilter and backtest_scan and backtest_scan.get("optimizer_job_id"):
