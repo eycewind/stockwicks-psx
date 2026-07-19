@@ -263,6 +263,7 @@
   const resultBox = document.getElementById("sparkieResult");
   let activeJobId = null;
   let statusTimer = null;
+  let latestRunPreview = null;
 
   function listFromInput(id) {
     return document.getElementById(id).value
@@ -345,18 +346,19 @@
 
   function renderEvaluation(data) {
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const preview = data.preview && data.preview.account_equity ? data.preview : latestRunPreview;
     const sessionRows = sessions.map((s) => (
       `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${escapeHtml(s.algo_name)} · ${escapeHtml(s.status)} · P/L $${Number(s.profit_loss || 0).toLocaleString()}${s.error_message || s.error ? ` · ${escapeHtml(s.error_message || s.error)}` : ""}</strong></div>`
     )).join("");
     const header = renderSummary({
       can_start: data.ok,
       replay_ready: data.ok,
-      account_equity: data.preview?.account_equity,
-      meets_minimum_equity: data.preview?.meets_minimum_equity,
-      feasibility: data.preview?.feasibility || {},
-      target_profit_for_window: data.preview?.target_profit_for_window,
-      start_date: data.preview?.start_date,
-      end_date: data.preview?.end_date,
+      account_equity: preview?.account_equity,
+      meets_minimum_equity: preview?.meets_minimum_equity,
+      feasibility: preview?.feasibility || {},
+      target_profit_for_window: preview?.target_profit_for_window,
+      start_date: preview?.start_date,
+      end_date: preview?.end_date,
       next_step: data.next_step || data.message
     });
     const totals = `
@@ -392,6 +394,7 @@
     try {
       const data = await postJson("/api/sparkie/run-evaluation", evaluationPayload());
       activeJobId = data.job_id;
+      latestRunPreview = data.preview || null;
       resultBox.innerHTML = renderEvaluation(data);
       if (activeJobId) {
         if (statusTimer) clearInterval(statusTimer);

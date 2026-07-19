@@ -473,7 +473,7 @@ def _replay_session_pnl(db: Session, session_id: int) -> tuple[float, int]:
 
 def _sparkie_preview_from_sessions(rows: list[ReplaySession]) -> dict:
     first = rows[0]
-    cfg = _parse_config_json(first.config_json)
+    cfg = _first_sparkie_config(rows)
     account_equity = float(cfg.get("sparkie_account_equity") or 0.0)
     target_profit = float(cfg.get("sparkie_target_profit") or 0.0)
     target_period = str(cfg.get("sparkie_target_period") or "daily")
@@ -526,6 +526,14 @@ def _parse_config_json(value: str | None) -> dict:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _first_sparkie_config(rows: list[ReplaySession]) -> dict:
+    for row in rows:
+        cfg = _parse_config_json(row.config_json)
+        if cfg.get("sparkie_account_equity") and cfg.get("sparkie_target_profit"):
+            return cfg
+    return _parse_config_json(rows[0].config_json) if rows else {}
 
 
 def _sparkie_status_next_step(status: str, total_profit: float, total_trades: int) -> str:
