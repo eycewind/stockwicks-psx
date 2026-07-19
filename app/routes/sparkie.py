@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from typing import Literal
 
@@ -14,6 +16,8 @@ from app.trading.sparkie import (
 
 
 router = APIRouter(prefix="/api/sparkie", tags=["sparkie"])
+page_router = APIRouter(tags=["sparkie"])
+templates = Jinja2Templates(directory="app/templates")
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -35,6 +39,22 @@ class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
     symbols: list[str] = Field(default_factory=list)
     intervals: list[str] = Field(default_factory=list)
     algos: list[str] = Field(default_factory=list)
+
+
+@page_router.get("/auth/sparkie", response_class=HTMLResponse)
+def sparkie_page(
+    request: Request,
+    user=Depends(get_current_user),
+):
+    return templates.TemplateResponse(
+        request,
+        "sparkie/index.html",
+        {
+            "request": request,
+            "user": user,
+            "title": "Sparkie Agent",
+        },
+    )
 
 
 @router.post("/goal-feasibility")

@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+
+{% block title %}Sparkie Agent - StockWicks{% endblock %}
+
+{% block content %}
+{% set url_prefix = request.headers.get("x-forwarded-prefix", "") if request is defined else "" %}
+
+<style>
+  .sparkie-wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 32px 48px;
+  }
+  .sparkie-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    align-items: flex-start;
+    margin-bottom: 22px;
+  }
+  .sparkie-header h1 {
+    margin: 0 0 8px;
+    font-size: 34px;
+  }
+  .sparkie-muted {
+    color: #aeb8cf;
+  }
+  .sparkie-pill {
+    border: 1px solid rgba(94, 234, 212, 0.45);
+    color: #7dd3fc;
+    background: rgba(14, 165, 233, 0.10);
+    border-radius: 999px;
+    padding: 8px 12px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .sparkie-grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 460px) minmax(320px, 1fr);
+    gap: 22px;
+  }
+  .sparkie-panel {
+    background: #15153a;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 12px;
+    box-shadow: 0 0 18px rgba(0,0,0,.25);
+    padding: 22px;
+  }
+  .sparkie-panel h2 {
+    margin: 0 0 16px;
+    font-size: 22px;
+  }
+  .sparkie-form {
+    display: grid;
+    gap: 14px;
+  }
+  .sparkie-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .sparkie-field label {
+    display: block;
+    color: #cbd5e1;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .sparkie-field input,
+  .sparkie-field select {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    background: #0d1230;
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 15px;
+  }
+  .sparkie-check {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    color: #cbd5e1;
+    font-size: 14px;
+  }
+  .sparkie-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+  }
+  .sparkie-result {
+    background: #0d1230;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    padding: 16px;
+    min-height: 160px;
+    white-space: pre-wrap;
+    color: #dbeafe;
+    line-height: 1.45;
+  }
+  .sparkie-steps {
+    display: grid;
+    gap: 12px;
+  }
+  .sparkie-step {
+    border-left: 3px solid #ff6a00;
+    padding: 8px 0 8px 14px;
+    color: #dbeafe;
+  }
+  .sparkie-step strong {
+    display: block;
+    color: #ffffff;
+    margin-bottom: 4px;
+  }
+  @media (max-width: 900px) {
+    .sparkie-grid,
+    .sparkie-row {
+      grid-template-columns: 1fr;
+    }
+    .sparkie-header {
+      flex-direction: column;
+    }
+  }
+</style>
+
+<div class="sparkie-wrap">
+  <div class="sparkie-header">
+    <div>
+      <h1>Sparkie Agent</h1>
+      <p class="sparkie-muted">Paper-first agent planning with a $5,000 minimum account gate and explicit Live Mirror restart.</p>
+    </div>
+    <div class="sparkie-pill">Minimum account equity: $5,000</div>
+  </div>
+
+  <div class="sparkie-grid">
+    <section class="sparkie-panel">
+      <h2>Setup</h2>
+      <form class="sparkie-form" id="sparkieForm">
+        <div class="sparkie-row">
+          <div class="sparkie-field">
+            <label for="accountEquity">Account equity</label>
+            <input id="accountEquity" type="number" min="5000" step="100" value="5000">
+          </div>
+          <div class="sparkie-field">
+            <label for="targetProfit">Target profit</label>
+            <input id="targetProfit" type="number" min="1" step="1" value="25">
+          </div>
+        </div>
+
+        <div class="sparkie-row">
+          <div class="sparkie-field">
+            <label for="targetPeriod">Target period</label>
+            <select id="targetPeriod">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="sparkie-field">
+            <label for="lookbackDays">Past performance window</label>
+            <input id="lookbackDays" type="number" min="1" step="1" value="10">
+          </div>
+        </div>
+
+        <div class="sparkie-field">
+          <label for="symbols">Symbols</label>
+          <input id="symbols" type="text" value="AAPL,NVDA,AMD,PLTR,INTC" placeholder="AAPL,NVDA,AMD">
+        </div>
+
+        <div class="sparkie-row">
+          <div class="sparkie-field">
+            <label for="intervals">Intervals</label>
+            <input id="intervals" type="text" value="5min" placeholder="1min,5min,15min">
+          </div>
+          <div class="sparkie-field">
+            <label for="algos">Algos</label>
+            <input id="algos" type="text" value="Algo1_MM,Algo2_MM,Algo3_MM" placeholder="Algo1_MM,Algo2_MM">
+          </div>
+        </div>
+
+        <div class="sparkie-row">
+          <div class="sparkie-field">
+            <label for="requestedMode">Run mode</label>
+            <select id="requestedMode">
+              <option value="paper">Paper</option>
+              <option value="live_mirror">Live Mirror</option>
+            </select>
+          </div>
+          <div class="sparkie-field">
+            <label for="confidenceLevel">Confidence level</label>
+            <input id="confidenceLevel" type="number" min="0.5" max="0.95" step="0.05" value="0.6">
+          </div>
+        </div>
+
+        <label class="sparkie-check">
+          <input id="ackLiveRisk" type="checkbox">
+          <span>I understand Live Mirror can place real broker trades and must be restarted intentionally.</span>
+        </label>
+
+        <div class="sparkie-actions">
+          <button class="btn btn-primary" type="button" id="previewBtn">Check Past Criteria</button>
+          <button class="btn btn-secondary" type="button" id="launchBtn">Check Launch Plan</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="sparkie-panel">
+      <h2>Result</h2>
+      <div class="sparkie-result" id="sparkieResult">Enter account size and target, then check Sparkie. This page plans the run; the next build will connect it to the replay runner for actual historical P/L.</div>
+    </section>
+  </div>
+
+  <section class="sparkie-panel" style="margin-top:22px;">
+    <h2>How Sparkie Runs</h2>
+    <div class="sparkie-steps">
+      <div class="sparkie-step">
+        <strong>1. Check goal and minimum account size</strong>
+        Sparkie blocks paper and Live Mirror below $5,000.
+      </div>
+      <div class="sparkie-step">
+        <strong>2. Run on paper first</strong>
+        Paper mode uses the same amount the user expects to fund live.
+      </div>
+      <div class="sparkie-step">
+        <strong>3. Review performance</strong>
+        User reviews target hit rate, drawdown, losing streaks, and P/L over the selected date window.
+      </div>
+      <div class="sparkie-step">
+        <strong>4. Restart with Live Mirror</strong>
+        Live Mirror requires a separate restart and risk acknowledgement.
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const urlPrefix = {{ url_prefix|tojson }};
+  const resultBox = document.getElementById("sparkieResult");
+
+  function listFromInput(id) {
+    return document.getElementById(id).value
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+
+  function basePayload() {
+    return {
+      account_equity: Number(document.getElementById("accountEquity").value),
+      target_profit: Number(document.getElementById("targetProfit").value),
+      target_period: document.getElementById("targetPeriod").value,
+      confidence_level: Number(document.getElementById("confidenceLevel").value)
+    };
+  }
+
+  async function postJson(path, payload) {
+    const response = await fetch(`${urlPrefix}${path}`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "Accept": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Sparkie request failed.");
+    }
+    return data;
+  }
+
+  function showResult(data) {
+    resultBox.textContent = JSON.stringify(data, null, 2);
+  }
+
+  document.getElementById("previewBtn").addEventListener("click", async () => {
+    resultBox.textContent = "Checking Sparkie performance criteria...";
+    try {
+      showResult(await postJson("/api/sparkie/performance-preview", {
+        ...basePayload(),
+        lookback_days: Number(document.getElementById("lookbackDays").value),
+        symbols: listFromInput("symbols"),
+        intervals: listFromInput("intervals"),
+        algos: listFromInput("algos")
+      }));
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+    }
+  });
+
+  document.getElementById("launchBtn").addEventListener("click", async () => {
+    resultBox.textContent = "Checking Sparkie launch plan...";
+    try {
+      showResult(await postJson("/api/sparkie/launch-plan", {
+        ...basePayload(),
+        requested_mode: document.getElementById("requestedMode").value,
+        acknowledged_live_risk: document.getElementById("ackLiveRisk").checked
+      }));
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+    }
+  });
+</script>
+{% endblock %}

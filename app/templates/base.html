@@ -216,6 +216,7 @@
         <div class="nav-links">
             <a href="{{ url_prefix }}/auth/dashboard" class="{% if current_path.startswith(url_prefix ~ '/auth/dashboard') %}active{% endif %}">Dashboard</a>
             <a href="{{ url_prefix }}/auth/papertradebot" class="{% if current_path.startswith(url_prefix ~ '/auth/papertradebot') %}active{% endif %}">Bot</a>
+            <a href="{{ url_prefix }}/auth/sparkie" class="{% if current_path.startswith(url_prefix ~ '/auth/sparkie') %}active{% endif %}">Sparkie</a>
             {# Hidden for now; uncomment if the SPX menu should return.
             <a href="{{ url_prefix }}/options/spx-0dte-trades">SPX 0DTE Bot</a>
             <a href="{{ url_prefix }}/options/spx-0dte">SPX 0DTE Pick</a>

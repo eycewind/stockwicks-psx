@@ -152,6 +152,7 @@ class AuthRedirectMiddleware(BaseHTTPMiddleware):
             "/auth/replay",
             "/auth/schwab",
             "/auth/trade",
+            "/auth/sparkie",
             "/broker",
             "/trade",
             "/replay-simulator",
@@ -226,6 +227,7 @@ app.include_router(admin_live_trades.router)
 app.include_router(spx_0dte_routes.router)
 app.include_router(spx_0dte_trades.router)
 app.include_router(sparkie.router)
+app.include_router(sparkie.page_router)
 # External integrations
 # Schwab trade
 app.include_router(schwab_trade_router)  # has prefix="/trade" internally
