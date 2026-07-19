@@ -294,64 +294,43 @@ def evaluation_status(
     if not re.fullmatch(r"sparkie-\d+-\d{14}", job_id or ""):
         raise HTTPException(status_code=400, detail="Invalid Sparkie job id.")
 
-    rows = (
-        db.query(ReplaySession)
-        .filter(ReplaySession.user_id == user.id)
-        .filter(ReplaySession.config_json.like(f'%"sparkie_job_id":"{job_id}"%'))
-        .order_by(ReplaySession.id.desc())
-        .all()
-    )
+    rows = _sparkie_rows_for_job(db, user.id, job_id)
     if not rows:
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
 
-    _mark_stale_sparkie_sessions(db, rows)
-    for row in rows:
-        db.refresh(row)
+    return _sparkie_job_summary(db, job_id, rows, include_sessions=True)
 
-    preview = _sparkie_preview_from_sessions(rows)
-    sessions = []
-    completed = 0
-    total_profit = 0.0
-    total_trades = 0
-    for row in rows:
-        session_profit, trade_count = _replay_session_pnl(db, row.id)
-        total_profit += session_profit
-        total_trades += trade_count
-        if str(row.status or "").upper() in {"COMPLETED", "STOPPED", "ERROR"}:
-            completed += 1
-        sessions.append(
-            {
-                "session_id": row.id,
-                "symbol": row.symbol,
-                "interval": row.interval,
-                "algo_name": row.algo_name,
-                "status": row.status,
-                "profit_loss": round(session_profit, 2),
-                "trade_count": trade_count,
-                "error_message": row.error_message,
-                "current_bar_idx": row.current_bar_idx or 0,
-                "total_bars": row.total_bars or 0,
-                "age_minutes": _session_age_minutes(row),
-                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-            }
-        )
 
-    status = "completed" if completed == len(rows) else "running"
-    best_session = _best_sparkie_session(sessions)
-    percent_complete = round((completed / len(rows)) * 100.0, 1) if rows else 0.0
+@router.get("/history")
+def evaluation_history(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    rows = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user.id)
+        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
+        .order_by(ReplaySession.id.desc())
+        .limit(500)
+        .all()
+    )
+
+    grouped: dict[str, list[ReplaySession]] = {}
+    for row in rows:
+        job_id = str(_parse_config_json(row.config_json).get("sparkie_job_id") or "")
+        if not job_id:
+            continue
+        grouped.setdefault(job_id, []).append(row)
+        if len(grouped) >= 10 and all(len(value) > 0 for value in grouped.values()):
+            continue
+
+    jobs = []
+    for job_id, job_rows in list(grouped.items())[:10]:
+        jobs.append(_sparkie_job_summary(db, job_id, job_rows, include_sessions=False))
+
     return {
         "ok": True,
-        "job_id": job_id,
-        "status": status,
-        "completed_sessions": completed,
-        "total_sessions": len(rows),
-        "percent_complete": percent_complete,
-        "total_profit_loss": round(total_profit, 2),
-        "total_trades": total_trades,
-        "best_session": best_session,
-        "preview": preview,
-        "sessions": sessions,
-        "next_step": _sparkie_status_next_step(status, total_profit, total_trades),
+        "jobs": jobs,
     }
 
 
@@ -524,6 +503,103 @@ def _replay_session_pnl(db: Session, session_id: int) -> tuple[float, int]:
     return sum(values), len(values)
 
 
+def _sparkie_rows_for_job(db: Session, user_id: int, job_id: str) -> list[ReplaySession]:
+    return (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user_id)
+        .filter(ReplaySession.config_json.like(f'%"sparkie_job_id":"{job_id}"%'))
+        .order_by(ReplaySession.id.desc())
+        .all()
+    )
+
+
+def _sparkie_job_summary(
+    db: Session,
+    job_id: str,
+    rows: list[ReplaySession],
+    *,
+    include_sessions: bool,
+) -> dict:
+    _mark_stale_sparkie_sessions(db, rows)
+    for row in rows:
+        db.refresh(row)
+
+    preview = _sparkie_preview_from_sessions(rows)
+    sessions = []
+    completed = 0
+    total_profit = 0.0
+    total_trades = 0
+    progress_units = 0.0
+
+    for row in rows:
+        session_profit, trade_count = _replay_session_pnl(db, row.id)
+        total_profit += session_profit
+        total_trades += trade_count
+
+        status = str(row.status or "").upper()
+        terminal = status in {"COMPLETED", "STOPPED", "ERROR", "DATA_ERROR"}
+        if terminal:
+            completed += 1
+            progress_units += 1.0
+        else:
+            progress_units += _sparkie_session_progress(row)
+
+        sessions.append(
+            {
+                "session_id": row.id,
+                "symbol": row.symbol,
+                "interval": row.interval,
+                "algo_name": row.algo_name,
+                "status": row.status,
+                "profit_loss": round(session_profit, 2),
+                "trade_count": trade_count,
+                "error_message": row.error_message,
+                "current_bar_idx": row.current_bar_idx or 0,
+                "total_bars": row.total_bars or 0,
+                "progress_pct": round(_sparkie_session_progress(row) * 100.0, 1),
+                "age_minutes": _session_age_minutes(row),
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+        )
+
+    total_sessions = len(rows)
+    status = "completed" if total_sessions and completed == total_sessions else "running"
+    best_session = _best_sparkie_session(sessions)
+    percent_complete = round((progress_units / total_sessions) * 100.0, 1) if total_sessions else 0.0
+    created_at = min((row.created_at for row in rows if row.created_at), default=None)
+    updated_at = max(
+        ((row.updated_at or row.created_at) for row in rows if (row.updated_at or row.created_at)),
+        default=None,
+    )
+
+    result = {
+        "ok": True,
+        "job_id": job_id,
+        "status": status,
+        "completed_sessions": completed,
+        "total_sessions": total_sessions,
+        "percent_complete": percent_complete,
+        "total_profit_loss": round(total_profit, 2),
+        "total_trades": total_trades,
+        "best_session": best_session,
+        "preview": preview,
+        "created_at": created_at.isoformat() if created_at else None,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "next_step": _sparkie_status_next_step(status, total_profit, total_trades),
+    }
+    if include_sessions:
+        result["sessions"] = sessions
+    return result
+
+
+def _sparkie_session_progress(row: ReplaySession) -> float:
+    total_bars = int(row.total_bars or 0)
+    if total_bars <= 0:
+        return 0.0
+    current_bar = max(int(row.current_bar_idx or 0), 0)
+    return min(max((current_bar + 1) / total_bars, 0.0), 1.0)
+
+
 def _mark_stale_sparkie_sessions(db: Session, rows: list[ReplaySession]) -> None:
     now = datetime.utcnow()
     changed = False
@@ -638,7 +714,7 @@ def _first_sparkie_config(rows: list[ReplaySession]) -> dict:
 
 def _sparkie_status_next_step(status: str, total_profit: float, total_trades: int) -> str:
     if status != "completed":
-        return "Sparkie is still running replay sessions. Keep this page open or check back shortly."
+        return "Sparkie is still running replay sessions in the background. You can refresh this page or reopen Sparkie History later."
     if total_trades <= 0:
         return "Sparkie finished but found no completed trades. Try a wider date range or different symbols."
     if total_profit > 0:

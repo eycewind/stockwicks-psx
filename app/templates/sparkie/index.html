@@ -147,6 +147,25 @@
     color: #7dd3fc;
     text-decoration: none;
   }
+  .sparkie-history {
+    display: grid;
+    gap: 10px;
+  }
+  .sparkie-history-row {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr 0.8fr auto;
+    gap: 10px;
+    align-items: center;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    padding: 10px 0;
+  }
+  .sparkie-history-row strong {
+    color: #ffffff;
+  }
+  .sparkie-history-row span {
+    color: #aeb8cf;
+    font-size: 13px;
+  }
   .sparkie-steps {
     display: grid;
     gap: 12px;
@@ -163,7 +182,8 @@
   }
   @media (max-width: 900px) {
     .sparkie-grid,
-    .sparkie-row {
+    .sparkie-row,
+    .sparkie-history-row {
       grid-template-columns: 1fr;
     }
     .sparkie-header {
@@ -261,6 +281,17 @@
   </div>
 
   <section class="sparkie-panel" style="margin-top:22px;">
+    <div class="sparkie-header" style="margin-bottom:12px;">
+      <div>
+        <h2>History</h2>
+        <p class="sparkie-muted">Last 10 Sparkie evaluations. You can pull any previous result anytime.</p>
+      </div>
+      <button class="btn btn-secondary" type="button" id="historyBtn">Refresh History</button>
+    </div>
+    <div class="sparkie-history" id="sparkieHistory">Loading Sparkie history...</div>
+  </section>
+
+  <section class="sparkie-panel" style="margin-top:22px;">
     <h2>How Sparkie Runs</h2>
     <div class="sparkie-steps">
       <div class="sparkie-step">
@@ -287,6 +318,7 @@
   const urlPrefix = {{ url_prefix|tojson }};
   const resultBox = document.getElementById("sparkieResult");
   const stopBtn = document.getElementById("stopBtn");
+  const historyBox = document.getElementById("sparkieHistory");
   const sparkieJobStorageKey = "stockwicks.sparkie.activeJobId";
   const sparkieSnapshotStorageKey = "stockwicks.sparkie.lastSnapshot";
   let activeJobId = null;
@@ -314,6 +346,17 @@
       method: "POST",
       headers: {"Content-Type": "application/json", "Accept": "application/json"},
       body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Sparkie request failed.");
+    }
+    return data;
+  }
+
+  async function getJson(path) {
+    const response = await fetch(`${urlPrefix}${path}`, {
+      headers: {"Accept": "application/json"}
     });
     const data = await response.json();
     if (!response.ok) {
@@ -439,6 +482,37 @@
     return `${statusBanner(data)}${header}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
   }
 
+  function renderHistory(history) {
+    const jobs = Array.isArray(history.jobs) ? history.jobs : [];
+    if (!jobs.length) {
+      return `<div class="sparkie-muted">No Sparkie evaluations yet.</div>`;
+    }
+    return jobs.map((job) => {
+      const best = job.best_session;
+      const bestText = best
+        ? `${best.symbol} ${best.interval} ${best.algo_name} · $${Number(best.profit_loss || 0).toLocaleString()}`
+        : "No best result yet";
+      const when = job.created_at ? new Date(job.created_at).toLocaleString() : "Unknown time";
+      return `
+        <div class="sparkie-history-row">
+          <div>
+            <strong>${escapeHtml(job.job_id)}</strong>
+            <span>${escapeHtml(when)}</span>
+          </div>
+          <div>
+            <strong>${escapeHtml(job.status || "")} · ${Number(job.percent_complete || 0).toLocaleString()}%</strong>
+            <span>${escapeHtml(job.completed_sessions ?? 0)} / ${escapeHtml(job.total_sessions ?? 0)} sessions</span>
+          </div>
+          <div>
+            <strong>P/L $${Number(job.total_profit_loss || 0).toLocaleString()}</strong>
+            <span>${Number(job.total_trades || 0).toLocaleString()} trades · ${escapeHtml(bestText)}</span>
+          </div>
+          <button class="btn btn-secondary" type="button" data-sparkie-job="${escapeHtml(job.job_id)}">View Result</button>
+        </div>
+      `;
+    }).join("");
+  }
+
   function statusBanner(data) {
     const done = data.status === "completed";
     const pct = Number(data.percent_complete || 0);
@@ -473,17 +547,14 @@
 
   async function pollEvaluation(jobId) {
     try {
-      const response = await fetch(`${urlPrefix}/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`, {
-        headers: {"Accept": "application/json"}
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Could not load Sparkie evaluation status.");
+      const data = await getJson(`/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`);
       latestRunPreview = data.preview || latestRunPreview;
       resultBox.innerHTML = renderEvaluation(data);
       saveSparkieState(jobId, data);
       if (data.status === "completed") {
         clearSparkieActiveJob();
         stopBtn.style.display = "none";
+        loadSparkieHistory();
         if (statusTimer) {
           clearInterval(statusTimer);
           statusTimer = null;
@@ -499,6 +570,44 @@
     }
   }
 
+  async function loadSparkieHistory() {
+    if (!historyBox) return;
+    try {
+      const data = await getJson("/api/sparkie/history");
+      historyBox.innerHTML = renderHistory(data);
+    } catch (error) {
+      historyBox.textContent = error.message || String(error);
+    }
+  }
+
+  async function viewHistoricalSparkieJob(jobId) {
+    if (!jobId) return;
+    resultBox.textContent = `Loading Sparkie job ${jobId}...`;
+    try {
+      activeJobId = jobId;
+      const data = await getJson(`/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`);
+      latestRunPreview = data.preview || latestRunPreview;
+      resultBox.innerHTML = renderEvaluation(data);
+      saveSparkieState(jobId, data);
+      if (data.status === "completed") {
+        clearSparkieActiveJob();
+        stopBtn.style.display = "none";
+        if (statusTimer) {
+          clearInterval(statusTimer);
+          statusTimer = null;
+        }
+      } else {
+        saveSparkieState(jobId, data);
+        stopBtn.style.display = "inline-block";
+        stopBtn.disabled = false;
+        if (statusTimer) clearInterval(statusTimer);
+        statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
+      }
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+    }
+  }
+
   document.getElementById("runBtn").addEventListener("click", async () => {
     resultBox.textContent = "Sparkie is checking criteria and queueing replay sessions...";
     try {
@@ -507,6 +616,7 @@
       latestRunPreview = data.preview || null;
       resultBox.innerHTML = renderEvaluation(data);
       saveSparkieState(activeJobId, data);
+      loadSparkieHistory();
       if (activeJobId) {
         stopBtn.style.display = "inline-block";
         stopBtn.disabled = false;
@@ -528,6 +638,7 @@
       await pollEvaluation(activeJobId);
       stopBtn.style.display = "none";
       clearSparkieActiveJob();
+      loadSparkieHistory();
     } catch (error) {
       resultBox.textContent = error.message || String(error);
       stopBtn.disabled = false;
@@ -546,6 +657,14 @@
     } catch (error) {
       resultBox.textContent = error.message || String(error);
     }
+  });
+
+  document.getElementById("historyBtn").addEventListener("click", loadSparkieHistory);
+
+  historyBox.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-sparkie-job]");
+    if (!button) return;
+    viewHistoricalSparkieJob(button.getAttribute("data-sparkie-job"));
   });
 
   (function resumeSparkieEvaluation() {
@@ -569,6 +688,8 @@
     statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
     setTimeout(() => pollEvaluation(activeJobId), 500);
   })();
+
+  loadSparkieHistory();
 
 </script>
 {% endblock %}
