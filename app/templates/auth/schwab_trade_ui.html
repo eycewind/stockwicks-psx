@@ -266,7 +266,7 @@
   const EP_SYNC_ACCOUNTS = "/trade/accounts/sync";
   const EP_LIST_ACCOUNTS = "/trade/accounts";
   const EP_PLACE_ORDER   = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders`;
-  const EP_OPEN_ORDERS   = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders`;
+  const EP_OPEN_ORDERS   = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders?status=WORKING`;
   const EP_CANCEL_ORDER  = (orderId, accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/orders/${encodeURIComponent(orderId)}`;
   const EP_POSITIONS     = (accountId) => `/trade/accounts/${encodeURIComponent(accountId)}/positions`;
   const EP_TRADE_HISTORY = (accountId, qs) => `/trade/accounts/${encodeURIComponent(accountId)}/history${qs ? ("?" + qs) : ""}`;

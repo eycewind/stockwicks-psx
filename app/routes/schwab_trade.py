@@ -174,6 +174,25 @@ def _cached_get_json(
     return data
 
 
+def _get_json_uncached(
+    url: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, str] | None = None,
+) -> Any:
+    resp = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
+    if resp.status_code >= 400:
+        log.error(
+            "Schwab GET failed: status=%s url=%s params=%s body=%s",
+            resp.status_code,
+            url,
+            params,
+            (resp.text or "")[:1000],
+        )
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return _safe_json(resp) or []
+
+
 def _clear_trade_read_cache(user_id: int) -> None:
     prefix = (user_id,)
     for key in list(_GET_CACHE.keys()):
@@ -370,7 +389,7 @@ def list_account_orders(
     status: Optional[str] = Query(None, description="Schwab order status"),
     fromEnteredTime: Optional[str] = Query(None, description="ISO-8601"),
     toEnteredTime: Optional[str] = Query(None, description="ISO-8601"),
-    maxResults: Optional[int] = Query(3000, ge=1, le=3000),
+    maxResults: Optional[int] = Query(None, ge=1, le=3000),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -388,18 +407,31 @@ def list_account_orders(
     params: Dict[str, str] = {
         "fromEnteredTime": fromEnteredTime,
         "toEnteredTime": toEnteredTime,
-        "maxResults": str(maxResults or 3000),
     }
+    if maxResults is not None:
+        params["maxResults"] = str(maxResults)
     if status:
-        params["status"] = status
+        params["status"] = status.strip().upper()
 
-    return _cached_get_json(
-        (current_user.id, "account_orders", acct_hash, tuple(sorted(params.items()))),
-        url,
-        headers=headers,
-        params=params,
-        ttl=max(60, _cache_ttl("SCHWAB_TRADE_ORDERS_CACHE_SECONDS", 60)),
-    )
+    cache_key = (current_user.id, "account_orders", acct_hash, tuple(sorted(params.items())))
+    try:
+        return _cached_get_json(
+            cache_key,
+            url,
+            headers=headers,
+            params=params,
+            ttl=max(60, _cache_ttl("SCHWAB_TRADE_ORDERS_CACHE_SECONDS", 60)),
+        )
+    except HTTPException as exc:
+        if exc.status_code < 500 or "maxResults" not in params:
+            raise
+        fallback_params = dict(params)
+        fallback_params.pop("maxResults", None)
+        log.warning(
+            "Retrying Schwab account orders without maxResults after upstream %s.",
+            exc.status_code,
+        )
+        return _get_json_uncached(url, headers=headers, params=fallback_params)
 
 @trade_router.post("/accounts/{account_id}/orders")
 def place_account_order(
@@ -468,7 +500,7 @@ def list_all_orders(
     status: Optional[str] = Query(None),
     fromEnteredTime: Optional[str] = Query(None),
     toEnteredTime: Optional[str] = Query(None),
-    maxResults: Optional[int] = Query(3000, ge=1, le=3000),
+    maxResults: Optional[int] = Query(None, ge=1, le=3000),
     current_user=Depends(get_current_user),
 ):
     headers = _bearer_headers(current_user.id)
@@ -483,18 +515,31 @@ def list_all_orders(
     params: Dict[str, str] = {
         "fromEnteredTime": fromEnteredTime,
         "toEnteredTime": toEnteredTime,
-        "maxResults": str(maxResults or 3000),
     }
+    if maxResults is not None:
+        params["maxResults"] = str(maxResults)
     if status:
-        params["status"] = status
+        params["status"] = status.strip().upper()
 
-    return _cached_get_json(
-        (current_user.id, "all_orders", tuple(sorted(params.items()))),
-        url,
-        headers=headers,
-        params=params,
-        ttl=max(60, _cache_ttl("SCHWAB_TRADE_ORDERS_CACHE_SECONDS", 60)),
-    )
+    cache_key = (current_user.id, "all_orders", tuple(sorted(params.items())))
+    try:
+        return _cached_get_json(
+            cache_key,
+            url,
+            headers=headers,
+            params=params,
+            ttl=max(60, _cache_ttl("SCHWAB_TRADE_ORDERS_CACHE_SECONDS", 60)),
+        )
+    except HTTPException as exc:
+        if exc.status_code < 500 or "maxResults" not in params:
+            raise
+        fallback_params = dict(params)
+        fallback_params.pop("maxResults", None)
+        log.warning(
+            "Retrying Schwab all-orders without maxResults after upstream %s.",
+            exc.status_code,
+        )
+        return _get_json_uncached(url, headers=headers, params=fallback_params)
 
 # --------------------------------------------------------------------
 # Positions & Transactions (Trade History)

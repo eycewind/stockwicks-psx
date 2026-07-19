@@ -236,7 +236,7 @@
   const EP_SYNC_ACCOUNTS = `${URL_PREFIX}/broker/schwab/sync-accounts`;
   const EP_LIST_ACCOUNTS = `${URL_PREFIX}/trade/accounts`;
   const EP_PLACE_ORDER   = (accountId) => `${URL_PREFIX}/trade/accounts/${encodeURIComponent(accountId)}/orders`;
-  const EP_OPEN_ORDERS   = (accountId) => `${URL_PREFIX}/trade/accounts/${encodeURIComponent(accountId)}/orders`;
+  const EP_OPEN_ORDERS   = (accountId) => `${URL_PREFIX}/trade/accounts/${encodeURIComponent(accountId)}/orders?status=WORKING`;
   const EP_CANCEL_ORDER  = (orderId, accountId) => `${URL_PREFIX}/trade/accounts/${encodeURIComponent(accountId)}/orders/${encodeURIComponent(orderId)}`;
   const EP_POSITIONS     = (accountId) => `${URL_PREFIX}/trade/accounts/${encodeURIComponent(accountId)}/positions`;
   const EP_TRADE_HISTORY = (accountId, qs) => `${URL_PREFIX}/trade/accounts/${encodeURIComponent(accountId)}/history${qs ? ("?" + qs) : ""}`;
