@@ -44,6 +44,7 @@ from app.modules.replay.routes import router as replay_router
 from app.routes import log_analysis
 from app.routes import admin_live_trades
 from app.routes import spx_0dte_routes, spx_0dte_trades
+from app.routes import sparkie
 
 # Schwab routes
 from app.routes.schwab_trade import (
@@ -224,6 +225,7 @@ app.include_router(log_analysis.router)
 app.include_router(admin_live_trades.router)
 app.include_router(spx_0dte_routes.router)
 app.include_router(spx_0dte_trades.router)
+app.include_router(sparkie.router)
 # External integrations
 # Schwab trade
 app.include_router(schwab_trade_router)  # has prefix="/trade" internally
