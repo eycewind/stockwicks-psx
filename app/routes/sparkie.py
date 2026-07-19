@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -18,6 +18,7 @@ from app.modules.replay.routes import (
 )
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
+from app.services.replay_process import stop_session
 from app.trading.sparkie import (
     AgentLaunchRequest,
     GoalRequest,
@@ -32,6 +33,7 @@ from sqlalchemy.orm import Session
 router = APIRouter(prefix="/api/sparkie", tags=["sparkie"])
 page_router = APIRouter(tags=["sparkie"])
 templates = Jinja2Templates(directory="app/templates")
+SPARKIE_STALE_MINUTES = 12
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -302,6 +304,10 @@ def evaluation_status(
     if not rows:
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
 
+    _mark_stale_sparkie_sessions(db, rows)
+    for row in rows:
+        db.refresh(row)
+
     preview = _sparkie_preview_from_sessions(rows)
     sessions = []
     completed = 0
@@ -323,6 +329,10 @@ def evaluation_status(
                 "profit_loss": round(session_profit, 2),
                 "trade_count": trade_count,
                 "error_message": row.error_message,
+                "current_bar_idx": row.current_bar_idx or 0,
+                "total_bars": row.total_bars or 0,
+                "age_minutes": _session_age_minutes(row),
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
             }
         )
 
@@ -342,6 +352,45 @@ def evaluation_status(
         "preview": preview,
         "sessions": sessions,
         "next_step": _sparkie_status_next_step(status, total_profit, total_trades),
+    }
+
+
+@router.post("/stop-evaluation/{job_id}")
+def stop_evaluation(
+    job_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not re.fullmatch(r"sparkie-\d+-\d{14}", job_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid Sparkie job id.")
+
+    rows = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user.id)
+        .filter(ReplaySession.config_json.like(f'%"sparkie_job_id":"{job_id}"%'))
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
+
+    stopped = 0
+    for row in rows:
+        if str(row.status or "").upper() in {"COMPLETED", "STOPPED", "ERROR"}:
+            continue
+        try:
+            stop_session(db, int(row.id))
+        except Exception:
+            row.status = "STOPPED"
+            row.error_message = "Sparkie stop requested."
+            row.updated_at = datetime.utcnow()
+            db.commit()
+        stopped += 1
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "stopped_sessions": stopped,
+        "message": "Sparkie stop requested for active replay sessions.",
     }
 
 
@@ -473,6 +522,42 @@ def _replay_session_pnl(db: Session, session_id: int) -> tuple[float, int]:
     rows = db.query(ReplayTradeHistory.profit_loss).filter_by(session_id=session_id).all()
     values = [float(row[0] or 0.0) for row in rows]
     return sum(values), len(values)
+
+
+def _mark_stale_sparkie_sessions(db: Session, rows: list[ReplaySession]) -> None:
+    now = datetime.utcnow()
+    changed = False
+    for row in rows:
+        status = str(row.status or "").upper()
+        if status not in {"RUNNING", "QUEUED", "STARTING", "PENDING"}:
+            continue
+        age_start = row.updated_at or row.started_at or row.created_at or now
+        if age_start.tzinfo is not None:
+            age_start = age_start.replace(tzinfo=None)
+        current_bar = int(row.current_bar_idx or 0)
+        total_bars = int(row.total_bars or 0)
+        stalled = now - age_start > timedelta(minutes=SPARKIE_STALE_MINUTES)
+        if stalled:
+            detail = "with no replay progress" if current_bar <= 0 or total_bars <= 0 else "with no replay update"
+            row.status = "ERROR"
+            row.error_message = (
+                f"Sparkie marked session stale after {SPARKIE_STALE_MINUTES} minutes "
+                f"{detail}."
+            )
+            row.updated_at = now
+            changed = True
+    if changed:
+        db.commit()
+
+
+def _session_age_minutes(row: ReplaySession) -> float:
+    now = datetime.utcnow()
+    age_start = row.updated_at or row.started_at or row.created_at
+    if not age_start:
+        return 0.0
+    if age_start.tzinfo is not None:
+        age_start = age_start.replace(tzinfo=None)
+    return round(max((now - age_start).total_seconds(), 0.0) / 60.0, 1)
 
 
 def _best_sparkie_session(sessions: list[dict]) -> dict | None:

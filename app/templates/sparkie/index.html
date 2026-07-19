@@ -248,6 +248,7 @@
 
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" id="runBtn">Run Sparkie Evaluation</button>
+          <button class="btn btn-secondary" type="button" id="stopBtn" style="display:none;">Stop Sparkie Evaluation</button>
           <button class="btn btn-secondary" type="button" id="launchBtn">Check Launch Plan</button>
         </div>
       </form>
@@ -285,6 +286,7 @@
 <script>
   const urlPrefix = {{ url_prefix|tojson }};
   const resultBox = document.getElementById("sparkieResult");
+  const stopBtn = document.getElementById("stopBtn");
   let activeJobId = null;
   let statusTimer = null;
   let latestRunPreview = null;
@@ -392,6 +394,7 @@
       <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.percent_complete || 0).toLocaleString()}%</strong></div>
       <div class="sparkie-summary-row"><span>Total P/L</span><strong>$${Number(data.total_profit_loss || 0).toLocaleString()}</strong></div>
       <div class="sparkie-summary-row"><span>Total trades</span><strong>${Number(data.total_trades || 0).toLocaleString()}</strong></div>
+      <div class="sparkie-summary-row"><span>Stale timeout</span><strong>Sessions with no progress for 12+ minutes are marked ERROR.</strong></div>
       ${best ? `<div class="sparkie-summary-row"><span>Best result</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
     `;
     return `${statusBanner(data)}${header}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
@@ -403,7 +406,7 @@
     const title = done ? "Sparkie is done." : "Sparkie is still running.";
     const detail = done
       ? "Review the best result and session rows below before considering Live Mirror."
-      : "Keep this page open. Sparkie refreshes every 5 seconds.";
+      : "Keep this page open. Sparkie refreshes every 5 seconds. If no progress appears after 12 minutes, sessions will be marked stale.";
     return `
       <div class="sparkie-status-banner">
         <strong>${escapeHtml(title)}</strong>
@@ -420,6 +423,8 @@
       `P/L $${Number(session.profit_loss || 0).toLocaleString()}`
     ];
     if (session.trade_count !== undefined) parts.push(`${Number(session.trade_count || 0).toLocaleString()} trades`);
+    if (session.total_bars) parts.push(`bar ${Number(session.current_bar_idx || 0).toLocaleString()} / ${Number(session.total_bars || 0).toLocaleString()}`);
+    if (session.age_minutes !== undefined) parts.push(`${Number(session.age_minutes || 0).toLocaleString()} min since update`);
     if (session.session_id) {
       parts.push(`<a class="sparkie-session-link" href="${urlPrefix}/replay-simulator" title="Open Replay page">session #${escapeHtml(session.session_id)}</a>`);
     }
@@ -438,6 +443,7 @@
       if (data.status === "completed" && statusTimer) {
         clearInterval(statusTimer);
         statusTimer = null;
+        stopBtn.style.display = "none";
       }
     } catch (error) {
       resultBox.textContent = error.message || String(error);
@@ -454,12 +460,28 @@
       latestRunPreview = data.preview || null;
       resultBox.innerHTML = renderEvaluation(data);
       if (activeJobId) {
+        stopBtn.style.display = "inline-block";
+        stopBtn.disabled = false;
         if (statusTimer) clearInterval(statusTimer);
         statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
         setTimeout(() => pollEvaluation(activeJobId), 1200);
       }
     } catch (error) {
       resultBox.textContent = error.message || String(error);
+    }
+  });
+
+  stopBtn.addEventListener("click", async () => {
+    if (!activeJobId) return;
+    stopBtn.disabled = true;
+    resultBox.textContent = "Stopping Sparkie evaluation...";
+    try {
+      await postJson(`/api/sparkie/stop-evaluation/${encodeURIComponent(activeJobId)}`, {});
+      await pollEvaluation(activeJobId);
+      stopBtn.style.display = "none";
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+      stopBtn.disabled = false;
     }
   });
 
