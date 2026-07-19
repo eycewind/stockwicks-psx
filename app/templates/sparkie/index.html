@@ -266,6 +266,17 @@
           <span>I understand Live Mirror can place real broker trades and must be restarted intentionally.</span>
         </label>
 
+        <div class="sparkie-row">
+          <label class="sparkie-check">
+            <input id="useBacktestPrefilter" type="checkbox" checked>
+            <span>Run fast backtest scan first, then Replay finalists only.</span>
+          </label>
+          <div class="sparkie-field">
+            <label for="replayFinalists">Replay finalists</label>
+            <input id="replayFinalists" type="number" min="1" max="12" step="1" value="3">
+          </div>
+        </div>
+
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" id="runBtn">Run Sparkie Evaluation</button>
           <button class="btn btn-secondary" type="button" id="stopBtn" style="display:none;">Stop Sparkie Evaluation</button>
@@ -449,7 +460,9 @@
       lookback_days: Number(document.getElementById("lookbackDays").value),
       symbols: listFromInput("symbols"),
       intervals: listFromInput("intervals"),
-      algos: listFromInput("algos")
+      algos: listFromInput("algos"),
+      use_backtest_prefilter: document.getElementById("useBacktestPrefilter").checked,
+      replay_finalists: Number(document.getElementById("replayFinalists").value || 3)
     };
   }
 
@@ -457,6 +470,7 @@
     const sessions = Array.isArray(data.sessions) ? data.sessions : [];
     const preview = data.preview && data.preview.account_equity ? data.preview : latestRunPreview;
     const best = data.best_session;
+    const backtestScan = renderBacktestScan(data.backtest_scan);
     const sessionRows = sessions.map((s) => (
       `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${sessionLabel(s)}</strong></div>`
     )).join("");
@@ -481,7 +495,26 @@
       <div class="sparkie-summary-row"><span>Stale timeout</span><strong>Sessions with no progress for 12+ minutes are marked ERROR.</strong></div>
       ${best ? `<div class="sparkie-summary-row"><span>Best result</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
     `;
-    return `${statusBanner(data)}${header}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
+    return `${statusBanner(data)}${header}${backtestScan}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
+  }
+
+  function renderBacktestScan(scan) {
+    if (!scan) return "";
+    const finalists = Array.isArray(scan.finalist_combos) ? scan.finalist_combos : [];
+    const errors = Array.isArray(scan.errors) ? scan.errors : [];
+    const finalistRows = finalists.map((item) => (
+      `<div class="sparkie-summary-row"><span>${escapeHtml(item.symbol)} ${escapeHtml(item.interval)}</span><strong>${escapeHtml(item.algo_name)} · score ${Number(item.score || 0).toLocaleString()} · P/L $${Number(item.total_profit || 0).toLocaleString()} · ${Number(item.num_trades || 0).toLocaleString()} trades</strong></div>`
+    )).join("");
+    const errorText = errors.length ? `<div class="sparkie-summary-row"><span>Backtest notes</span><strong>${escapeHtml(errors.slice(0, 3).join(" | "))}</strong></div>` : "";
+    return `
+      <div style="height:12px"></div>
+      <div class="sparkie-summary">
+        <div class="sparkie-summary-row"><span>Backtest scan</span><strong>${escapeHtml(scan.message || scan.status || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Scanned</span><strong>${Number(scan.symbols_scanned || 0).toLocaleString()} symbols · ${Number(scan.tested_combinations || 0).toLocaleString()} combinations · ${Number(scan.candidate_count || 0).toLocaleString()} candidates</strong></div>
+        ${finalistRows || `<div class="sparkie-summary-row"><span>Finalists</span><strong>No replay finalists selected.</strong></div>`}
+        ${errorText}
+      </div>
+    `;
   }
 
   function renderHistory(history) {

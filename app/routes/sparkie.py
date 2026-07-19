@@ -11,6 +11,7 @@ from typing import Literal
 from app.database.connection import get_db
 from app.models.replay import ReplaySession
 from app.routes.auth import get_current_user
+from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 from app.modules.replay.routes import (
     ALLOWED_MM_ALGOS,
     DEFAULT_REPLAY_MM_CONFIG,
@@ -59,6 +60,8 @@ class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
 
 class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
     max_sessions: int = Field(12, ge=1, le=30)
+    use_backtest_prefilter: bool = True
+    replay_finalists: int = Field(3, ge=1, le=12)
 
 
 @page_router.get("/auth/sparkie", response_class=HTMLResponse)
@@ -194,13 +197,34 @@ def run_evaluation(
         for symbol, error in data_errors.items()
     ]
 
+    backtest_scan = None
+    if payload.use_backtest_prefilter:
+        backtest_scan = _sparkie_backtest_scan(
+            user_id=user.id,
+            symbols=runnable_symbols,
+            intervals=intervals,
+            algos=algos,
+            account_equity=payload.account_equity,
+            lookback_days=payload.lookback_days,
+            finalist_count=payload.replay_finalists,
+        )
+        finalist_combos = backtest_scan.get("finalist_combos") or []
+        if finalist_combos:
+            combos = [
+                (str(item["symbol"]), str(item["interval"]), str(item["algo_name"]))
+                for item in finalist_combos
+            ][: payload.max_sessions]
+        else:
+            combos = []
+
     if not combos:
         return {
             "ok": False,
             "status": "blocked",
             "job_id": None,
-            "message": "Sparkie could not prepare replay data for the selected symbols.",
+            "message": "Sparkie could not prepare replay data or find backtest finalists for the selected symbols.",
             "preview": preview.to_dict(),
+            "backtest_scan": backtest_scan,
             "sessions": skipped_sessions,
         }
 
@@ -220,6 +244,9 @@ def run_evaluation(
         cfg["sparkie_target_period"] = payload.target_period
         cfg["sparkie_account_equity"] = float(payload.account_equity)
         cfg["sparkie_confidence_level"] = float(payload.confidence_level)
+        cfg["sparkie_used_backtest_prefilter"] = bool(payload.use_backtest_prefilter)
+        cfg["sparkie_backtest_finalists"] = (backtest_scan or {}).get("finalist_combos") or []
+        cfg["sparkie_backtest_message"] = (backtest_scan or {}).get("message")
 
         session = ReplaySession(
             user_id=user.id,
@@ -280,6 +307,7 @@ def run_evaluation(
         "job_id": job_id,
         "message": "Sparkie queued replay sessions. It will compare results after the replay workers finish.",
         "preview": preview.to_dict(),
+        "backtest_scan": backtest_scan,
         "sessions": skipped_sessions + queued,
         "next_step": "Wait for sessions to complete, then review Sparkie results before considering Live Mirror.",
     }
@@ -506,6 +534,118 @@ def _sparkie_replay_config(
     )
 
 
+def _sparkie_backtest_scan(
+    *,
+    user_id: int,
+    symbols: list[str],
+    intervals: list[str],
+    algos: list[str],
+    account_equity: float,
+    lookback_days: int | None,
+    finalist_count: int,
+) -> dict:
+    top_rows: list[dict] = []
+    errors: list[str] = []
+    tested_combinations = 0
+    allowed_algos = set(algos or ALLOWED_MM_ALGOS)
+    builder_days = max(int(lookback_days or 30), 30)
+    trade_size = _sparkie_trade_size(account_equity)
+
+    for symbol in symbols:
+        try:
+            result = run_cheatsheet(
+                CheatSheetRequest(
+                    symbol=symbol,
+                    intervals=tuple(intervals or ("5min",)),
+                    user_id=user_id,
+                    trade_size=trade_size,
+                    builder_days=builder_days,
+                    profile="quick",
+                    allow_short=True,
+                    eod_close=True,
+                )
+            )
+        except Exception as exc:
+            errors.append(f"{symbol}: {str(exc)[:500]}")
+            continue
+
+        tested_combinations += int(result.get("tested_combinations") or 0)
+        errors.extend(str(error)[:500] for error in result.get("errors") or [])
+        for row in result.get("top") or []:
+            algo_name = str(row.get("algo_name") or "")
+            interval = str(row.get("interval") or "")
+            if algo_name not in allowed_algos:
+                continue
+            if interval not in intervals:
+                continue
+            top_rows.append(_sparkie_backtest_row(row))
+
+    top_rows.sort(
+        key=lambda row: (
+            float(row.get("score") or 0.0),
+            float(row.get("total_profit") or 0.0),
+            float(row.get("win_rate") or 0.0),
+            -abs(float(row.get("max_drawdown") or 0.0)),
+        ),
+        reverse=True,
+    )
+
+    finalist_rows = top_rows[:finalist_count]
+    finalist_combos = [
+        {
+            "symbol": row["symbol"],
+            "interval": row["interval"],
+            "algo_name": row["algo_name"],
+            "score": row.get("score"),
+            "total_profit": row.get("total_profit"),
+            "win_rate": row.get("win_rate"),
+            "num_trades": row.get("num_trades"),
+            "max_drawdown": row.get("max_drawdown"),
+        }
+        for row in finalist_rows
+    ]
+
+    return {
+        "status": "completed",
+        "method": "fast_backtest_prefilter",
+        "symbols_scanned": len(symbols),
+        "intervals": intervals,
+        "algos_requested": algos,
+        "tested_combinations": tested_combinations,
+        "candidate_count": len(top_rows),
+        "finalist_count": len(finalist_combos),
+        "finalist_combos": finalist_combos,
+        "top": top_rows[:20],
+        "errors": errors[:30],
+        "message": (
+            f"Sparkie backtest scan picked {len(finalist_combos)} finalist replay combo(s)."
+            if finalist_combos
+            else "Sparkie backtest scan found no finalist replay combos."
+        ),
+    }
+
+
+def _sparkie_backtest_row(row: dict) -> dict:
+    keys = (
+        "symbol",
+        "interval",
+        "algo_name",
+        "score",
+        "confidence",
+        "total_profit",
+        "num_trades",
+        "win_rate",
+        "profit_factor",
+        "max_drawdown",
+        "validation_total_profit",
+        "validation_num_trades",
+        "validation_win_rate",
+        "holdout_num_trades",
+        "backtest_method_label",
+    )
+    return {key: row.get(key) for key in keys}
+
+
 def _replay_session_pnl(db: Session, session_id: int) -> tuple[float, int]:
     from app.models.replay import ReplayTradeHistory
 
@@ -621,6 +761,7 @@ def _sparkie_job_summary(
         "total_trades": total_trades,
         "best_session": best_session,
         "preview": preview,
+        "backtest_scan": _sparkie_backtest_from_sessions(rows),
         "created_at": created_at.isoformat() if created_at else None,
         "updated_at": updated_at.isoformat() if updated_at else None,
         "next_step": _sparkie_status_next_step(status, total_profit, total_trades),
@@ -636,6 +777,20 @@ def _sparkie_session_progress(row: ReplaySession) -> float:
         return 0.0
     current_bar = max(int(row.current_bar_idx or 0), 0)
     return min(max((current_bar + 1) / total_bars, 0.0), 1.0)
+
+
+def _sparkie_backtest_from_sessions(rows: list[ReplaySession]) -> dict | None:
+    cfg = _first_sparkie_config(rows)
+    if not cfg.get("sparkie_used_backtest_prefilter"):
+        return None
+    finalists = cfg.get("sparkie_backtest_finalists") or []
+    return {
+        "status": "completed",
+        "method": "fast_backtest_prefilter",
+        "message": cfg.get("sparkie_backtest_message") or f"Sparkie used backtest scan to pick {len(finalists)} replay finalist(s).",
+        "finalist_count": len(finalists),
+        "finalist_combos": finalists,
+    }
 
 
 def _mark_stale_sparkie_sessions(db: Session, rows: list[ReplaySession]) -> None:
