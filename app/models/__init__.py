@@ -11,6 +11,7 @@ from app.models.audit import AuditEvent
 from app.models.notification_log import TradeNotificationLog
 from app.models.paper_spx_0dte import PaperSPXOpenTrade, PaperSPXPick, PaperSPXTradeHistory
 from app.models.spx_0dte_alert_subscription import SPX0DTEAlertSubscription
+from app.models.sparkie import SparkieCandidate, SparkieEvent, SparkieJob
 
 __all__ = [
     "User",
@@ -31,4 +32,7 @@ __all__ = [
     "PaperSPXPick",
     "PaperSPXTradeHistory",
     "SPX0DTEAlertSubscription",
+    "SparkieJob",
+    "SparkieCandidate",
+    "SparkieEvent",
 ]

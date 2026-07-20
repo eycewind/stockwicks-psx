@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Any, Literal
 
 from app.database.connection import get_db
 from app.models.replay import ReplayOpenTrade, ReplaySession, ReplayTradeHistory
+from app.models.sparkie import SparkieCandidate, SparkieEvent, SparkieJob
 from app.routes.auth import get_current_user
 from app.modules.replay.routes import (
     ALLOWED_MM_ALGOS,
@@ -31,6 +32,13 @@ from app.services.backtest_cheatsheet_service import CheatSheetRequest
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.replay_process import stop_session
+from app.services.sparkie_engine import (
+    ACTIVE_STATUSES,
+    MIN_ACCOUNT_EQUITY,
+    TERMINAL_STATUSES,
+    create_sparkie_job,
+    stop_sparkie_job,
+)
 from app.trading.sparkie import (
     AgentLaunchRequest,
     GoalRequest,
@@ -150,226 +158,43 @@ def run_evaluation(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    active_job_id = _latest_active_sparkie_job_id(db, user.id)
-    if active_job_id:
-        active_rows = _sparkie_rows_for_job(db, user.id, active_job_id)
-        active_summary = _sparkie_job_summary(db, active_job_id, active_rows, include_sessions=True)
-        if active_summary.get("status") not in {"completed", "completed_with_errors", "stopped", "error"}:
-            active_summary["reused_existing_job"] = True
-            active_summary["message"] = (
-                "Sparkie already has an active evaluation. The existing job was returned instead of starting a duplicate."
-            )
-            return active_summary
+    active_job = _latest_active_sparkie_v2_job(db, user.id)
+    if active_job:
+        result = _sparkie_v2_job_payload(db, active_job, include_details=True)
+        result["reused_existing_job"] = True
+        result["message"] = "Sparkie already has an active evaluation. Showing that job instead of starting a duplicate."
+        return result
 
-    try:
-        preview = build_performance_preview(
-            SparkiePerformanceRequest(
-                account_equity=payload.account_equity,
-                target_profit=payload.target_profit,
-                target_period=payload.target_period,
-                start_date=_parse_date(payload.start_date, "start_date"),
-                end_date=_parse_date(payload.end_date, "end_date"),
-                lookback_days=payload.lookback_days,
-                symbols=tuple(payload.symbols or ()),
-                intervals=tuple(payload.intervals or ()),
-                algos=tuple(payload.algos or ()),
-                confidence_level=payload.confidence_level,
-            )
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if float(payload.account_equity or 0.0) < MIN_ACCOUNT_EQUITY:
+        raise HTTPException(status_code=400, detail="Sparkie requires at least $5,000 account equity.")
 
-    if not preview.replay_ready:
-        return {
-            "ok": False,
-            "status": "blocked",
-            "message": preview.message,
-            "preview": preview.to_dict(),
-            "sessions": [],
-        }
-
-    symbols = _clean_symbols(payload.symbols)
-    intervals = _clean_intervals(payload.intervals)
-    algos = _clean_algos(payload.algos)
-    combos = [
-        (symbol, interval, algo)
-        for symbol in symbols
-        for interval in intervals
-        for algo in algos
-    ][: payload.max_sessions]
-
-    if not combos:
-        raise HTTPException(status_code=400, detail="Enter at least one symbol, interval, and algo.")
-
-    job_id = (
-        f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-"
-        f"{uuid.uuid4().hex[:8]}"
+    job_id = f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    job = create_sparkie_job(
+        db,
+        job_id=job_id,
+        user_id=user.id,
+        account_equity=payload.account_equity,
+        target_profit=payload.target_profit,
+        target_period=payload.target_period,
+        confidence_level=payload.confidence_level,
     )
-
-    skipped_sessions: list[dict] = []
-    backtest_scan = None
-    if payload.use_backtest_prefilter:
-        backtest_scan = _sparkie_backtest_scan(
-            user_id=user.id,
-            symbols=symbols,
-            intervals=intervals,
-            algos=algos,
-            account_equity=payload.account_equity,
-            lookback_days=payload.lookback_days,
-            finalist_count=payload.replay_finalists,
-        )
-        finalist_combos = backtest_scan.get("finalist_combos") or []
-        if finalist_combos:
-            combos = [
-                (str(item["symbol"]), str(item["interval"]), str(item["algo_name"]))
-                for item in finalist_combos
-            ][: payload.max_sessions]
-        else:
-            combos = []
-
-    if combos:
-        symbols_to_prepare = sorted({symbol for symbol, _interval, _algo in combos})
-        data_errors = _prepare_replay_data(
-            user_id=user.id,
-            symbols=symbols_to_prepare,
-            intervals=intervals,
-            start_date=preview.start_date,
-            end_date=preview.end_date,
-        )
-        runnable_symbols = [symbol for symbol in symbols_to_prepare if symbol not in data_errors]
-        combos = [
-            (symbol, interval, algo)
-            for symbol, interval, algo in combos
-            if symbol in runnable_symbols
-        ]
-        skipped_sessions = [
-            {
-                "session_id": None,
-                "symbol": symbol,
-                "interval": ",".join(intervals),
-                "algo_name": ",".join(algos),
-                "status": "DATA_ERROR",
-                "error": error,
-            }
-            for symbol, error in data_errors.items()
-        ]
-
-    if not combos:
-        if payload.use_backtest_prefilter and backtest_scan and backtest_scan.get("optimizer_job_id"):
-            return _create_sparkie_optimizer_job(
-                db=db,
-                user_id=user.id,
-                job_id=job_id,
-                payload=payload,
-                preview=preview.to_dict(),
-                backtest_scan=backtest_scan,
-                skipped_sessions=skipped_sessions,
-            )
-        return {
-            "ok": False,
-            "status": "blocked",
-            "job_id": None,
-            "message": "Sparkie could not prepare replay data or find backtest finalists for the selected symbols.",
-            "preview": preview.to_dict(),
-            "backtest_scan": backtest_scan,
-            "sessions": skipped_sessions,
-        }
-
-    sessions = []
-
-    finalist_by_combo = {
-        (
-            str(item.get("symbol") or "").upper(),
-            str(item.get("interval") or "").lower(),
-            str(item.get("algo_name") or ""),
-        ): item
-        for item in ((backtest_scan or {}).get("finalist_combos") or [])
-    }
-    for symbol, interval, algo_name in combos:
-        finalist = finalist_by_combo.get((symbol.upper(), interval.lower(), algo_name))
-        cfg = _sparkie_replay_config(
-            algo_name=algo_name,
-            account_equity=payload.account_equity,
-            target_profit=payload.target_profit,
-            target_period=payload.target_period,
-            finalist=finalist,
-        )
-        cfg["sparkie_job_id"] = job_id
-        cfg["sparkie_target_profit"] = float(payload.target_profit)
-        cfg["sparkie_target_period"] = payload.target_period
-        cfg["sparkie_account_equity"] = float(payload.account_equity)
-        cfg["sparkie_confidence_level"] = float(payload.confidence_level)
-        cfg["sparkie_used_backtest_prefilter"] = bool(payload.use_backtest_prefilter)
-        cfg["sparkie_backtest_finalists"] = (backtest_scan or {}).get("finalist_combos") or []
-        cfg["sparkie_backtest_message"] = (backtest_scan or {}).get("message")
-        cfg["sparkie_optimizer_job_id"] = (backtest_scan or {}).get("optimizer_job_id")
-
-        session = ReplaySession(
-            user_id=user.id,
-            symbol=symbol,
-            start_date=preview.start_date,
-            end_date=preview.end_date,
-            interval=interval,
-            algo_name=algo_name,
-            speed=20.0,
-            trade_size=_sparkie_trade_quantity(
-                user_id=user.id,
-                symbol=symbol,
-                interval=interval,
-                start_date=preview.start_date,
-                end_date=preview.end_date,
-                account_equity=payload.account_equity,
-            ),
-            status="QUEUED",
-            config_json=json.dumps(cfg, separators=(",", ":"), sort_keys=True),
-        )
-        db.add(session)
-        db.flush()
-
-        sessions.append(
-            {
-                "session_id": session.id,
-                "symbol": symbol,
-                "interval": interval,
-                "algo_name": algo_name,
-                "status": "QUEUED",
-            }
-        )
-
     db.commit()
 
-    queued = []
-    for session in sessions:
-        try:
-            from app.tasks.replay_tasks import start_replay_session_task
+    try:
+        from app.tasks.sparkie_tasks import run_sparkie_evaluation_task
 
-            async_result = start_replay_session_task.apply_async(
-                args=(session["session_id"],),
-                queue="replay",
-            )
-            session["status"] = "QUEUED"
-            session["task_id"] = async_result.id
-            queued.append(session)
-        except Exception as exc:
-            row = db.query(ReplaySession).filter_by(id=session["session_id"]).first()
-            if row:
-                row.status = "ERROR"
-                row.error_message = f"Sparkie queue failed: {str(exc)[:400]}"
-                db.commit()
-            session["status"] = "ERROR"
-            session["error"] = str(exc)
-            queued.append(session)
+        async_result = run_sparkie_evaluation_task.apply_async(args=(job.id,), queue="replay")
+        job.task_id = async_result.id
+        job.message = "Sparkie queued a background evaluation."
+        db.commit()
+    except Exception as exc:
+        job.status = "error"
+        job.stage = "error"
+        job.error_message = f"Sparkie queue failed: {str(exc)[:500]}"
+        job.message = job.error_message
+        db.commit()
 
-    return {
-        "ok": True,
-        "status": "queued",
-        "job_id": job_id,
-        "message": "Sparkie queued replay sessions. It will compare results after the replay workers finish.",
-        "preview": preview.to_dict(),
-        "backtest_scan": backtest_scan,
-        "sessions": skipped_sessions + queued,
-        "next_step": "Wait for sessions to complete, then review Sparkie results before considering Live Mirror.",
-    }
+    return _sparkie_v2_job_payload(db, job, include_details=True)
 
 
 @router.get("/evaluation-status/{job_id}")
@@ -378,14 +203,11 @@ def evaluation_status(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if not SPARKIE_JOB_PATTERN.fullmatch(job_id or ""):
-        raise HTTPException(status_code=400, detail="Invalid Sparkie job id.")
-
-    rows = _sparkie_rows_for_job(db, user.id, job_id)
-    if not rows:
+    job = db.get(SparkieJob, job_id)
+    if not job or int(job.user_id) != int(user.id):
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
 
-    return _sparkie_job_summary(db, job_id, rows, include_sessions=True)
+    return _sparkie_v2_job_payload(db, job, include_details=True)
 
 
 @router.get("/history")
@@ -393,31 +215,17 @@ def evaluation_history(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    rows = (
-        db.query(ReplaySession)
-        .filter(ReplaySession.user_id == user.id)
-        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
-        .order_by(ReplaySession.id.desc())
-        .limit(500)
+    jobs = (
+        db.query(SparkieJob)
+        .filter(SparkieJob.user_id == user.id)
+        .order_by(SparkieJob.created_at.desc())
+        .limit(10)
         .all()
     )
 
-    grouped: dict[str, list[ReplaySession]] = {}
-    for row in rows:
-        job_id = str(_parse_config_json(row.config_json).get("sparkie_job_id") or "")
-        if not job_id:
-            continue
-        grouped.setdefault(job_id, []).append(row)
-        if len(grouped) >= 10 and all(len(value) > 0 for value in grouped.values()):
-            continue
-
-    jobs = []
-    for job_id, job_rows in list(grouped.items())[:10]:
-        jobs.append(_sparkie_job_summary(db, job_id, job_rows, include_sessions=False))
-
     return {
         "ok": True,
-        "jobs": jobs,
+        "jobs": [_sparkie_v2_job_payload(db, job, include_details=False) for job in jobs],
     }
 
 
@@ -427,25 +235,17 @@ def stop_evaluation(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if not SPARKIE_JOB_PATTERN.fullmatch(job_id or ""):
-        raise HTTPException(status_code=400, detail="Invalid Sparkie job id.")
-
-    rows = (
-        db.query(ReplaySession)
-        .filter(ReplaySession.user_id == user.id)
-        .filter(ReplaySession.config_json.like(f'%"sparkie_job_id":"{job_id}"%'))
-        .all()
-    )
-    if not rows:
+    job = db.get(SparkieJob, job_id)
+    if not job or int(job.user_id) != int(user.id):
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
 
-    stopped = _stop_sparkie_rows(db, rows, reason="Sparkie stop requested.")
+    stop_sparkie_job(db, job, reason="Sparkie stop requested.")
+    db.commit()
 
     return {
         "ok": True,
         "job_id": job_id,
-        "stopped_sessions": stopped,
-        "message": "Sparkie stop requested for active replay sessions.",
+        "message": "Sparkie stop requested.",
     }
 
 
@@ -454,20 +254,20 @@ def stop_all_evaluations(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    rows = (
-        db.query(ReplaySession)
-        .filter(ReplaySession.user_id == user.id)
-        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
-        .filter(ReplaySession.status.in_(("PENDING", "QUEUED", "STARTING", "RUNNING", "OPTIMIZING", "PREPARING_REPLAY")))
-        .order_by(ReplaySession.id.desc())
+    jobs = (
+        db.query(SparkieJob)
+        .filter(SparkieJob.user_id == user.id)
+        .filter(SparkieJob.status.in_(tuple(ACTIVE_STATUSES)))
         .all()
     )
-    stopped = _stop_sparkie_rows(db, rows, reason="Sparkie stop-all requested.")
+    for job in jobs:
+        stop_sparkie_job(db, job, reason="Sparkie stop-all requested.")
+    db.commit()
 
     return {
         "ok": True,
-        "stopped_sessions": stopped,
-        "message": f"Sparkie stop-all requested for {stopped} active replay sessions.",
+        "stopped_sessions": len(jobs),
+        "message": f"Sparkie stop-all requested for {len(jobs)} active job(s).",
     }
 
 
@@ -480,14 +280,8 @@ def clear_history(
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="Confirmation is required to clear Sparkie history.")
 
-    rows = (
-        db.query(ReplaySession)
-        .filter(ReplaySession.user_id == user.id)
-        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
-        .order_by(ReplaySession.id.desc())
-        .all()
-    )
-    if not rows:
+    jobs = db.query(SparkieJob).filter(SparkieJob.user_id == user.id).all()
+    if not jobs:
         return {
             "ok": True,
             "deleted_sessions": 0,
@@ -495,29 +289,250 @@ def clear_history(
             "message": "Sparkie history is already clean.",
         }
 
-    stopped = _stop_sparkie_rows(db, rows, reason="Sparkie history cleared.")
-    session_ids = [int(row.id) for row in rows if row.id is not None]
-
-    db.query(ReplayOpenTrade).filter(ReplayOpenTrade.session_id.in_(session_ids)).delete(
-        synchronize_session=False
-    )
-    db.query(ReplayTradeHistory).filter(ReplayTradeHistory.session_id.in_(session_ids)).delete(
-        synchronize_session=False
-    )
-    deleted = (
-        db.query(ReplaySession)
-        .filter(ReplaySession.user_id == user.id)
-        .filter(ReplaySession.id.in_(session_ids))
-        .delete(synchronize_session=False)
-    )
+    stopped = 0
+    job_ids = [job.id for job in jobs]
+    for job in jobs:
+        if job.status not in TERMINAL_STATUSES:
+            stop_sparkie_job(db, job, reason="Sparkie history cleared.")
+            stopped += 1
+    db.query(SparkieEvent).filter(SparkieEvent.job_id.in_(job_ids)).delete(synchronize_session=False)
+    db.query(SparkieCandidate).filter(SparkieCandidate.job_id.in_(job_ids)).delete(synchronize_session=False)
+    deleted = db.query(SparkieJob).filter(SparkieJob.id.in_(job_ids)).delete(synchronize_session=False)
     db.commit()
 
     return {
         "ok": True,
         "deleted_sessions": deleted,
         "stopped_sessions": stopped,
-        "message": f"Cleared {deleted} Sparkie replay session(s).",
+        "message": f"Cleared {deleted} Sparkie job(s).",
     }
+
+
+@router.delete("/history/{job_id}")
+def delete_history_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    job = db.get(SparkieJob, job_id)
+    if not job or int(job.user_id) != int(user.id):
+        raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
+    if job.status not in TERMINAL_STATUSES:
+        stop_sparkie_job(db, job, reason="Sparkie job deleted.")
+    db.query(SparkieEvent).filter(SparkieEvent.job_id == job.id).delete(synchronize_session=False)
+    db.query(SparkieCandidate).filter(SparkieCandidate.job_id == job.id).delete(synchronize_session=False)
+    db.delete(job)
+    db.commit()
+    return {"ok": True, "message": "Sparkie job deleted."}
+
+
+def _latest_active_sparkie_v2_job(db: Session, user_id: int) -> SparkieJob | None:
+    return (
+        db.query(SparkieJob)
+        .filter(SparkieJob.user_id == user_id)
+        .filter(SparkieJob.status.in_(tuple(ACTIVE_STATUSES)))
+        .order_by(SparkieJob.created_at.desc())
+        .first()
+    )
+
+
+def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bool) -> dict[str, Any]:
+    _refresh_sparkie_v2_replay_status(db, job)
+    candidates = (
+        db.query(SparkieCandidate)
+        .filter(SparkieCandidate.job_id == job.id)
+        .order_by(SparkieCandidate.score.desc().nullslast(), SparkieCandidate.id.asc())
+        .limit(20 if include_details else 3)
+        .all()
+    )
+    events = []
+    if include_details:
+        events = (
+            db.query(SparkieEvent)
+            .filter(SparkieEvent.job_id == job.id)
+            .order_by(SparkieEvent.id.desc())
+            .limit(30)
+            .all()
+        )
+    created_at = job.created_at.isoformat() if job.created_at else None
+    updated_at = job.updated_at.isoformat() if job.updated_at else None
+    best = None
+    if job.best_symbol:
+        best = {
+            "symbol": job.best_symbol,
+            "interval": job.best_interval,
+            "algo_name": job.best_algo_name,
+            "score": job.best_score,
+            "profit_loss": job.best_profit_loss,
+            "trades": job.best_trades,
+            "win_rate": job.best_win_rate,
+        }
+    payload = {
+        "ok": True,
+        "job_id": job.id,
+        "status": job.status,
+        "stage": job.stage,
+        "message": job.message,
+        "account_equity": float(job.account_equity or 0.0),
+        "target_profit": float(job.target_profit or 0.0),
+        "target_period": job.target_period,
+        "confidence_level": float(job.confidence_level or 0.0),
+        "progress_pct": round(float(job.progress_pct or 0.0), 1),
+        "percent_complete": round(float(job.progress_pct or 0.0), 1),
+        "elapsed_seconds": int(job.elapsed_seconds or 0),
+        "eta_seconds": int(job.eta_seconds) if job.eta_seconds is not None else None,
+        "completed_steps": int(job.completed_steps or 0),
+        "total_steps": int(job.total_steps or 0),
+        "candidates_tested": int(job.candidates_tested or 0),
+        "recommendation": job.recommendation,
+        "decision_reason": job.decision_reason,
+        "best_session": best,
+        "best_candidate": best,
+        "replay_session_id": job.replay_session_id,
+        "error_message": job.error_message,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "symbol_bucket": _parse_json_value(job.symbol_bucket_json, []),
+        "interval_policy": _parse_json_value(job.interval_policy_json, []),
+        "algo_policy": _parse_json_value(job.algo_policy_json, []),
+        "preview": {
+            "account_equity": float(job.account_equity or 0.0),
+            "target_profit": float(job.target_profit or 0.0),
+            "target_period": job.target_period,
+            "minimum_account_equity": MIN_ACCOUNT_EQUITY,
+            "meets_minimum_equity": float(job.account_equity or 0.0) >= MIN_ACCOUNT_EQUITY,
+        },
+        "backtest_scan": {
+            "status": job.stage,
+            "message": job.message,
+            "candidate_count": int(job.candidates_tested or 0),
+            "finalist_count": 1 if job.best_symbol else 0,
+            "finalist_combos": [best] if best else [],
+        },
+        "sessions": [],
+        "next_step": _sparkie_v2_next_step(job),
+    }
+    if include_details:
+        payload["candidates"] = [_sparkie_candidate_payload(row) for row in candidates]
+        payload["events"] = [_sparkie_event_payload(row) for row in events]
+    else:
+        payload["candidates"] = [_sparkie_candidate_payload(row) for row in candidates]
+    return payload
+
+
+def _refresh_sparkie_v2_replay_status(db: Session, job: SparkieJob) -> None:
+    if str(job.status or "") != "verifying_replay" or not job.replay_session_id:
+        return
+    replay = db.get(ReplaySession, int(job.replay_session_id))
+    if not replay:
+        job.status = "error"
+        job.stage = "error"
+        job.message = "Replay verification session was not found."
+        job.error_message = job.message
+        job.finished_at = datetime.utcnow()
+        job.progress_pct = 100.0
+        job.eta_seconds = 0
+        db.commit()
+        return
+    replay_status = str(replay.status or "").upper()
+    if replay_status not in {"COMPLETED", "ERROR", "STOPPED"}:
+        job.elapsed_seconds = _sparkie_elapsed_seconds(job)
+        job.updated_at = datetime.utcnow()
+        db.commit()
+        return
+
+    pnl, trade_count = _replay_session_pnl(db, int(replay.id))
+    if replay_status == "COMPLETED":
+        job.status = "completed"
+        job.stage = "completed"
+        job.message = "Sparkie completed backtest and Replay verification."
+        job.decision_reason = (
+            f"Replay verification completed with P/L ${pnl:,.2f} across {trade_count} trade(s). "
+            f"{job.decision_reason or ''}"
+        ).strip()
+    elif replay_status == "STOPPED":
+        job.status = "stopped"
+        job.stage = "stopped"
+        job.message = "Sparkie Replay verification was stopped."
+    else:
+        job.status = "error"
+        job.stage = "error"
+        job.message = replay.error_message or "Sparkie Replay verification failed."
+        job.error_message = job.message
+    job.best_profit_loss = pnl if replay_status == "COMPLETED" else job.best_profit_loss
+    job.best_trades = trade_count if replay_status == "COMPLETED" else job.best_trades
+    job.progress_pct = 100.0
+    job.completed_steps = max(int(job.total_steps or 0), int(job.completed_steps or 0))
+    job.elapsed_seconds = _sparkie_elapsed_seconds(job)
+    job.eta_seconds = 0
+    job.finished_at = datetime.utcnow()
+    job.updated_at = datetime.utcnow()
+    db.commit()
+
+
+def _sparkie_elapsed_seconds(job: SparkieJob) -> int:
+    started_at = job.started_at or job.created_at
+    if not started_at:
+        return int(job.elapsed_seconds or 0)
+    if started_at.tzinfo is not None:
+        started_at = started_at.replace(tzinfo=None)
+    return max(int((datetime.utcnow() - started_at).total_seconds()), 0)
+
+
+def _sparkie_candidate_payload(row: SparkieCandidate) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "symbol": row.symbol,
+        "interval": row.interval,
+        "algo_name": row.algo_name,
+        "status": row.status,
+        "score": row.score,
+        "profit_loss": row.profit_loss,
+        "trades": row.trades,
+        "win_rate": row.win_rate,
+        "max_drawdown": row.max_drawdown,
+        "validation_profit_loss": row.validation_profit_loss,
+        "validation_trades": row.validation_trades,
+        "confidence": row.confidence,
+        "params": _parse_config_json(row.params_json),
+        "error_message": row.error_message,
+    }
+
+
+def _sparkie_event_payload(row: SparkieEvent) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "level": row.level,
+        "stage": row.stage,
+        "message": row.message,
+        "payload": _parse_json_value(row.payload_json, {}),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _sparkie_v2_next_step(job: SparkieJob) -> str:
+    status = str(job.status or "")
+    if status in ACTIVE_STATUSES:
+        return "Sparkie is running in the background. You can close the laptop and return later from History."
+    if status == "completed":
+        if job.recommendation == "paper_candidate":
+            return "Replay verification is queued for the final pick. Review it before considering Live Mirror."
+        return "Sparkie recommends paper-only until stronger evidence appears."
+    if status == "rejected":
+        return "Sparkie rejected this goal or found no acceptable candidate. Adjust target or let the stock bucket expand later."
+    if status == "stopped":
+        return "Sparkie was stopped. Start a fresh evaluation when ready."
+    return "Sparkie hit an error. Review events, then start a fresh evaluation."
+
+
+def _parse_json_value(value: str | None, default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
 
 
 def _parse_date(value: str | None, field_name: str):

@@ -251,6 +251,12 @@ async def startup_event():
         ensure_spx_0dte_tables()
     except Exception as exc:
         logger.warning("SPX 0DTE schema bootstrap skipped/failed: %s", exc)
+    try:
+        from app.services.sparkie_schema import ensure_sparkie_tables
+
+        ensure_sparkie_tables()
+    except Exception as exc:
+        logger.warning("Sparkie schema bootstrap skipped/failed: %s", exc)
 
 # -------------------------
 # Exception Handlers

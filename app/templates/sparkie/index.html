@@ -20,7 +20,7 @@
   }
   .sparkie-header h1 {
     margin: 0 0 8px;
-    font-size: 34px;
+    font-size: 32px;
   }
   .sparkie-muted {
     color: #aeb8cf;
@@ -36,19 +36,19 @@
   }
   .sparkie-grid {
     display: grid;
-    grid-template-columns: minmax(320px, 460px) minmax(320px, 1fr);
+    grid-template-columns: minmax(300px, 420px) minmax(360px, 1fr);
     gap: 22px;
   }
   .sparkie-panel {
     background: #15153a;
     border: 1px solid rgba(148, 163, 184, 0.14);
-    border-radius: 12px;
+    border-radius: 10px;
     box-shadow: 0 0 18px rgba(0,0,0,.25);
     padding: 22px;
   }
   .sparkie-panel h2 {
     margin: 0 0 16px;
-    font-size: 22px;
+    font-size: 21px;
   }
   .sparkie-form {
     display: grid;
@@ -77,13 +77,6 @@
     padding: 10px 12px;
     font-size: 15px;
   }
-  .sparkie-check {
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    color: #cbd5e1;
-    font-size: 14px;
-  }
   .sparkie-actions {
     display: flex;
     gap: 10px;
@@ -95,18 +88,18 @@
     border: 1px solid rgba(148, 163, 184, 0.18);
     border-radius: 10px;
     padding: 16px;
-    min-height: 160px;
-    white-space: pre-wrap;
+    min-height: 190px;
     color: #dbeafe;
     line-height: 1.45;
   }
-  .sparkie-summary {
+  .sparkie-summary,
+  .sparkie-list {
     display: grid;
     gap: 10px;
   }
   .sparkie-summary-row {
     display: grid;
-    grid-template-columns: 170px 1fr;
+    grid-template-columns: 160px 1fr;
     gap: 10px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.12);
     padding-bottom: 8px;
@@ -143,10 +136,6 @@
     background: #23c5d9;
     width: 0%;
   }
-  .sparkie-session-link {
-    color: #7dd3fc;
-    text-decoration: none;
-  }
   .sparkie-history {
     display: grid;
     gap: 10px;
@@ -166,24 +155,19 @@
     color: #aeb8cf;
     font-size: 13px;
   }
-  .sparkie-steps {
-    display: grid;
-    gap: 12px;
+  .sparkie-event {
+    border-left: 3px solid rgba(125, 211, 252, 0.75);
+    padding-left: 10px;
   }
-  .sparkie-step {
-    border-left: 3px solid #ff6a00;
-    padding: 8px 0 8px 14px;
-    color: #dbeafe;
-  }
-  .sparkie-step strong {
-    display: block;
-    color: #ffffff;
-    margin-bottom: 4px;
+  .sparkie-link {
+    color: #7dd3fc;
+    text-decoration: none;
   }
   @media (max-width: 900px) {
     .sparkie-grid,
     .sparkie-row,
-    .sparkie-history-row {
+    .sparkie-history-row,
+    .sparkie-summary-row {
       grid-template-columns: 1fr;
     }
     .sparkie-header {
@@ -196,14 +180,14 @@
   <div class="sparkie-header">
     <div>
       <h1>Sparkie Agent</h1>
-      <p class="sparkie-muted">Give Sparkie the goal once. Sparkie checks the account gate, queues replay tests, and reports what happened.</p>
+      <p class="sparkie-muted">Give Sparkie the account and profit goal. Sparkie updates data, backtests the bucket, picks the best candidate, then verifies one finalist in Replay.</p>
     </div>
     <div class="sparkie-pill">Minimum account equity: $5,000</div>
   </div>
 
   <div class="sparkie-grid">
     <section class="sparkie-panel">
-      <h2>Setup</h2>
+      <h2>Goal</h2>
       <form class="sparkie-form" id="sparkieForm">
         <div class="sparkie-row">
           <div class="sparkie-field">
@@ -211,7 +195,7 @@
             <input id="accountEquity" type="number" min="5000" step="100" value="5000">
           </div>
           <div class="sparkie-field">
-            <label for="targetProfit">Target profit per period</label>
+            <label for="targetProfit">Profit target</label>
             <input id="targetProfit" type="number" min="1" step="1" value="25">
           </div>
         </div>
@@ -220,39 +204,9 @@
           <div class="sparkie-field">
             <label for="targetPeriod">Target period</label>
             <select id="targetPeriod">
-              <option value="daily">Daily</option>
+              <option value="daily" selected>Daily</option>
               <option value="weekly">Weekly</option>
               <option value="monthly">Monthly</option>
-            </select>
-          </div>
-          <div class="sparkie-field">
-            <label for="lookbackDays">Past performance window</label>
-            <input id="lookbackDays" type="number" min="1" step="1" value="10">
-          </div>
-        </div>
-
-        <div class="sparkie-field">
-          <label for="symbols">Symbols</label>
-          <input id="symbols" type="text" value="AAPL,NVDA,AMD,PLTR,INTC" placeholder="AAPL,NVDA,AMD">
-        </div>
-
-        <div class="sparkie-row">
-          <div class="sparkie-field">
-            <label for="intervals">Intervals</label>
-            <input id="intervals" type="text" value="5min" placeholder="1min,5min,15min">
-          </div>
-          <div class="sparkie-field">
-            <label for="algos">Algos</label>
-            <input id="algos" type="text" value="Algo1_MM,Algo2_MM,Algo3_MM" placeholder="Algo1_MM,Algo2_MM">
-          </div>
-        </div>
-
-        <div class="sparkie-row">
-          <div class="sparkie-field">
-            <label for="requestedMode">Run mode</label>
-            <select id="requestedMode">
-              <option value="paper">Paper</option>
-              <option value="live_mirror">Live Mirror</option>
             </select>
           </div>
           <div class="sparkie-field">
@@ -261,34 +215,17 @@
           </div>
         </div>
 
-        <label class="sparkie-check">
-          <input id="ackLiveRisk" type="checkbox">
-          <span>I understand Live Mirror can place real broker trades and must be restarted intentionally.</span>
-        </label>
-
-        <div class="sparkie-row">
-          <label class="sparkie-check">
-            <input id="useBacktestPrefilter" type="checkbox" checked>
-            <span>Let Sparkie run Optimizer/backtest first, then Replay finalists only.</span>
-          </label>
-          <div class="sparkie-field">
-            <label for="replayFinalists">Replay finalists</label>
-            <input id="replayFinalists" type="number" min="1" max="12" step="1" value="3">
-          </div>
-        </div>
-
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" id="runBtn">Run Sparkie Evaluation</button>
-          <button class="btn btn-secondary" type="button" id="stopBtn" style="display:none;">Stop Sparkie Evaluation</button>
-          <button class="btn btn-secondary" type="button" id="stopAllBtn">Stop All Sparkie Sessions</button>
-          <button class="btn btn-secondary" type="button" id="launchBtn">Check Launch Plan</button>
+          <button class="btn btn-secondary" type="button" id="stopBtn" style="display:none;">Stop This Job</button>
+          <button class="btn btn-secondary" type="button" id="stopAllBtn">Stop All Running Jobs</button>
         </div>
       </form>
     </section>
 
     <section class="sparkie-panel">
       <h2>Result</h2>
-      <div class="sparkie-result" id="sparkieResult">Enter the account size, target, symbols, intervals, and algos. Click Run Sparkie Evaluation once. Sparkie will queue the replay sessions for you.</div>
+      <div class="sparkie-result" id="sparkieResult">Enter equity and profit target, then run Sparkie once. Sparkie will choose symbols, intervals, algos, and the final Replay verification automatically.</div>
     </section>
   </div>
 
@@ -296,398 +233,224 @@
     <div class="sparkie-header" style="margin-bottom:12px;">
       <div>
         <h2>History</h2>
-        <p class="sparkie-muted">Last 10 Sparkie evaluations. You can pull any previous result anytime.</p>
+        <p class="sparkie-muted">Last 10 Sparkie evaluations stay available even if this browser closes.</p>
       </div>
       <div class="sparkie-actions" style="margin-top:0;">
         <button class="btn btn-secondary" type="button" id="historyBtn">Refresh History</button>
-        <button class="btn btn-danger" type="button" id="clearHistoryBtn">Clear Sparkie History</button>
+        <button class="btn btn-danger" type="button" id="clearHistoryBtn">Clear All History</button>
       </div>
     </div>
     <div class="sparkie-history" id="sparkieHistory">Loading Sparkie history...</div>
   </section>
-
-  <section class="sparkie-panel" style="margin-top:22px;">
-    <h2>How Sparkie Runs</h2>
-    <div class="sparkie-steps">
-      <div class="sparkie-step">
-        <strong>1. User gives Sparkie the goal</strong>
-        Account size, target, symbols, intervals, algos, and date window.
-      </div>
-      <div class="sparkie-step">
-        <strong>2. Sparkie checks safety gates</strong>
-        Sparkie blocks paper and Live Mirror below $5,000 and rates the target.
-      </div>
-      <div class="sparkie-step">
-        <strong>3. Sparkie runs the replay tests</strong>
-        Sparkie runs or reuses Optimizer/backtest results to narrow candidates, then queues only finalist symbol, interval, and algo combinations through Replay.
-      </div>
-      <div class="sparkie-step">
-        <strong>4. User reviews Sparkie decision</strong>
-        Only after paper/replay evidence should the user intentionally enable Live Mirror.
-      </div>
-    </div>
-  </section>
 </div>
 
 <script>
-  const urlPrefix = {{ url_prefix|tojson }};
+  const urlPrefix = "{{ url_prefix }}";
   const resultBox = document.getElementById("sparkieResult");
+  const historyBox = document.getElementById("sparkieHistory");
+  const runBtn = document.getElementById("runBtn");
   const stopBtn = document.getElementById("stopBtn");
   const stopAllBtn = document.getElementById("stopAllBtn");
-  const historyBox = document.getElementById("sparkieHistory");
   const clearHistoryBtn = document.getElementById("clearHistoryBtn");
-  const runBtn = document.getElementById("runBtn");
-  const sparkieJobStorageKey = "stockwicks.sparkie.activeJobId";
-  const sparkieSnapshotStorageKey = "stockwicks.sparkie.lastSnapshot";
+  const activeJobStorageKey = "stockwicks.sparkie.v2.activeJobId";
   let activeJobId = null;
   let statusTimer = null;
-  let latestRunPreview = null;
   let runRequestPending = false;
 
-  function isTerminalStatus(value) {
-    return ["completed", "completed_with_errors", "stopped", "error", "blocked"].includes(
-      String(value || "").toLowerCase()
-    );
+  function apiPath(path) {
+    return `${urlPrefix}${path}`;
   }
 
-  function listFromInput(id) {
-    return document.getElementById(id).value
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-  }
-
-  function basePayload() {
-    return {
-      account_equity: Number(document.getElementById("accountEquity").value),
-      target_profit: Number(document.getElementById("targetProfit").value),
-      target_period: document.getElementById("targetPeriod").value,
-      confidence_level: Number(document.getElementById("confidenceLevel").value)
-    };
-  }
-
-  async function postJson(path, payload) {
-    const response = await fetch(`${urlPrefix}${path}`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json", "Accept": "application/json"},
-      body: JSON.stringify(payload)
+  async function requestJson(path, options = {}) {
+    const response = await fetch(apiPath(path), {
+      credentials: "same-origin",
+      headers: {"Accept": "application/json", "Content-Type": "application/json"},
+      ...options
     });
-    return parseJsonResponse(response);
-  }
-
-  async function getJson(path) {
-    const response = await fetch(`${urlPrefix}${path}`, {
-      headers: {"Accept": "application/json"}
-    });
-    return parseJsonResponse(response);
-  }
-
-  async function parseJsonResponse(response) {
     const text = await response.text();
-    let data = null;
+    let data = {};
     try {
       data = text ? JSON.parse(text) : {};
     } catch (error) {
-      const snippet = text.replace(/\s+/g, " ").slice(0, 160);
-      throw new Error(`Sparkie API returned non-JSON HTTP ${response.status}. ${snippet}`);
+      throw new Error(`Sparkie API returned non-JSON HTTP ${response.status}. ${text.slice(0, 160)}`);
     }
-    if (!response.ok) {
-      throw new Error(data.detail || "Sparkie request failed.");
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.detail || data.message || "Sparkie request failed.");
     }
     return data;
   }
 
-  function showResult(data) {
-    resultBox.innerHTML = renderSummary(data);
-  }
-
-  function saveSparkieState(jobId, snapshot) {
-    try {
-      if (jobId) localStorage.setItem(sparkieJobStorageKey, jobId);
-      if (snapshot) localStorage.setItem(sparkieSnapshotStorageKey, JSON.stringify(snapshot));
-    } catch (error) {
-      console.warn("Sparkie state could not be saved", error);
-    }
-  }
-
-  function clearSparkieActiveJob() {
-    try {
-      localStorage.removeItem(sparkieJobStorageKey);
-    } catch (error) {
-      console.warn("Sparkie active job could not be cleared", error);
-    }
-  }
-
-  function clearSparkieBrowserState() {
-    try {
-      localStorage.removeItem(sparkieJobStorageKey);
-      localStorage.removeItem(sparkieSnapshotStorageKey);
-    } catch (error) {
-      console.warn("Sparkie browser state could not be cleared", error);
-    }
-  }
-
-  function loadSparkieSnapshot() {
-    try {
-      const raw = localStorage.getItem(sparkieSnapshotStorageKey);
-      return raw ? JSON.parse(raw) : null;
-    } catch (error) {
-      console.warn("Sparkie snapshot could not be loaded", error);
-      return null;
-    }
-  }
-
-  function loadSparkieActiveJob() {
-    try {
-      return localStorage.getItem(sparkieJobStorageKey);
-    } catch (error) {
-      console.warn("Sparkie active job could not be loaded", error);
-      return null;
-    }
-  }
-
-  function statusClass(value) {
-    if (value === "reasonable" || value === true || value === "criteria_ready") return "sparkie-good";
-    if (value === "aggressive") return "sparkie-warn";
-    return "sparkie-bad";
-  }
-
   function escapeHtml(value) {
-    return String(value ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[ch]));
   }
 
-  function renderSummary(data) {
-    const feasibility = data.feasibility || data;
-    const rows = [
-      ["Can start", data.can_start ?? data.replay_ready ?? ""],
-      ["Goal rating", feasibility.label || ""],
-      ["Account equity", `$${Number(data.account_equity || feasibility.account_equity || 0).toLocaleString()}`],
-      ["Minimum met", data.meets_minimum_equity ?? feasibility.meets_minimum_equity],
-      ["Target return", `${feasibility.target_return_pct ?? ""}% per ${feasibility.target_period || ""}`],
-      ["Window target", data.target_profit_for_window ? `$${Number(data.target_profit_for_window).toLocaleString()}` : ""],
-      ["Window dates", data.start_date && data.end_date ? `${data.start_date} to ${data.end_date}` : ""],
-      ["Next step", data.next_step || ""]
-    ].filter((row) => row[1] !== "" && row[1] !== undefined && row[1] !== null);
+  function secondsText(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return "calculating";
+    const seconds = Math.max(0, Number(value));
+    const minutes = Math.floor(seconds / 60);
+    const rest = Math.floor(seconds % 60);
+    if (minutes <= 0) return `${rest}s`;
+    return `${minutes}m ${rest}s`;
+  }
 
-    return `<div class="sparkie-summary">${
-      rows.map(([label, value]) => {
-        const cls = label === "Goal rating" || label === "Minimum met" || label === "Can start" ? statusClass(value) : "";
-        return `<div class="sparkie-summary-row"><span>${escapeHtml(label)}</span><strong class="${cls}">${escapeHtml(value)}</strong></div>`;
-      }).join("")
-    }</div>`;
+  function isTerminalStatus(status) {
+    return ["completed", "rejected", "error", "stopped"].includes(String(status || "").toLowerCase());
+  }
+
+  function statusClass(status) {
+    const value = String(status || "").toLowerCase();
+    if (value === "completed") return "sparkie-good";
+    if (value === "rejected" || value === "error" || value === "stopped") return "sparkie-bad";
+    return "sparkie-warn";
   }
 
   function evaluationPayload() {
     return {
-      ...basePayload(),
-      lookback_days: Number(document.getElementById("lookbackDays").value),
-      symbols: listFromInput("symbols"),
-      intervals: listFromInput("intervals"),
-      algos: listFromInput("algos"),
-      use_backtest_prefilter: document.getElementById("useBacktestPrefilter").checked,
-      replay_finalists: Number(document.getElementById("replayFinalists").value || 3)
+      account_equity: Number(document.getElementById("accountEquity").value || 0),
+      target_profit: Number(document.getElementById("targetProfit").value || 0),
+      target_period: document.getElementById("targetPeriod").value,
+      confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6)
     };
   }
 
-  function renderEvaluation(data) {
-    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
-    const preview = data.preview && data.preview.account_equity ? data.preview : latestRunPreview;
-    const best = data.best_session;
-    const bestLabel = best && Number(best.profit_loss || 0) > 0 ? "Best result" : "Least bad result";
-    const backtestScan = renderBacktestScan(data.backtest_scan);
-    const sessionRows = sessions.map((s) => (
-      `<div class="sparkie-summary-row"><span>${escapeHtml(s.symbol)} ${escapeHtml(s.interval)}</span><strong>${sessionLabel(s)}</strong></div>`
-    )).join("");
-    const header = renderSummary({
-      can_start: data.ok,
-      replay_ready: data.ok,
-      account_equity: preview?.account_equity,
-      meets_minimum_equity: preview?.meets_minimum_equity,
-      feasibility: preview?.feasibility || {},
-      target_profit_for_window: preview?.target_profit_for_window,
-      start_date: preview?.start_date,
-      end_date: preview?.end_date,
-      next_step: data.next_step || data.message
-    });
-    const totals = `
-      <div class="sparkie-summary-row"><span>Status</span><strong>${escapeHtml(data.status || "")}</strong></div>
-      <div class="sparkie-summary-row"><span>Job id</span><strong>${escapeHtml(data.job_id || activeJobId || "")}</strong></div>
-      <div class="sparkie-summary-row"><span>Sessions</span><strong>${escapeHtml(data.completed_sessions ?? 0)} / ${escapeHtml(data.total_sessions ?? sessions.length)}</strong></div>
-      <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.percent_complete || 0).toLocaleString()}%</strong></div>
-      <div class="sparkie-summary-row"><span>Total P/L</span><strong>$${Number(data.total_profit_loss || 0).toLocaleString()}</strong></div>
-      <div class="sparkie-summary-row"><span>Total trades</span><strong>${Number(data.total_trades || 0).toLocaleString()}</strong></div>
-      <div class="sparkie-summary-row"><span>Runtime safety</span><strong>12-minute stall timeout · 30-minute Replay maximum · 60-minute Optimizer maximum</strong></div>
-      ${best ? `<div class="sparkie-summary-row"><span>${escapeHtml(bestLabel)}</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
-    `;
-    return `${statusBanner(data)}${header}${backtestScan}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
-  }
-
-  function renderBacktestScan(scan) {
-    if (!scan) return "";
-    const finalists = Array.isArray(scan.finalist_combos) ? scan.finalist_combos : [];
-    const errors = Array.isArray(scan.errors) ? scan.errors : [];
-    const finalistRows = finalists.map((item) => (
-      `<div class="sparkie-summary-row"><span>${escapeHtml(item.symbol)} ${escapeHtml(item.interval)}</span><strong>${escapeHtml(item.algo_name)} · score ${Number(item.score || 0).toLocaleString()} · P/L $${Number(item.total_profit || 0).toLocaleString()} · ${Number(item.num_trades || 0).toLocaleString()} trades</strong></div>`
-    )).join("");
-    const errorText = errors.length ? `<div class="sparkie-summary-row"><span>Backtest notes</span><strong>${escapeHtml(errors.slice(0, 3).join(" | "))}</strong></div>` : "";
+  function statusBanner(data) {
+    const pct = Math.max(0, Math.min(100, Number(data.progress_pct ?? data.percent_complete ?? 0)));
+    const title = isTerminalStatus(data.status) ? "Sparkie finished." : "Sparkie is running.";
     return `
-      <div style="height:12px"></div>
-      <div class="sparkie-summary">
-        <div class="sparkie-summary-row"><span>Backtest scan</span><strong>${escapeHtml(scan.message || scan.status || "")}</strong></div>
-        ${scan.optimizer_job_id ? `<div class="sparkie-summary-row"><span>Optimizer job</span><strong>${escapeHtml(scan.optimizer_job_id)} · ${escapeHtml(scan.status || "")}</strong></div>` : ""}
-        <div class="sparkie-summary-row"><span>Scanned</span><strong>${Number(scan.symbols_scanned || 0).toLocaleString()} symbols · ${Number(scan.tested_combinations || 0).toLocaleString()} combinations · ${Number(scan.candidate_count || 0).toLocaleString()} candidates</strong></div>
-        ${finalistRows || `<div class="sparkie-summary-row"><span>Finalists</span><strong>No replay finalists selected.</strong></div>`}
-        ${errorText}
+      <div class="sparkie-status-banner">
+        <strong>${escapeHtml(title)}</strong>
+        <div class="sparkie-muted">${escapeHtml(data.message || data.next_step || "")}</div>
+        <div class="sparkie-progress"><span style="width:${pct}%"></span></div>
       </div>
     `;
   }
 
-  function renderHistory(history) {
-    const jobs = Array.isArray(history.jobs) ? history.jobs : [];
-    if (!jobs.length) {
-      return `<div class="sparkie-muted">No Sparkie evaluations yet.</div>`;
-    }
+  function renderEvaluation(data) {
+    const best = data.best_candidate || data.best_session;
+    const candidates = data.candidates || [];
+    const events = data.events || [];
+    const replayLink = data.replay_session_id
+      ? `<a class="sparkie-link" href="${urlPrefix}/replay-simulator">Replay session #${escapeHtml(data.replay_session_id)}</a>`
+      : "Not queued yet";
+    const policy = [
+      `Bucket: ${(data.symbol_bucket || []).join(", ") || "default"}`,
+      `Intervals: ${(data.interval_policy || []).join(", ") || "auto"}`,
+      `Algos: ${(data.algo_policy || []).join(", ") || "auto"}`
+    ].join(" · ");
+
+    const summary = `
+      <div class="sparkie-summary">
+        <div class="sparkie-summary-row"><span>Status</span><strong class="${statusClass(data.status)}">${escapeHtml(data.status || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Stage</span><strong>${escapeHtml(data.stage || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.progress_pct || 0).toLocaleString()}% · ${escapeHtml(data.completed_steps || 0)} / ${escapeHtml(data.total_steps || 0)} steps</strong></div>
+        <div class="sparkie-summary-row"><span>Time</span><strong>Elapsed ${secondsText(data.elapsed_seconds)} · ETA ${secondsText(data.eta_seconds)}</strong></div>
+        <div class="sparkie-summary-row"><span>Goal</span><strong>$${Number(data.target_profit || 0).toLocaleString()} ${escapeHtml(data.target_period || "")} on $${Number(data.account_equity || 0).toLocaleString()}</strong></div>
+        <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
+        <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
+        <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
+        <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Replay verify</span><strong>${replayLink}</strong></div>
+        ${best ? `<div class="sparkie-summary-row"><span>Best pick</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()} · ${Number(best.trades || 0).toLocaleString()} trades</strong></div>` : ""}
+      </div>
+    `;
+
+    const candidateRows = candidates.map((item) => `
+      <div class="sparkie-summary-row">
+        <span>${escapeHtml(item.symbol)} ${escapeHtml(item.interval)}</span>
+        <strong>${escapeHtml(item.algo_name)} · score ${Number(item.score || 0).toLocaleString()} · P/L $${Number(item.profit_loss || 0).toLocaleString()} · ${Number(item.trades || 0).toLocaleString()} trades · win ${Number((item.win_rate || 0) * 100).toFixed(1)}%</strong>
+      </div>
+    `).join("");
+
+    const eventRows = events.map((item) => `
+      <div class="sparkie-event">
+        <strong>${escapeHtml(item.stage || item.level || "")}</strong>
+        <div>${escapeHtml(item.message || "")}</div>
+        <span>${escapeHtml(item.created_at || "")}</span>
+      </div>
+    `).join("");
+
+    return `
+      ${statusBanner(data)}
+      ${summary}
+      ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-summary">${candidateRows}</div>` : ""}
+      ${eventRows ? `<div style="height:14px"></div><h3>Events</h3><div class="sparkie-list">${eventRows}</div>` : ""}
+    `;
+  }
+
+  function renderHistory(data) {
+    const jobs = data.jobs || [];
+    if (!jobs.length) return `<div class="sparkie-muted">No Sparkie evaluations yet.</div>`;
     return jobs.map((job) => {
-      const best = job.best_session;
-      const bestText = best
-        ? `${best.symbol} ${best.interval} ${best.algo_name} · $${Number(best.profit_loss || 0).toLocaleString()}`
-        : "No best result yet";
-      const when = job.created_at ? new Date(job.created_at).toLocaleString() : "Unknown time";
+      const best = job.best_candidate || job.best_session;
+      const created = job.created_at ? new Date(job.created_at).toLocaleString() : "";
+      const canStop = !isTerminalStatus(job.status);
       return `
         <div class="sparkie-history-row">
           <div>
-            <strong>${escapeHtml(job.job_id)}</strong>
-            <span>${escapeHtml(when)}</span>
+            <strong>${escapeHtml(job.job_id)}</strong><br>
+            <span>${escapeHtml(created)}</span>
           </div>
-          <div>
-            <strong>${escapeHtml(job.status || "")} · ${Number(job.percent_complete || 0).toLocaleString()}%</strong>
-            <span>${escapeHtml(job.completed_sessions ?? 0)} / ${escapeHtml(job.total_sessions ?? 0)} sessions</span>
+          <div><strong class="${statusClass(job.status)}">${escapeHtml(job.status)}</strong><br><span>${Number(job.progress_pct || 0).toLocaleString()}% · ${secondsText(job.elapsed_seconds)}</span></div>
+          <div><strong>${best ? `${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)}` : "No pick yet"}</strong><br><span>${best ? `P/L $${Number(best.profit_loss || 0).toLocaleString()}` : escapeHtml(job.recommendation || "")}</span></div>
+          <div class="sparkie-actions" style="margin-top:0;">
+            <button class="btn btn-secondary" type="button" data-view-job="${escapeHtml(job.job_id)}">View</button>
+            ${canStop ? `<button class="btn btn-secondary" type="button" data-stop-job="${escapeHtml(job.job_id)}">Stop</button>` : ""}
+            <button class="btn btn-danger" type="button" data-delete-job="${escapeHtml(job.job_id)}">Delete</button>
           </div>
-          <div>
-            <strong>P/L $${Number(job.total_profit_loss || 0).toLocaleString()}</strong>
-            <span>${Number(job.total_trades || 0).toLocaleString()} trades · ${escapeHtml(bestText)}</span>
-          </div>
-          <button class="btn btn-secondary" type="button" data-sparkie-job="${escapeHtml(job.job_id)}">View Result</button>
         </div>
       `;
     }).join("");
   }
 
-  function statusBanner(data) {
-    const status = String(data.status || "").toLowerCase();
-    const done = ["completed", "completed_with_errors", "stopped"].includes(status);
-    const blocked = status === "blocked" || status === "error" || data.ok === false;
-    const pct = Number(data.percent_complete || 0);
-    const title = done
-      ? (status === "completed" ? "Sparkie is done." : "Sparkie finished without a valid recommendation.")
-      : blocked
-        ? "Sparkie is blocked."
-        : "Sparkie is still running.";
-    const detail = done
-      ? (status === "completed"
-          ? "Review the validated result and session rows below before considering Live Mirror."
-          : (data.next_step || "Do not enable Live Mirror from this evaluation."))
-      : blocked
-        ? (data.message || data.next_step || "Review the notes below, adjust setup, and run Sparkie again.")
-        : "Sparkie runs in the background. You may leave and return through History; stalled or over-time work is stopped automatically.";
-    return `
-      <div class="sparkie-status-banner">
-        <strong>${escapeHtml(title)}</strong>
-        <div class="sparkie-muted">${escapeHtml(detail)}</div>
-        <div class="sparkie-progress"><span style="width:${Math.max(0, Math.min(100, pct))}%"></span></div>
-      </div>
-    `;
+  function saveActiveJob(jobId) {
+    if (!jobId) return;
+    localStorage.setItem(activeJobStorageKey, jobId);
   }
 
-  function sessionLabel(session) {
-    const parts = [
-      escapeHtml(session.algo_name),
-      escapeHtml(session.status),
-      `P/L $${Number(session.profit_loss || 0).toLocaleString()}`
-    ];
-    if (session.trade_count !== undefined) parts.push(`${Number(session.trade_count || 0).toLocaleString()} trades`);
-    if (session.quantity) parts.push(`${Number(session.quantity).toLocaleString()} shares`);
-    if (session.position_value_limit) parts.push(`allocation cap $${Number(session.position_value_limit).toLocaleString()}`);
-    if (session.total_bars) parts.push(`bar ${Number(session.current_bar_idx || 0).toLocaleString()} / ${Number(session.total_bars || 0).toLocaleString()}`);
-    if (session.age_minutes !== undefined) parts.push(`${Number(session.age_minutes || 0).toLocaleString()} min since update`);
-    if (session.session_id) {
-      parts.push(`<a class="sparkie-session-link" href="${urlPrefix}/replay-simulator" title="Open Replay page">session #${escapeHtml(session.session_id)}</a>`);
-    }
-    if (session.error_message || session.error) parts.push(escapeHtml(session.error_message || session.error));
-    return parts.join(" · ");
+  function clearActiveJob() {
+    localStorage.removeItem(activeJobStorageKey);
   }
 
   async function pollEvaluation(jobId) {
-    try {
-      const data = await getJson(`/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`);
-      latestRunPreview = data.preview || latestRunPreview;
-      resultBox.innerHTML = renderEvaluation(data);
-      saveSparkieState(jobId, data);
-      if (isTerminalStatus(data.status)) {
-        clearSparkieActiveJob();
-        stopBtn.style.display = "none";
-        loadSparkieHistory();
-        if (statusTimer) {
-          clearInterval(statusTimer);
-          statusTimer = null;
-        }
-      } else {
-        stopBtn.style.display = "inline-block";
-        stopBtn.disabled = false;
-      }
-    } catch (error) {
-      resultBox.textContent = error.message || String(error);
-      if (statusTimer) clearInterval(statusTimer);
+    if (!jobId) return;
+    const data = await requestJson(`/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`);
+    resultBox.innerHTML = renderEvaluation(data);
+    if (isTerminalStatus(data.status)) {
+      clearInterval(statusTimer);
       statusTimer = null;
+      stopBtn.style.display = "none";
+      clearActiveJob();
+      await loadSparkieHistory();
     }
   }
 
   async function loadSparkieHistory() {
-    if (!historyBox) return;
     try {
-      const data = await getJson("/api/sparkie/history");
+      const data = await requestJson("/api/sparkie/history");
       historyBox.innerHTML = renderHistory(data);
-      if ((!data.jobs || !data.jobs.length) && !loadSparkieActiveJob()) {
-        clearSparkieBrowserState();
-        activeJobId = null;
-        latestRunPreview = null;
-        resultBox.textContent = "No Sparkie history yet. Enter criteria and run a fresh Sparkie evaluation.";
-      }
     } catch (error) {
       historyBox.textContent = error.message || String(error);
     }
   }
 
-  async function viewHistoricalSparkieJob(jobId) {
-    if (!jobId) return;
-    resultBox.textContent = `Loading Sparkie job ${jobId}...`;
-    try {
-      activeJobId = jobId;
-      const data = await getJson(`/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`);
-      latestRunPreview = data.preview || latestRunPreview;
-      resultBox.innerHTML = renderEvaluation(data);
-      saveSparkieState(jobId, data);
-      if (isTerminalStatus(data.status)) {
-        clearSparkieActiveJob();
-        stopBtn.style.display = "none";
-        if (statusTimer) {
-          clearInterval(statusTimer);
-          statusTimer = null;
-        }
-      } else {
-        saveSparkieState(jobId, data);
-        stopBtn.style.display = "inline-block";
-        stopBtn.disabled = false;
-        if (statusTimer) clearInterval(statusTimer);
-        statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
-      }
-    } catch (error) {
-      resultBox.textContent = error.message || String(error);
+  async function viewJob(jobId) {
+    activeJobId = jobId;
+    const data = await requestJson(`/api/sparkie/evaluation-status/${encodeURIComponent(jobId)}`);
+    resultBox.innerHTML = renderEvaluation(data);
+    if (!isTerminalStatus(data.status)) {
+      saveActiveJob(jobId);
+      stopBtn.style.display = "inline-block";
+      if (statusTimer) clearInterval(statusTimer);
+      statusTimer = setInterval(() => pollEvaluation(jobId), 5000);
+    } else {
+      stopBtn.style.display = "none";
+      clearActiveJob();
     }
   }
 
@@ -695,21 +458,20 @@
     if (runRequestPending) return;
     runRequestPending = true;
     runBtn.disabled = true;
-    resultBox.textContent = "Sparkie is checking criteria and queueing replay sessions...";
+    resultBox.textContent = "Sparkie is creating a background evaluation job...";
     try {
-      const data = await postJson("/api/sparkie/run-evaluation", evaluationPayload());
+      const data = await requestJson("/api/sparkie/run-evaluation", {
+        method: "POST",
+        body: JSON.stringify(evaluationPayload())
+      });
       activeJobId = data.job_id;
-      latestRunPreview = data.preview || null;
+      saveActiveJob(activeJobId);
       resultBox.innerHTML = renderEvaluation(data);
-      saveSparkieState(activeJobId, data);
-      loadSparkieHistory();
-      if (activeJobId) {
-        stopBtn.style.display = "inline-block";
-        stopBtn.disabled = false;
-        if (statusTimer) clearInterval(statusTimer);
-        statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
-        setTimeout(() => pollEvaluation(activeJobId), 1200);
-      }
+      stopBtn.style.display = "inline-block";
+      await loadSparkieHistory();
+      if (statusTimer) clearInterval(statusTimer);
+      statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
+      setTimeout(() => pollEvaluation(activeJobId), 1000);
     } catch (error) {
       resultBox.textContent = error.message || String(error);
     } finally {
@@ -720,37 +482,17 @@
 
   stopBtn.addEventListener("click", async () => {
     if (!activeJobId) return;
-    stopBtn.disabled = true;
-    resultBox.textContent = "Stopping Sparkie evaluation...";
-    try {
-      await postJson(`/api/sparkie/stop-evaluation/${encodeURIComponent(activeJobId)}`, {});
-      await pollEvaluation(activeJobId);
-      stopBtn.style.display = "none";
-      clearSparkieActiveJob();
-      loadSparkieHistory();
-    } catch (error) {
-      resultBox.textContent = error.message || String(error);
-      stopBtn.disabled = false;
-    }
+    await requestJson(`/api/sparkie/stop-evaluation/${encodeURIComponent(activeJobId)}`, {method: "POST", body: "{}"});
+    await pollEvaluation(activeJobId);
   });
 
   stopAllBtn.addEventListener("click", async () => {
     stopAllBtn.disabled = true;
-    resultBox.textContent = "Stopping all active Sparkie sessions...";
     try {
-      const data = await postJson("/api/sparkie/stop-all", {});
-      clearSparkieActiveJob();
-      activeJobId = null;
+      const data = await requestJson("/api/sparkie/stop-all", {method: "POST", body: "{}"});
+      resultBox.textContent = data.message || "Sparkie stop-all requested.";
       stopBtn.style.display = "none";
-      if (statusTimer) {
-        clearInterval(statusTimer);
-        statusTimer = null;
-      }
-      resultBox.innerHTML = renderSummary({
-        can_start: true,
-        status: "stopped",
-        next_step: data.message || "Sparkie stop-all requested.",
-      });
+      clearActiveJob();
       await loadSparkieHistory();
     } catch (error) {
       resultBox.textContent = error.message || String(error);
@@ -759,42 +501,17 @@
     }
   });
 
-  document.getElementById("launchBtn").addEventListener("click", async () => {
-    resultBox.textContent = "Checking Sparkie launch plan...";
-    try {
-      const data = await postJson("/api/sparkie/launch-plan", {
-        ...basePayload(),
-        requested_mode: document.getElementById("requestedMode").value,
-        acknowledged_live_risk: document.getElementById("ackLiveRisk").checked
-      });
-      showResult(data);
-    } catch (error) {
-      resultBox.textContent = error.message || String(error);
-    }
-  });
-
   document.getElementById("historyBtn").addEventListener("click", loadSparkieHistory);
 
   clearHistoryBtn.addEventListener("click", async () => {
-    const confirmed = window.confirm(
-      "Clear all Sparkie history for this user? This removes Sparkie replay sessions and trades from history."
-    );
-    if (!confirmed) return;
-
+    if (!window.confirm("Clear all Sparkie history for this user?")) return;
     clearHistoryBtn.disabled = true;
-    resultBox.textContent = "Clearing Sparkie history...";
     try {
-      const data = await postJson("/api/sparkie/history/clear", {confirm: true});
-      clearSparkieBrowserState();
+      const data = await requestJson("/api/sparkie/history/clear", {method: "POST", body: JSON.stringify({confirm: true})});
+      resultBox.textContent = data.message || "Sparkie history cleared.";
+      clearActiveJob();
       activeJobId = null;
-      latestRunPreview = null;
-      stopBtn.style.display = "none";
-      if (statusTimer) {
-        clearInterval(statusTimer);
-        statusTimer = null;
-      }
-      resultBox.textContent = "Sparkie history cleared. Enter fresh criteria and run a new evaluation.";
-      historyBox.innerHTML = `<div class="sparkie-muted">${escapeHtml(data.message || "Sparkie history cleared.")}</div>`;
+      await loadSparkieHistory();
     } catch (error) {
       resultBox.textContent = error.message || String(error);
     } finally {
@@ -802,37 +519,46 @@
     }
   });
 
-  historyBox.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-sparkie-job]");
-    if (!button) return;
-    viewHistoricalSparkieJob(button.getAttribute("data-sparkie-job"));
+  historyBox.addEventListener("click", async (event) => {
+    const viewButton = event.target.closest("[data-view-job]");
+    const stopButton = event.target.closest("[data-stop-job]");
+    const deleteButton = event.target.closest("[data-delete-job]");
+    try {
+      if (viewButton) {
+        await viewJob(viewButton.getAttribute("data-view-job"));
+      } else if (stopButton) {
+        const jobId = stopButton.getAttribute("data-stop-job");
+        await requestJson(`/api/sparkie/stop-evaluation/${encodeURIComponent(jobId)}`, {method: "POST", body: "{}"});
+        await loadSparkieHistory();
+      } else if (deleteButton) {
+        const jobId = deleteButton.getAttribute("data-delete-job");
+        if (!window.confirm(`Delete Sparkie job ${jobId}?`)) return;
+        await requestJson(`/api/sparkie/history/${encodeURIComponent(jobId)}`, {method: "DELETE"});
+        if (activeJobId === jobId) {
+          activeJobId = null;
+          clearActiveJob();
+          resultBox.textContent = "Sparkie job deleted.";
+        }
+        await loadSparkieHistory();
+      }
+    } catch (error) {
+      resultBox.textContent = error.message || String(error);
+    }
   });
 
   (function resumeSparkieEvaluation() {
-    const savedJobId = loadSparkieActiveJob();
-    const snapshot = loadSparkieSnapshot();
-    if (savedJobId && snapshot && snapshot.job_id === savedJobId) {
-      latestRunPreview = snapshot.preview || latestRunPreview;
-      resultBox.innerHTML = renderEvaluation(snapshot);
-    } else if (!savedJobId) {
-      clearSparkieBrowserState();
-    }
-
+    const savedJobId = localStorage.getItem(activeJobStorageKey);
     if (!savedJobId) return;
-
     activeJobId = savedJobId;
     stopBtn.style.display = "inline-block";
-    stopBtn.disabled = false;
-    resultBox.insertAdjacentHTML(
-      "afterbegin",
-      `<div class="sparkie-status-banner"><strong>Resuming Sparkie job ${escapeHtml(savedJobId)}.</strong><div class="sparkie-muted">Sparkie will refresh this saved job and show the latest replay status.</div></div>`
-    );
-    if (statusTimer) clearInterval(statusTimer);
-    statusTimer = setInterval(() => pollEvaluation(activeJobId), 5000);
-    setTimeout(() => pollEvaluation(activeJobId), 500);
+    resultBox.textContent = `Resuming Sparkie job ${savedJobId}...`;
+    pollEvaluation(savedJobId).catch((error) => {
+      resultBox.textContent = error.message || String(error);
+      clearActiveJob();
+    });
+    statusTimer = setInterval(() => pollEvaluation(savedJobId), 5000);
   })();
 
   loadSparkieHistory();
-
 </script>
 {% endblock %}

@@ -51,6 +51,7 @@ class CheatSheetRequest:
     allow_short: bool = True
     eod_close: bool = True
     oos_fraction: float = 0.35
+    algo_names: tuple[str, ...] | None = None
     model_refresh_mode: str = DEFAULT_MODEL_REFRESH_MODE
     model_max_age_minutes: float = DEFAULT_MODEL_MAX_AGE_MINUTES
     min_new_bars_before_retrain: int = DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN
@@ -685,7 +686,10 @@ def run_cheatsheet(
             continue
 
         log.info("[CHEATSHEET] scan interval start symbol=%s interval=%s bars=%s", symbol, interval, len(price_full))
+        requested_algos = {str(value).strip() for value in (req.algo_names or ()) if str(value).strip()}
         for algo_name, feature_set in ALGO_FEATURE_SETS.items():
+            if requested_algos and algo_name not in requested_algos:
+                continue
             log.info("[CHEATSHEET] scan algo start symbol=%s interval=%s algo=%s", symbol, interval, algo_name)
             if algo_name in {"Algo_SMI", "Algo_MACD"}:
                 n = len(price_full)

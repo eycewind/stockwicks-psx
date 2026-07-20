@@ -62,6 +62,7 @@ import app.tasks.stock_tasks  # noqa: F401
 import app.tasks.schwab_tasks  # noqa: F401
 import app.tasks.replay_tasks  # noqa: F401
 import app.tasks.optimizer_tasks  # noqa: F401
+import app.tasks.sparkie_tasks  # noqa: F401
 
 
 # ── Queues & routing ─────────────────────────────────────────────
@@ -78,6 +79,7 @@ celery.conf.task_routes = {
     "app.tasks.stock_tasks.*": {"queue": "stock"},
     "app.tasks.replay_tasks.*": {"queue": "replay"},
     "app.tasks.optimizer_tasks.*": {"queue": "replay"},
+    "app.tasks.sparkie_tasks.*": {"queue": "replay"},
     "app.tasks.schwab_tasks.*": {"queue": "broker"},
 }
 
