@@ -184,7 +184,7 @@ def start_replay_session_task(session_id: int):
             }
 
         current_status = str(sess.status or "").upper()
-        if current_status in {"STOPPED", "DELETED"}:
+        if current_status not in {"PENDING", "QUEUED", "STARTING", "CREATED"}:
             logger.info(
                 "[REPLAY] start skipped because status=%s session_id=%s",
                 sess.status,
@@ -194,7 +194,7 @@ def start_replay_session_task(session_id: int):
                 "ok": True,
                 "session_id": session_id,
                 "skipped": True,
-                "reason": "STOPPED_OR_DELETED",
+                "reason": "SESSION_NOT_STARTABLE",
             }
 
         # Mark as STARTING before spawning.
@@ -216,7 +216,7 @@ def start_replay_session_task(session_id: int):
 
         # Existing PID-based replay process. The child process must load
         # ReplaySession.config_json by session_id.
-        pid = start_session(session_id)
+        pid = start_session(session_id, no_sleep=bool(cfg.get("sparkie_fast_replay")))
 
         sess = db.query(ReplaySession).filter_by(id=session_id).first()
         if sess:
@@ -368,14 +368,30 @@ def cleanup_stale_replay_sessions(max_age_minutes: int = 60):
 
         for sess in sessions:
             status = str(getattr(sess, "status", "") or "").upper()
-            if status not in {"RUNNING", "STARTING", "QUEUED"}:
+            if status not in {"PENDING", "RUNNING", "STARTING", "QUEUED", "OPTIMIZING", "PREPARING_REPLAY"}:
                 continue
 
             pid = getattr(sess, "pid", None)
             should_clean = False
+            cleanup_reason = "Cleaned stale replay session"
+            cfg = _parse_config_json(getattr(sess, "config_json", None))
+            is_sparkie = bool(cfg.get("sparkie_job_id"))
+            is_optimizer = str(getattr(sess, "algo_name", "") or "") == "OptimizerPrefilter"
+            created_at = getattr(sess, "created_at", None)
+            if created_at is not None and is_sparkie:
+                try:
+                    created_cmp = created_at.replace(tzinfo=None) if created_at.tzinfo else created_at
+                    sparkie_limit = 60 if is_optimizer else 30
+                    if created_cmp < datetime.utcnow() - timedelta(minutes=sparkie_limit):
+                        should_clean = True
+                        cleanup_reason = (
+                            f"Sparkie stopped this {'optimizer' if is_optimizer else 'replay'} "
+                            f"after its {sparkie_limit}-minute maximum runtime."
+                        )
+                except Exception:
+                    pass
 
-            if status == "QUEUED":
-                created_at = getattr(sess, "created_at", None)
+            if status in {"PENDING", "QUEUED"}:
                 if created_at is not None:
                     try:
                         created_cmp = created_at.replace(tzinfo=None) if created_at.tzinfo else created_at
@@ -397,11 +413,24 @@ def cleanup_stale_replay_sessions(max_age_minutes: int = 60):
 
             if should_clean:
                 set_replay_stop_flag(int(sess.id))
-                sess.status = "STOPPED"
+                if pid and pid_is_alive(pid):
+                    try:
+                        stop_session(db, int(sess.id))
+                    except Exception:
+                        logger.exception("[REPLAY] failed stopping stale pid session_id=%s", sess.id)
+                optimizer_task_id = str(cfg.get("sparkie_optimizer_task_id") or "")
+                if is_optimizer and optimizer_task_id:
+                    try:
+                        from app.celery_app import celery_app
+
+                        celery_app.control.revoke(optimizer_task_id, terminate=True, signal="SIGTERM")
+                    except Exception:
+                        logger.exception("[REPLAY] failed revoking stale Sparkie optimizer task=%s", optimizer_task_id)
+                sess.status = "ERROR" if is_sparkie else "STOPPED"
                 if hasattr(sess, "stopped_at"):
                     sess.stopped_at = datetime.utcnow()
-                if hasattr(sess, "error_message") and not sess.error_message:
-                    sess.error_message = "Cleaned stale replay session"
+                if hasattr(sess, "error_message"):
+                    sess.error_message = cleanup_reason
                 cleaned += 1
 
         db.commit()

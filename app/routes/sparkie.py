@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 import uuid
@@ -45,6 +46,9 @@ router = APIRouter(prefix="/api/sparkie", tags=["sparkie"])
 page_router = APIRouter(tags=["sparkie"])
 templates = Jinja2Templates(directory="app/templates")
 SPARKIE_STALE_MINUTES = 12
+SPARKIE_REPLAY_MAX_MINUTES = 30
+SPARKIE_OPTIMIZER_MAX_MINUTES = 60
+SPARKIE_JOB_PATTERN = re.compile(r"sparkie-\d+-\d{14}(?:-[a-f0-9]{8})?")
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -146,6 +150,17 @@ def run_evaluation(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    active_job_id = _latest_active_sparkie_job_id(db, user.id)
+    if active_job_id:
+        active_rows = _sparkie_rows_for_job(db, user.id, active_job_id)
+        active_summary = _sparkie_job_summary(db, active_job_id, active_rows, include_sessions=True)
+        if active_summary.get("status") not in {"completed", "completed_with_errors", "stopped", "error"}:
+            active_summary["reused_existing_job"] = True
+            active_summary["message"] = (
+                "Sparkie already has an active evaluation. The existing job was returned instead of starting a duplicate."
+            )
+            return active_summary
+
     try:
         preview = build_performance_preview(
             SparkiePerformanceRequest(
@@ -186,7 +201,10 @@ def run_evaluation(
     if not combos:
         raise HTTPException(status_code=400, detail="Enter at least one symbol, interval, and algo.")
 
-    job_id = f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    job_id = (
+        f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-"
+        f"{uuid.uuid4().hex[:8]}"
+    )
 
     skipped_sessions: list[dict] = []
     backtest_scan = None
@@ -257,15 +275,24 @@ def run_evaluation(
             "sessions": skipped_sessions,
         }
 
-    trade_size = _sparkie_trade_size(payload.account_equity)
     sessions = []
 
+    finalist_by_combo = {
+        (
+            str(item.get("symbol") or "").upper(),
+            str(item.get("interval") or "").lower(),
+            str(item.get("algo_name") or ""),
+        ): item
+        for item in ((backtest_scan or {}).get("finalist_combos") or [])
+    }
     for symbol, interval, algo_name in combos:
+        finalist = finalist_by_combo.get((symbol.upper(), interval.lower(), algo_name))
         cfg = _sparkie_replay_config(
             algo_name=algo_name,
             account_equity=payload.account_equity,
             target_profit=payload.target_profit,
             target_period=payload.target_period,
+            finalist=finalist,
         )
         cfg["sparkie_job_id"] = job_id
         cfg["sparkie_target_profit"] = float(payload.target_profit)
@@ -285,8 +312,15 @@ def run_evaluation(
             interval=interval,
             algo_name=algo_name,
             speed=20.0,
-            trade_size=trade_size,
-            status="PENDING",
+            trade_size=_sparkie_trade_quantity(
+                user_id=user.id,
+                symbol=symbol,
+                interval=interval,
+                start_date=preview.start_date,
+                end_date=preview.end_date,
+                account_equity=payload.account_equity,
+            ),
+            status="QUEUED",
             config_json=json.dumps(cfg, separators=(",", ":"), sort_keys=True),
         )
         db.add(session)
@@ -298,7 +332,7 @@ def run_evaluation(
                 "symbol": symbol,
                 "interval": interval,
                 "algo_name": algo_name,
-                "status": "PENDING",
+                "status": "QUEUED",
             }
         )
 
@@ -313,10 +347,6 @@ def run_evaluation(
                 args=(session["session_id"],),
                 queue="replay",
             )
-            row = db.query(ReplaySession).filter_by(id=session["session_id"]).first()
-            if row:
-                row.status = "QUEUED"
-                db.commit()
             session["status"] = "QUEUED"
             session["task_id"] = async_result.id
             queued.append(session)
@@ -348,7 +378,7 @@ def evaluation_status(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if not re.fullmatch(r"sparkie-\d+-\d{14}", job_id or ""):
+    if not SPARKIE_JOB_PATTERN.fullmatch(job_id or ""):
         raise HTTPException(status_code=400, detail="Invalid Sparkie job id.")
 
     rows = _sparkie_rows_for_job(db, user.id, job_id)
@@ -397,7 +427,7 @@ def stop_evaluation(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if not re.fullmatch(r"sparkie-\d+-\d{14}", job_id or ""):
+    if not SPARKIE_JOB_PATTERN.fullmatch(job_id or ""):
         raise HTTPException(status_code=400, detail="Invalid Sparkie job id.")
 
     rows = (
@@ -428,7 +458,7 @@ def stop_all_evaluations(
         db.query(ReplaySession)
         .filter(ReplaySession.user_id == user.id)
         .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
-        .filter(ReplaySession.status.in_(("PENDING", "QUEUED", "STARTING", "RUNNING")))
+        .filter(ReplaySession.status.in_(("PENDING", "QUEUED", "STARTING", "RUNNING", "OPTIMIZING", "PREPARING_REPLAY")))
         .order_by(ReplaySession.id.desc())
         .all()
     )
@@ -582,7 +612,40 @@ def _validate_replay_symbol_range(
 
 
 def _sparkie_trade_size(account_equity: float) -> float:
-    return float(max(1, int(float(account_equity) * 0.10)))
+    # Optimizer results are ranked with one-share P/L. Replay converts a
+    # capped dollar allocation into shares from the first bar price.
+    return 1.0
+
+
+def _sparkie_trade_quantity(
+    *,
+    user_id: int,
+    symbol: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    account_equity: float,
+) -> float:
+    provider = ReplayDataProvider(
+        user_id=user_id,
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        interval=interval,
+    )
+    first_bar = provider.bars.iloc[0]
+    price = float(first_bar.get("open") or first_bar.get("close") or 0.0)
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(f"Sparkie could not determine a valid starting price for {symbol}.")
+    allocation = max(float(account_equity) * 0.10, 1.0)
+    quantity = int(allocation // price)
+    if quantity < 1 and price <= float(account_equity) * 0.25:
+        quantity = 1
+    if quantity < 1:
+        raise ValueError(
+            f"{symbol} costs about ${price:,.2f}, above Sparkie's 25% single-position cap."
+        )
+    return float(quantity)
 
 
 def _sparkie_replay_config(
@@ -591,25 +654,41 @@ def _sparkie_replay_config(
     account_equity: float,
     target_profit: float,
     target_period: str,
+    finalist: dict | None = None,
 ) -> dict:
+    finalist = finalist or {}
     daily_stop = max(25.0, float(account_equity) * 0.01)
-    trade_size = _sparkie_trade_size(account_equity)
-    return _build_mm_replay_config(
+    allocation = max(float(account_equity) * 0.10, 1.0)
+    cfg = _build_mm_replay_config(
         algo_name=algo_name,
         eod_auto_close="on",
         allow_short_selling="on",
-        stop_loss_usd=min(daily_stop, trade_size * 0.25),
-        trailing_profit_usd=max(10.0, float(target_profit) * 0.5),
-        stop_loss_pct=DEFAULT_REPLAY_MM_CONFIG["stop_loss_pct"],
-        trailing_profit_pct=DEFAULT_REPLAY_MM_CONFIG["trailing_profit_pct"],
-        prob_trail_drop=DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"],
-        prob_exit_mode=DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"],
-        long_fixed_exit_prob=DEFAULT_REPLAY_MM_CONFIG["long_fixed_exit_prob"],
-        short_fixed_exit_prob=DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"],
-        long_entry_prob=DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"],
-        short_entry_prob=DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"],
-        entry_confirmation_bars=DEFAULT_REPLAY_MM_CONFIG["entry_confirmation_bars"],
+        stop_loss_usd=finalist.get("stop_loss_usd", finalist.get("hard_stop_usd", min(daily_stop, allocation * 0.02))),
+        trailing_profit_usd=finalist.get("trailing_profit_usd", max(5.0, min(allocation * 0.01, float(target_profit) * 0.5))),
+        stop_loss_pct=finalist.get("stop_loss_pct", finalist.get("per_share_stop_pct", DEFAULT_REPLAY_MM_CONFIG["stop_loss_pct"])),
+        trailing_profit_pct=finalist.get("trailing_profit_pct", finalist.get("per_share_trailing_profit_pct", DEFAULT_REPLAY_MM_CONFIG["trailing_profit_pct"])),
+        prob_trail_drop=finalist.get("prob_trail_drop", DEFAULT_REPLAY_MM_CONFIG["prob_trail_drop"]),
+        prob_exit_mode=finalist.get("prob_exit_mode", DEFAULT_REPLAY_MM_CONFIG["prob_exit_mode"]),
+        long_fixed_exit_prob=finalist.get("long_fixed_exit_prob", DEFAULT_REPLAY_MM_CONFIG["long_fixed_exit_prob"]),
+        short_fixed_exit_prob=finalist.get("short_fixed_exit_prob", DEFAULT_REPLAY_MM_CONFIG["short_fixed_exit_prob"]),
+        long_entry_prob=finalist.get("long_entry_prob", DEFAULT_REPLAY_MM_CONFIG["long_entry_prob"]),
+        short_entry_prob=finalist.get("short_entry_prob", DEFAULT_REPLAY_MM_CONFIG["short_entry_prob"]),
+        entry_confirmation_bars=finalist.get("entry_confirmation_bars", DEFAULT_REPLAY_MM_CONFIG["entry_confirmation_bars"]),
     )
+    for key in (
+        "prob_smoothing_bars",
+        "min_prob_advantage",
+        "model_refresh_mode",
+        "model_max_age_minutes",
+        "min_new_bars_before_retrain",
+    ):
+        if finalist.get(key) is not None:
+            cfg[key] = finalist[key]
+    cfg["daily_loss_limit_usd"] = daily_stop
+    cfg["sparkie_allocation_usd"] = round(float(account_equity) * 0.10, 2)
+    cfg["sparkie_optimizer_parameters_applied"] = bool(finalist)
+    cfg["sparkie_fast_replay"] = True
+    return cfg
 
 
 def _sparkie_backtest_scan(
@@ -629,7 +708,7 @@ def _sparkie_backtest_scan(
     allowed_intervals = set(intervals or [])
     optimizer_cache = _load_optimizer_cache()
 
-    if not optimizer_cache:
+    if not optimizer_cache or float(optimizer_cache.get("trade_size") or 0.0) != 1.0:
         scan = _queue_sparkie_optimizer_scan(
             user_id=user_id,
             symbols=symbols,
@@ -638,7 +717,7 @@ def _sparkie_backtest_scan(
             lookback_days=lookback_days,
         )
         scan["errors"] = [
-            "No cached Optimizer/backtest results found. Sparkie queued an Optimizer scan automatically."
+            "No compatible one-share Optimizer results found. Sparkie queued a normalized Optimizer scan automatically."
         ]
         return scan
 
@@ -659,6 +738,12 @@ def _sparkie_backtest_scan(
         if interval not in allowed_intervals:
             continue
         if algo_name not in allowed_algos:
+            continue
+        if float(row.get("total_profit") or 0.0) <= 0:
+            continue
+        if float(row.get("validation_total_profit") or 0.0) <= 0:
+            continue
+        if int(row.get("num_trades") or 0) < 3 or int(row.get("validation_num_trades") or 0) < 3:
             continue
         top_rows.append(_sparkie_backtest_row(row))
 
@@ -723,6 +808,25 @@ def _sparkie_backtest_row(row: dict) -> dict:
         "validation_win_rate",
         "holdout_num_trades",
         "backtest_method_label",
+        "long_entry_prob",
+        "short_entry_prob",
+        "prob_trail_drop",
+        "hard_stop_usd",
+        "stop_loss_usd",
+        "trailing_profit_usd",
+        "stop_loss_pct",
+        "trailing_profit_pct",
+        "per_share_stop_pct",
+        "per_share_trailing_profit_pct",
+        "prob_exit_mode",
+        "long_fixed_exit_prob",
+        "short_fixed_exit_prob",
+        "prob_smoothing_bars",
+        "entry_confirmation_bars",
+        "min_prob_advantage",
+        "model_refresh_mode",
+        "model_max_age_minutes",
+        "min_new_bars_before_retrain",
     )
     return {key: row.get(key) for key in keys}
 
@@ -739,18 +843,7 @@ def _sparkie_unique_finalist_combos(rows: list[dict], finalist_count: int) -> li
         if not all(key) or key in seen_combos:
             continue
         seen_combos.add(key)
-        finalists.append(
-            {
-                "symbol": row["symbol"],
-                "interval": row["interval"],
-                "algo_name": row["algo_name"],
-                "score": row.get("score"),
-                "total_profit": row.get("total_profit"),
-                "win_rate": row.get("win_rate"),
-                "num_trades": row.get("num_trades"),
-                "max_drawdown": row.get("max_drawdown"),
-            }
-        )
+        finalists.append(dict(row))
         if len(finalists) >= finalist_count:
             break
     return finalists
@@ -827,6 +920,7 @@ def _create_sparkie_optimizer_job(
     cfg = {
         "sparkie_job_id": job_id,
         "sparkie_optimizer_job_id": backtest_scan.get("optimizer_job_id"),
+        "sparkie_optimizer_task_id": backtest_scan.get("task_id"),
         "sparkie_target_profit": float(payload.target_profit),
         "sparkie_target_period": payload.target_period,
         "sparkie_account_equity": float(payload.account_equity),
@@ -890,17 +984,44 @@ def _sparkie_rows_for_job(db: Session, user_id: int, job_id: str) -> list[Replay
     )
 
 
+def _latest_active_sparkie_job_id(db: Session, user_id: int) -> str | None:
+    rows = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.user_id == user_id)
+        .filter(ReplaySession.config_json.like('%"sparkie_job_id":"sparkie-%'))
+        .filter(ReplaySession.status.in_(("PENDING", "QUEUED", "STARTING", "RUNNING", "OPTIMIZING", "PREPARING_REPLAY")))
+        .order_by(ReplaySession.id.desc())
+        .limit(100)
+        .all()
+    )
+    if rows:
+        _mark_stale_sparkie_sessions(db, rows)
+        for row in rows:
+            db.refresh(row)
+    for row in rows:
+        if str(row.status or "").upper() not in {"PENDING", "QUEUED", "STARTING", "RUNNING", "OPTIMIZING", "PREPARING_REPLAY"}:
+            continue
+        job_id = str(_parse_config_json(row.config_json).get("sparkie_job_id") or "")
+        if job_id and SPARKIE_JOB_PATTERN.fullmatch(job_id):
+            return job_id
+    return None
+
+
 def _stop_sparkie_rows(db: Session, rows: list[ReplaySession], *, reason: str) -> int:
     stopped = 0
     for row in rows:
         if str(row.status or "").upper() in {"COMPLETED", "STOPPED", "ERROR"}:
             continue
-        try:
-            from app.tasks.replay_tasks import stop_replay_session_task
+        cfg = _parse_config_json(row.config_json)
+        if str(row.algo_name or "") == "OptimizerPrefilter":
+            _cancel_sparkie_optimizer(cfg)
+        else:
+            try:
+                from app.tasks.replay_tasks import stop_replay_session_task
 
-            stop_replay_session_task.apply_async(args=(int(row.id),), queue="replay")
-        except Exception:
-            pass
+                stop_replay_session_task.apply_async(args=(int(row.id),), queue="replay")
+            except Exception:
+                pass
         try:
             stop_session(db, int(row.id))
         except Exception:
@@ -915,6 +1036,31 @@ def _stop_sparkie_rows(db: Session, rows: list[ReplaySession], *, reason: str) -
     if stopped:
         db.commit()
     return stopped
+
+
+def _cancel_sparkie_optimizer(cfg: dict) -> None:
+    optimizer_job_id = str(cfg.get("sparkie_optimizer_job_id") or "")
+    task_id = str(cfg.get("sparkie_optimizer_task_id") or "")
+    if optimizer_job_id:
+        with _cheatsheet_jobs_lock:
+            job = dict(_cheatsheet_jobs.get(optimizer_job_id) or {})
+            job.update(
+                {
+                    "status": "cancelled",
+                    "cancel_requested": True,
+                    "message": "Sparkie optimizer stop requested.",
+                    "updated_at": time.time(),
+                }
+            )
+            _cheatsheet_jobs[optimizer_job_id] = job
+            _store_cheatsheet_job(optimizer_job_id, job)
+    if task_id:
+        try:
+            from app.celery_app import celery_app
+
+            celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+        except Exception:
+            pass
 
 
 def _sparkie_job_summary(
@@ -943,10 +1089,12 @@ def _sparkie_job_summary(
     for row in rows:
         is_optimizer_placeholder = str(row.algo_name or "") == "OptimizerPrefilter"
         session_profit, trade_count = _replay_session_pnl(db, row.id)
-        if not is_optimizer_placeholder:
+        if not is_optimizer_placeholder and str(row.status or "").upper() == "COMPLETED":
             replay_session_count += 1
             total_profit += session_profit
             total_trades += trade_count
+        elif not is_optimizer_placeholder:
+            replay_session_count += 1
 
         status = str(row.status or "").upper()
         terminal = status in {"COMPLETED", "STOPPED", "ERROR", "DATA_ERROR", "OPTIMIZED"}
@@ -966,6 +1114,11 @@ def _sparkie_job_summary(
                 "status": row.status,
                 "profit_loss": round(session_profit, 2),
                 "trade_count": trade_count,
+                "quantity": float(row.trade_size or 0.0),
+                "position_value_limit": round(
+                    float(_parse_config_json(row.config_json).get("sparkie_allocation_usd") or 0.0),
+                    2,
+                ),
                 "error_message": row.error_message,
                 "current_bar_idx": row.current_bar_idx or 0,
                 "total_bars": row.total_bars or 0,
@@ -976,8 +1129,21 @@ def _sparkie_job_summary(
         )
 
     total_sessions = replay_session_count
-    status = "completed" if total_sessions and completed == total_sessions else "running"
-    if optimizer_scan and optimizer_scan.get("status") == "optimizing" and not any(
+    replay_statuses = [
+        str(row.status or "").upper()
+        for row in rows
+        if str(row.algo_name or "") != "OptimizerPrefilter"
+    ]
+    all_terminal = bool(total_sessions) and completed == total_sessions
+    if all_terminal and any(value in {"ERROR", "DATA_ERROR"} for value in replay_statuses):
+        status = "completed_with_errors"
+    elif all_terminal and replay_statuses and all(value == "STOPPED" for value in replay_statuses):
+        status = "stopped"
+    else:
+        status = "completed" if all_terminal else "running"
+    if optimizer_scan and optimizer_scan.get("status") in {"error", "stopped"} and not total_sessions:
+        status = str(optimizer_scan.get("status"))
+    elif optimizer_scan and optimizer_scan.get("status") == "optimizing" and not any(
         str(row.algo_name or "") != "OptimizerPrefilter" for row in rows
     ):
         status = "optimizing"
@@ -1029,6 +1195,28 @@ def _advance_sparkie_optimizer_job(
     optimizer_job_id = str(cfg.get("sparkie_optimizer_job_id") or "")
     if not optimizer_job_id:
         return None
+
+    optimizer_rows = [row for row in rows if str(row.algo_name or "") == "OptimizerPrefilter"]
+    if optimizer_rows:
+        placeholder_status = str(optimizer_rows[0].status or "").upper()
+        if placeholder_status in {"ERROR", "STOPPED"}:
+            return {
+                "status": placeholder_status.lower(),
+                "method": "sparkie_optimizer_batch",
+                "optimizer_job_id": optimizer_job_id,
+                "message": optimizer_rows[0].error_message or "Sparkie optimizer did not finish.",
+                "finalist_count": 0,
+                "finalist_combos": [],
+            }
+        if placeholder_status == "PREPARING_REPLAY":
+            return {
+                "status": "preparing_replay",
+                "method": "sparkie_optimizer_batch",
+                "optimizer_job_id": optimizer_job_id,
+                "message": "Sparkie is preparing data and queueing Replay finalists.",
+                "finalist_count": 0,
+                "finalist_combos": [],
+            }
 
     real_replay_rows = [
         row
@@ -1091,6 +1279,51 @@ def _advance_sparkie_optimizer_job(
         db.commit()
         return scan
 
+    placeholder_id = int(optimizer_rows[0].id) if optimizer_rows else 0
+    claimed = (
+        db.query(ReplaySession)
+        .filter(ReplaySession.id == placeholder_id)
+        .filter(ReplaySession.status == "OPTIMIZING")
+        .update(
+            {
+                ReplaySession.status: "PREPARING_REPLAY",
+                ReplaySession.updated_at: datetime.utcnow(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        return {
+            **scan,
+            "status": "preparing_replay",
+            "message": "Another Sparkie request is already preparing these Replay finalists.",
+        }
+
+    data_errors = _prepare_replay_data(
+        user_id=rows[0].user_id,
+        symbols=sorted({str(item["symbol"]) for item in finalists}),
+        intervals=sorted({str(item["interval"]) for item in finalists}),
+        start_date=str(rows[0].start_date),
+        end_date=str(rows[0].end_date),
+    )
+    if data_errors:
+        scan["errors"] = (scan.get("errors") or []) + [
+            f"{symbol}: {message}" for symbol, message in data_errors.items()
+        ]
+        finalists = [item for item in finalists if str(item["symbol"]) not in data_errors]
+        scan["finalist_combos"] = finalists
+        scan["finalist_count"] = len(finalists)
+    if not finalists:
+        for row in optimizer_rows:
+            row.status = "ERROR"
+            row.error_message = "Sparkie optimizer finished, but replay data could not be prepared for any finalist."
+            row.updated_at = datetime.utcnow()
+        db.commit()
+        scan["status"] = "error"
+        scan["message"] = optimizer_rows[0].error_message if optimizer_rows else scan["message"]
+        return scan
+
     _queue_sparkie_replay_finalists(
         db=db,
         user_id=rows[0].user_id,
@@ -1122,6 +1355,12 @@ def _sparkie_finalists_from_optimizer_result(
         algo_name = str(row.get("algo_name") or "")
         if symbol not in allowed_symbols or interval not in allowed_intervals or algo_name not in allowed_algos:
             continue
+        if float(row.get("total_profit") or 0.0) <= 0:
+            continue
+        if float(row.get("validation_total_profit") or 0.0) <= 0:
+            continue
+        if int(row.get("num_trades") or 0) < 3 or int(row.get("validation_num_trades") or 0) < 3:
+            continue
         rows.append(_sparkie_backtest_row(row))
     rows.sort(
         key=lambda row: (
@@ -1151,12 +1390,14 @@ def _queue_sparkie_replay_finalists(
             row.error_message = "Sparkie optimizer complete; replay finalists queued."
             row.updated_at = datetime.utcnow()
 
+    queued_rows: list[tuple[ReplaySession, dict]] = []
     for item in finalists:
         replay_cfg = _sparkie_replay_config(
             algo_name=str(item["algo_name"]),
             account_equity=float(cfg.get("sparkie_account_equity") or 0.0),
             target_profit=float(cfg.get("sparkie_target_profit") or 0.0),
             target_period=str(cfg.get("sparkie_target_period") or "daily"),
+            finalist=item,
         )
         replay_cfg.update(
             {
@@ -1179,17 +1420,28 @@ def _queue_sparkie_replay_finalists(
             interval=str(item["interval"]),
             algo_name=str(item["algo_name"]),
             speed=20.0,
-            trade_size=_sparkie_trade_size(float(cfg.get("sparkie_account_equity") or 0.0)),
-            status="PENDING",
+            trade_size=_sparkie_trade_quantity(
+                user_id=user_id,
+                symbol=str(item["symbol"]),
+                interval=str(item["interval"]),
+                start_date=str(rows[0].start_date),
+                end_date=str(rows[0].end_date),
+                account_equity=float(cfg.get("sparkie_account_equity") or 0.0),
+            ),
+            status="QUEUED",
             config_json=json.dumps(replay_cfg, separators=(",", ":"), sort_keys=True),
         )
         db.add(session)
         db.flush()
+        queued_rows.append((session, replay_cfg))
+
+    # Workers must never receive session ids before their rows are committed.
+    db.commit()
+    for session, replay_cfg in queued_rows:
         try:
             from app.tasks.replay_tasks import start_replay_session_task
 
             async_result = start_replay_session_task.apply_async(args=(session.id,), queue="replay")
-            session.status = "QUEUED"
             session.error_message = None
             replay_cfg["sparkie_replay_task_id"] = async_result.id
             session.config_json = json.dumps(replay_cfg, separators=(",", ":"), sort_keys=True)
@@ -1218,22 +1470,38 @@ def _mark_stale_sparkie_sessions(db: Session, rows: list[ReplaySession]) -> None
     changed = False
     for row in rows:
         status = str(row.status or "").upper()
-        if status not in {"RUNNING", "QUEUED", "STARTING", "PENDING"}:
+        if status not in {"RUNNING", "QUEUED", "STARTING", "PENDING", "OPTIMIZING", "PREPARING_REPLAY"}:
             continue
         age_start = row.updated_at or row.started_at or row.created_at or now
         if age_start.tzinfo is not None:
             age_start = age_start.replace(tzinfo=None)
         current_bar = int(row.current_bar_idx or 0)
         total_bars = int(row.total_bars or 0)
+        created_at = row.created_at or age_start
+        if created_at.tzinfo is not None:
+            created_at = created_at.replace(tzinfo=None)
+        is_optimizer = str(row.algo_name or "") == "OptimizerPrefilter"
+        max_minutes = SPARKIE_OPTIMIZER_MAX_MINUTES if is_optimizer else SPARKIE_REPLAY_MAX_MINUTES
         stalled = now - age_start > timedelta(minutes=SPARKIE_STALE_MINUTES)
-        if stalled:
+        exceeded_deadline = now - created_at > timedelta(minutes=max_minutes)
+        if stalled or exceeded_deadline:
+            if is_optimizer:
+                _cancel_sparkie_optimizer(_parse_config_json(row.config_json))
+            else:
+                try:
+                    stop_session(db, int(row.id))
+                except Exception:
+                    pass
             detail = "with no replay progress" if current_bar <= 0 or total_bars <= 0 else "with no replay update"
             row.status = "ERROR"
             row.error_message = (
-                f"Sparkie marked session stale after {SPARKIE_STALE_MINUTES} minutes "
-                f"{detail}."
+                f"Sparkie stopped this {'optimizer' if is_optimizer else 'replay'} after its "
+                f"{max_minutes}-minute maximum runtime."
+                if exceeded_deadline
+                else f"Sparkie stopped this session after {SPARKIE_STALE_MINUTES} minutes {detail}."
             )
             row.updated_at = now
+            row.stopped_at = now
             changed = True
     if changed:
         db.commit()
@@ -1326,6 +1594,10 @@ def _first_sparkie_config(rows: list[ReplaySession]) -> dict:
 
 
 def _sparkie_status_next_step(status: str, total_profit: float, total_trades: int) -> str:
+    if status in {"completed_with_errors", "error"}:
+        return "Sparkie finished with errors. Do not use Live Mirror; review the failed sessions and run a fresh evaluation."
+    if status == "stopped":
+        return "Sparkie was stopped. Start a fresh evaluation when ready."
     if status != "completed":
         return "Sparkie is still running replay sessions in the background. You can refresh this page or reopen Sparkie History later."
     if total_trades <= 0:

@@ -338,6 +338,7 @@ def _build_optimizer_cache_result(
     top_rows = _sort_optimizer_rows(all_top or all_best)
     return {
         "symbol": "CUSTOM_LIST",
+        "trade_size": float(req_template.trade_size),
         "intervals": req_template.intervals,
         "profile": req_template.profile,
         "settings_key": _optimizer_cache_key(req_template),
@@ -846,7 +847,7 @@ def _run_qqq_batch_job(
             pending_symbols = pending_symbols[:max(0, max_new_symbols)]
 
         prefetch_workers = _optimizer_worker_count("OPTIMIZER_PREFETCH_WORKERS", 1, 1)
-        backtest_workers = _optimizer_worker_count("OPTIMIZER_BACKTEST_WORKERS", 1, 2)
+        backtest_workers = _optimizer_worker_count("OPTIMIZER_BACKTEST_WORKERS", 2, 2)
         prefetch_timeout = _optimizer_timeout_seconds("OPTIMIZER_PREFETCH_TIMEOUT_SECONDS", 15 * 60)
         backtest_timeout = _optimizer_timeout_seconds("OPTIMIZER_BACKTEST_TIMEOUT_SECONDS", 30 * 60)
         prefetched_frames: dict[str, dict[str, object]] = {}

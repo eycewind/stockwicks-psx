@@ -174,7 +174,7 @@ def run_session(session_id: int, *, no_sleep: bool = False) -> int:
         logger.error(f"Session {session_id} not found")
         return 2
 
-    if session.status not in ("PENDING", "QUEUED", "STARTING", "STOPPED", "COMPLETED", "ERROR"):
+    if session.status not in ("PENDING", "QUEUED", "STARTING", "CREATED"):
         logger.error(
             f"Session {session_id} is not startable (status={session.status}); "
             "it may already be running."

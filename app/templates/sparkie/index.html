@@ -336,11 +336,19 @@
   const stopAllBtn = document.getElementById("stopAllBtn");
   const historyBox = document.getElementById("sparkieHistory");
   const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+  const runBtn = document.getElementById("runBtn");
   const sparkieJobStorageKey = "stockwicks.sparkie.activeJobId";
   const sparkieSnapshotStorageKey = "stockwicks.sparkie.lastSnapshot";
   let activeJobId = null;
   let statusTimer = null;
   let latestRunPreview = null;
+  let runRequestPending = false;
+
+  function isTerminalStatus(value) {
+    return ["completed", "completed_with_errors", "stopped", "error", "blocked"].includes(
+      String(value || "").toLowerCase()
+    );
+  }
 
   function listFromInput(id) {
     return document.getElementById(id).value
@@ -513,7 +521,7 @@
       <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.percent_complete || 0).toLocaleString()}%</strong></div>
       <div class="sparkie-summary-row"><span>Total P/L</span><strong>$${Number(data.total_profit_loss || 0).toLocaleString()}</strong></div>
       <div class="sparkie-summary-row"><span>Total trades</span><strong>${Number(data.total_trades || 0).toLocaleString()}</strong></div>
-      <div class="sparkie-summary-row"><span>Stale timeout</span><strong>Sessions with no progress for 12+ minutes are marked ERROR.</strong></div>
+      <div class="sparkie-summary-row"><span>Runtime safety</span><strong>12-minute stall timeout · 30-minute Replay maximum · 60-minute Optimizer maximum</strong></div>
       ${best ? `<div class="sparkie-summary-row"><span>${escapeHtml(bestLabel)}</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
     `;
     return `${statusBanner(data)}${header}${backtestScan}<div style="height:12px"></div><div class="sparkie-summary">${totals}${sessionRows || ""}</div>`;
@@ -572,19 +580,21 @@
 
   function statusBanner(data) {
     const status = String(data.status || "").toLowerCase();
-    const done = status === "completed";
+    const done = ["completed", "completed_with_errors", "stopped"].includes(status);
     const blocked = status === "blocked" || status === "error" || data.ok === false;
     const pct = Number(data.percent_complete || 0);
     const title = done
-      ? "Sparkie is done."
+      ? (status === "completed" ? "Sparkie is done." : "Sparkie finished without a valid recommendation.")
       : blocked
         ? "Sparkie is blocked."
         : "Sparkie is still running.";
     const detail = done
-      ? "Review the best result and session rows below before considering Live Mirror."
+      ? (status === "completed"
+          ? "Review the validated result and session rows below before considering Live Mirror."
+          : (data.next_step || "Do not enable Live Mirror from this evaluation."))
       : blocked
         ? (data.message || data.next_step || "Review the notes below, adjust setup, and run Sparkie again.")
-        : "Keep this page open. Sparkie refreshes every 5 seconds. If no progress appears after 12 minutes, sessions will be marked stale.";
+        : "Sparkie runs in the background. You may leave and return through History; stalled or over-time work is stopped automatically.";
     return `
       <div class="sparkie-status-banner">
         <strong>${escapeHtml(title)}</strong>
@@ -601,6 +611,8 @@
       `P/L $${Number(session.profit_loss || 0).toLocaleString()}`
     ];
     if (session.trade_count !== undefined) parts.push(`${Number(session.trade_count || 0).toLocaleString()} trades`);
+    if (session.quantity) parts.push(`${Number(session.quantity).toLocaleString()} shares`);
+    if (session.position_value_limit) parts.push(`allocation cap $${Number(session.position_value_limit).toLocaleString()}`);
     if (session.total_bars) parts.push(`bar ${Number(session.current_bar_idx || 0).toLocaleString()} / ${Number(session.total_bars || 0).toLocaleString()}`);
     if (session.age_minutes !== undefined) parts.push(`${Number(session.age_minutes || 0).toLocaleString()} min since update`);
     if (session.session_id) {
@@ -616,7 +628,7 @@
       latestRunPreview = data.preview || latestRunPreview;
       resultBox.innerHTML = renderEvaluation(data);
       saveSparkieState(jobId, data);
-      if (data.status === "completed") {
+      if (isTerminalStatus(data.status)) {
         clearSparkieActiveJob();
         stopBtn.style.display = "none";
         loadSparkieHistory();
@@ -660,7 +672,7 @@
       latestRunPreview = data.preview || latestRunPreview;
       resultBox.innerHTML = renderEvaluation(data);
       saveSparkieState(jobId, data);
-      if (data.status === "completed") {
+      if (isTerminalStatus(data.status)) {
         clearSparkieActiveJob();
         stopBtn.style.display = "none";
         if (statusTimer) {
@@ -679,7 +691,10 @@
     }
   }
 
-  document.getElementById("runBtn").addEventListener("click", async () => {
+  runBtn.addEventListener("click", async () => {
+    if (runRequestPending) return;
+    runRequestPending = true;
+    runBtn.disabled = true;
     resultBox.textContent = "Sparkie is checking criteria and queueing replay sessions...";
     try {
       const data = await postJson("/api/sparkie/run-evaluation", evaluationPayload());
@@ -697,6 +712,9 @@
       }
     } catch (error) {
       resultBox.textContent = error.message || String(error);
+    } finally {
+      runRequestPending = false;
+      runBtn.disabled = false;
     }
   });
 

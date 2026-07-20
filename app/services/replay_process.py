@@ -65,7 +65,7 @@ def pid_is_alive(pid: int) -> bool:
 # =============================================================================
 # Start
 # =============================================================================
-def start_session(session_id: int) -> int:
+def start_session(session_id: int, *, no_sleep: bool = False) -> int:
     """
     Spawn the orchestrator as a detached subprocess.
     Returns the new PID. Does NOT block.
@@ -90,6 +90,8 @@ def start_session(session_id: int) -> int:
         "--session-id",
         str(session_id),
     ]
+    if no_sleep:
+        cmd.append("--no-sleep")
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
