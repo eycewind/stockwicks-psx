@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import re
 import time
 import uuid
@@ -337,6 +338,7 @@ def _latest_active_sparkie_v2_job(db: Session, user_id: int) -> SparkieJob | Non
 
 
 def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bool) -> dict[str, Any]:
+    _refresh_sparkie_v2_runtime_status(db, job)
     _refresh_sparkie_v2_replay_status(db, job)
     candidates = (
         db.query(SparkieCandidate)
@@ -367,6 +369,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
             "trades": job.best_trades,
             "win_rate": job.best_win_rate,
         }
+    live_elapsed_seconds = _sparkie_elapsed_seconds(job) if str(job.status or "") in ACTIVE_STATUSES else int(job.elapsed_seconds or 0)
     payload = {
         "ok": True,
         "job_id": job.id,
@@ -379,7 +382,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "confidence_level": float(job.confidence_level or 0.0),
         "progress_pct": round(float(job.progress_pct or 0.0), 1),
         "percent_complete": round(float(job.progress_pct or 0.0), 1),
-        "elapsed_seconds": int(job.elapsed_seconds or 0),
+        "elapsed_seconds": live_elapsed_seconds,
         "eta_seconds": int(job.eta_seconds) if job.eta_seconds is not None else None,
         "completed_steps": int(job.completed_steps or 0),
         "total_steps": int(job.total_steps or 0),
@@ -419,6 +422,46 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     else:
         payload["candidates"] = [_sparkie_candidate_payload(row) for row in candidates]
     return payload
+
+
+def _refresh_sparkie_v2_runtime_status(db: Session, job: SparkieJob) -> None:
+    if str(job.status or "") not in ACTIVE_STATUSES:
+        return
+    elapsed_seconds = _sparkie_elapsed_seconds(job)
+    max_minutes = int(os.getenv("SPARKIE_MAX_RUNTIME_MINUTES", "90"))
+    if elapsed_seconds <= max_minutes * 60:
+        if int(job.elapsed_seconds or 0) != elapsed_seconds:
+            job.elapsed_seconds = elapsed_seconds
+            job.updated_at = datetime.utcnow()
+            db.commit()
+        return
+
+    job.status = "error"
+    job.stage = "error"
+    job.message = f"Sparkie stopped after exceeding the {max_minutes}-minute maximum runtime."
+    job.error_message = job.message
+    job.elapsed_seconds = elapsed_seconds
+    job.eta_seconds = 0
+    job.progress_pct = 100.0
+    job.finished_at = datetime.utcnow()
+    job.updated_at = datetime.utcnow()
+    db.add(
+        SparkieEvent(
+            job_id=job.id,
+            user_id=int(job.user_id),
+            level="error",
+            stage="error",
+            message=job.message,
+        )
+    )
+    db.commit()
+    if job.task_id:
+        try:
+            from app.celery_app import celery_app
+
+            celery_app.control.revoke(str(job.task_id), terminate=True, signal="SIGTERM")
+        except Exception:
+            pass
 
 
 def _refresh_sparkie_v2_replay_status(db: Session, job: SparkieJob) -> None:

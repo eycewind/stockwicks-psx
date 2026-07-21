@@ -181,7 +181,14 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         )
         return {"ok": True, "status": job.status}
 
-    _set_job(db, job, status="backtesting", stage="backtesting", message="Sparkie is backtesting candidates.")
+    _set_job(
+        db,
+        job,
+        status="backtesting",
+        stage="backtesting",
+        message="Sparkie is backtesting candidates.",
+        eta_seconds=None,
+    )
     add_event(
         db,
         job,
