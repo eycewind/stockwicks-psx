@@ -364,6 +364,47 @@ def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
+def _daily_pnl(trades: list[dict[str, Any]], price_index: pd.Index) -> list[dict[str, Any]]:
+    """Return true EOD P/L by trading date, including no-trade sessions.
+
+    Sparkie evaluates day-trading targets, so a total holdout P/L divided by
+    days is not an acceptable substitute for the actual per-day result.
+    Trades are attributed to their exit date; EOD close keeps every position
+    inside that same trading session.
+    """
+    def trading_date(value: Any) -> str:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize(_ET)
+        else:
+            timestamp = timestamp.tz_convert(_ET)
+        return timestamp.date().isoformat()
+
+    by_date: dict[str, dict[str, Any]] = {}
+    for timestamp in price_index:
+        date_key = trading_date(timestamp)
+        by_date.setdefault(date_key, {"date": date_key, "profit_loss": 0.0, "trades": 0})
+    for trade in trades:
+        date_key = trading_date(trade.get("exit_time"))
+        item = by_date.setdefault(date_key, {"date": date_key, "profit_loss": 0.0, "trades": 0})
+        item["profit_loss"] += float(trade.get("profit") or 0.0)
+        item["trades"] += 1
+
+    cumulative = 0.0
+    rows: list[dict[str, Any]] = []
+    for date_key in sorted(by_date):
+        item = by_date[date_key]
+        profit = round(float(item["profit_loss"]), 2)
+        cumulative = round(cumulative + profit, 2)
+        rows.append({
+            "date": date_key,
+            "profit_loss": profit,
+            "trades": int(item["trades"]),
+            "cumulative_profit_loss": cumulative,
+        })
+    return rows
+
+
 def _ts_iso(index: pd.Index, pos: int) -> str | None:
     if len(index) == 0:
         return None
@@ -762,6 +803,7 @@ def run_cheatsheet(
                         "validation_num_trades": metrics["num_trades"],
                         "validation_win_rate": metrics["win_rate"],
                         "holdout_num_trades": metrics["num_trades"],
+                        "daily_pnl": _daily_pnl(trades, test_price.index),
                         **params,
                         **metrics,
                     }
@@ -977,6 +1019,7 @@ def run_cheatsheet(
                     "validation_num_trades": candidate["validation_num_trades"],
                     "validation_win_rate": candidate["validation_win_rate"],
                     "holdout_num_trades": holdout_metrics["num_trades"],
+                    "daily_pnl": _daily_pnl(holdout_trades, holdout_price.index),
                     **params,
                     **holdout_metrics,
                 }

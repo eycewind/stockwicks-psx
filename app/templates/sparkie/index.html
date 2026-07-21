@@ -391,6 +391,13 @@
     const targetMath = data.target_math || {};
     const replay = data.replay_verification;
     const fullCashResultsValid = data.full_cash_results_valid === true;
+    const bestDailyPnl = best && best.daily_pnl ? best.daily_pnl : {};
+    const dailyPnlText = bestDailyPnl.available
+      ? `Average $${Number(bestDailyPnl.average_daily_profit_loss || 0).toLocaleString()} daily; cumulative $${Number(bestDailyPnl.cumulative_profit_loss || 0).toLocaleString()} across ${Number(bestDailyPnl.days_tested || 0).toLocaleString()} trading days`
+      : "Not recorded for this historical result. Start a fresh evaluation.";
+    const targetHitText = bestDailyPnl.available && bestDailyPnl.daily_target !== null && bestDailyPnl.daily_target !== undefined
+      ? `${Number(bestDailyPnl.target_hit_days || 0).toLocaleString()} target-hit days; ${Number(bestDailyPnl.target_missed_days || 0).toLocaleString()} missed days; ${Number(bestDailyPnl.no_trade_days || 0).toLocaleString()} no-trade days`
+      : "Available for fresh daily-target evaluations.";
     const cashDeploymentText = fullCashResultsValid
       ? `100% of available cash: up to $${Number(data.trade_allocation_usd || 0).toLocaleString()} in one day-trade (small residual may remain from whole-share rounding)`
       : "Legacy partial-cash result. It is not valid for a full-cash decision; start a fresh evaluation.";
@@ -415,11 +422,13 @@
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
+        ${best ? `<div class="sparkie-summary-row"><span>Actual daily P/L</span><strong>${dailyPnlText}</strong></div>` : ""}
+        ${best ? `<div class="sparkie-summary-row"><span>Daily target results</span><strong>${targetHitText}</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Summary file</span><strong>${escapeHtml(summaryFile)}</strong></div>
         <div class="sparkie-summary-row"><span>Replay verification</span><strong>${replayText}${data.replay_session_id ? ` &middot; ${replayLink}` : ""}</strong></div>
-        ${best ? `<div class="sparkie-summary-row"><span>Best estimated ${escapeHtml(periodLabel)} P/L</span><strong>$${Number(best.estimated_profit_per_period || 0).toLocaleString()} · evidence-window total $${Number(best.total_profit_loss || best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
+        ${best ? `<div class="sparkie-summary-row"><span>Best average ${escapeHtml(periodLabel)} P/L</span><strong>$${Number(best.estimated_profit_per_period || 0).toLocaleString()} · cumulative evidence P/L $${Number(best.total_profit_loss || best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
         ${best ? `<div class="sparkie-summary-row"><span>Best pick</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()} · ${Number(best.trades || 0).toLocaleString()} trades</strong></div>` : ""}
       </div>
     `;
@@ -430,6 +439,13 @@
         <strong>${escapeHtml(item.algo_name)} · est. ${escapeHtml(periodLabel)} P/L $${Number(item.estimated_profit_per_period || 0).toLocaleString()} · evidence total $${Number(item.total_profit_loss || item.profit_loss || 0).toLocaleString()} · ${Number(item.trades || 0).toLocaleString()} trades · win ${Number((item.win_rate || 0) * 100).toFixed(1)}% · score ${Number(item.score || 0).toLocaleString()}</strong>
       </div>
     `).join("");
+
+    const dailyRows = bestDailyPnl.available ? (bestDailyPnl.days || []).map((item) => `
+      <div class="sparkie-summary-row">
+        <span>${escapeHtml(item.date)} ${item.target_met === true ? "· target met" : item.target_met === false ? "· target missed" : ""}</span>
+        <strong>Daily P/L $${Number(item.profit_loss || 0).toLocaleString()} · cumulative P/L $${Number(item.cumulative_profit_loss || 0).toLocaleString()} · ${Number(item.trades || 0).toLocaleString()} trades</strong>
+      </div>
+    `).join("") : "";
 
     const eventRows = events.map((item) => `
       <div class="sparkie-event">
@@ -443,7 +459,8 @@
       ${statusBanner(data)}
       ${!fullCashResultsValid ? `<div class="sparkie-status-banner" style="border-color:rgba(251,191,36,.6);"><strong>Fresh run required</strong><div class="sparkie-muted">This historical job was calculated under Sparkie's former partial-cash sizing policy. Its P/L and share counts cannot be used to evaluate a full-cash account.</div></div>` : ""}
       ${summary}
-      ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-muted">Sparkie reports estimated ${escapeHtml(periodLabel)} P/L first. Evidence total is the backtest-window support behind that estimate.</div><div class="sparkie-summary">${candidateRows}</div>` : ""}
+      ${dailyRows ? `<div style="height:14px"></div><h3>Actual Daily P/L — Selected Backtest</h3><div class="sparkie-muted">Each row is that trading day's EOD-closed P/L. Cumulative P/L is the running total; a no-trade day counts as a missed daily target.</div><div class="sparkie-summary">${dailyRows}</div>` : ""}
+      ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-muted">For daily targets, Sparkie reports actual average daily EOD P/L first. Cumulative P/L is the supporting backtest evidence.</div><div class="sparkie-summary">${candidateRows}</div>` : ""}
       ${eventRows ? `<div style="height:14px"></div><h3>Events</h3><div class="sparkie-list">${eventRows}</div>` : ""}
     `;
   }

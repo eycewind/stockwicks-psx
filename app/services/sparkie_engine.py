@@ -910,6 +910,7 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
         "model_refresh_mode",
         "model_max_age_minutes",
         "min_new_bars_before_retrain",
+        "daily_pnl",
         "sparkie_trade_size",
         "sparkie_allocation_usd",
         "sparkie_cash_deployment_policy",
@@ -964,8 +965,16 @@ def _replace_candidates(db: Session, job: SparkieJob, rows: list[dict[str, Any]]
 def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
     target_units = _target_window_units(job.target_period)
     profit = float(row.get("profit_loss") or 0.0)
-    estimated_period_profit = profit / target_units if target_units else profit
     target_period = str(job.target_period or "daily")
+    daily_stats = _daily_target_stats(
+        (row.get("params") or {}).get("daily_pnl"),
+        float(job.target_profit or 0.0),
+    ) if target_period == "daily" else None
+    estimated_period_profit = (
+        float(daily_stats["average_daily_profit_loss"])
+        if daily_stats and daily_stats.get("available")
+        else profit / target_units if target_units else profit
+    )
     trades = int(row.get("trades") or 0)
     win_rate = float(row.get("win_rate") or 0.0)
     max_drawdown = abs(float(row.get("max_drawdown") or 0.0))
@@ -975,9 +984,20 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
             "run_replay": True,
             "message": "Sparkie found a positive candidate, but it did not meet the minimum target.",
             "reason": (
-                f"Estimated {target_period} backtest P/L ${estimated_period_profit:,.2f} "
+                f"Average {target_period} backtest P/L ${estimated_period_profit:,.2f} "
                 f"is below the user target ${float(job.target_profit or 0.0):,.2f} "
-                f"({target_units:g} {target_period} unit evidence window total: ${profit:,.2f})."
+                f"({_daily_target_evidence_text(daily_stats, target_units, target_period, profit)})."
+            ),
+        }
+    if daily_stats and daily_stats.get("target_hit_rate", 0.0) < float(job.confidence_level or 0.0):
+        return {
+            "recommendation": "paper_only",
+            "run_replay": True,
+            "message": "Sparkie averaged the target, but did not hit it often enough.",
+            "reason": (
+                f"Daily target was met on {daily_stats['target_hit_days']} of {daily_stats['days_tested']} trading days "
+                f"({daily_stats['target_hit_rate'] * 100:,.1f}%), below the requested "
+                f"{float(job.confidence_level or 0.0) * 100:,.1f}% confidence level."
             ),
         }
     if trades < 5 or win_rate < 0.50:
@@ -999,12 +1019,43 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
         "run_replay": True,
         "message": "Sparkie found a positive candidate and queued Replay verification.",
         "reason": (
-            f"Estimated {target_period} backtest P/L ${estimated_period_profit:,.2f} "
+            f"Average {target_period} backtest P/L ${estimated_period_profit:,.2f} "
             f"is greater than or equal to the user target ${float(job.target_profit or 0.0):,.2f}, "
-            f"with trade count, win-rate, and drawdown gates met. "
+            f"with {_daily_target_evidence_text(daily_stats, target_units, target_period, profit)}, "
+            f"trade count, win-rate, and drawdown gates met. "
             f"Replay verification is still required before Live Mirror."
         ),
     }
+
+
+def _daily_target_stats(raw_rows: Any, target_profit: float) -> dict[str, Any]:
+    if not isinstance(raw_rows, list):
+        return {"available": False}
+    profits = [float(row.get("profit_loss") or 0.0) for row in raw_rows if isinstance(row, dict) and row.get("date")]
+    if not profits:
+        return {"available": False}
+    hit_days = sum(1 for profit in profits if profit >= target_profit)
+    return {
+        "available": True,
+        "days_tested": len(profits),
+        "target_hit_days": hit_days,
+        "target_hit_rate": hit_days / len(profits),
+        "average_daily_profit_loss": sum(profits) / len(profits),
+    }
+
+
+def _daily_target_evidence_text(
+    daily_stats: dict[str, Any] | None,
+    target_units: float,
+    target_period: str,
+    total_profit: float,
+) -> str:
+    if daily_stats and daily_stats.get("available"):
+        return (
+            f"target met {daily_stats['target_hit_days']} of {daily_stats['days_tested']} trading days "
+            f"({daily_stats['target_hit_rate'] * 100:,.1f}% hit rate), cumulative P/L ${total_profit:,.2f}"
+        )
+    return f"{target_units:g} {target_period} unit evidence window total: ${total_profit:,.2f}"
 
 
 def _apply_best_candidate(db: Session, job: SparkieJob, row: dict[str, Any], decision: dict[str, Any]) -> None:

@@ -402,7 +402,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         # Candidate rows are the backtest evidence. Replay is displayed
         # separately instead of replacing this evidence with a one-session P/L.
         best = (
-            _sparkie_candidate_payload(selected_row, job.target_period)
+            _sparkie_candidate_payload(selected_row, job.target_period, job.target_profit)
             if selected_row
             else _sparkie_best_backtest_payload(job)
         )
@@ -476,10 +476,10 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "next_step": _sparkie_v2_next_step(job),
     }
     if include_details:
-        payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period) for row in candidates]
+        payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period, job.target_profit) for row in candidates]
         payload["events"] = [_sparkie_event_payload(row) for row in events]
     else:
-        payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period) for row in candidates]
+        payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period, job.target_profit) for row in candidates]
     return payload
 
 
@@ -648,10 +648,21 @@ def _sparkie_elapsed_seconds(job: SparkieJob) -> int:
     return max(int((datetime.utcnow() - started_at).total_seconds()), 0)
 
 
-def _sparkie_candidate_payload(row: SparkieCandidate, target_period: str | None = None) -> dict[str, Any]:
+def _sparkie_candidate_payload(
+    row: SparkieCandidate,
+    target_period: str | None = None,
+    target_profit: float | None = None,
+) -> dict[str, Any]:
     params = _parse_config_json(row.params_json)
     target_units = _sparkie_target_window_units(target_period)
     total_profit = float(row.profit_loss or 0.0)
+    daily_target = float(target_profit or 0.0) if str(target_period or "daily") == "daily" else None
+    daily_pnl = _sparkie_daily_pnl_summary(params.get("daily_pnl"), daily_target)
+    period_profit = (
+        float(daily_pnl["average_daily_profit_loss"])
+        if str(target_period or "daily") == "daily" and daily_pnl.get("available")
+        else total_profit / target_units if target_units else total_profit
+    )
     return {
         "id": row.id,
         "symbol": row.symbol,
@@ -661,7 +672,7 @@ def _sparkie_candidate_payload(row: SparkieCandidate, target_period: str | None 
         "score": row.score,
         "profit_loss": row.profit_loss,
         "total_profit_loss": row.profit_loss,
-        "estimated_profit_per_period": total_profit / target_units if target_units else total_profit,
+        "estimated_profit_per_period": period_profit,
         "trades": row.trades,
         "win_rate": row.win_rate,
         "max_drawdown": row.max_drawdown,
@@ -673,8 +684,44 @@ def _sparkie_candidate_payload(row: SparkieCandidate, target_period: str | None 
         "reference_price": params.get("sparkie_reference_price"),
         "eod_close": params.get("sparkie_eod_close", True),
         "overnight_positions_allowed": params.get("sparkie_overnight_positions_allowed", False),
+        "daily_pnl": daily_pnl,
         "params": params,
         "error_message": row.error_message,
+    }
+
+
+def _sparkie_daily_pnl_summary(raw_rows: Any, daily_target: float | None) -> dict[str, Any]:
+    if not isinstance(raw_rows, list):
+        return {"available": False, "days": []}
+    days: list[dict[str, Any]] = []
+    cumulative = 0.0
+    for raw in raw_rows:
+        if not isinstance(raw, dict) or not raw.get("date"):
+            continue
+        profit = float(raw.get("profit_loss") or 0.0)
+        cumulative = round(cumulative + profit, 2)
+        item = {
+            "date": str(raw["date"]),
+            "profit_loss": round(profit, 2),
+            "trades": int(raw.get("trades") or 0),
+            "cumulative_profit_loss": cumulative,
+        }
+        if daily_target is not None:
+            item["target_met"] = profit >= daily_target
+        days.append(item)
+    if not days:
+        return {"available": False, "days": []}
+    hit_days = sum(1 for item in days if item.get("target_met") is True)
+    return {
+        "available": True,
+        "days": days,
+        "days_tested": len(days),
+        "daily_target": daily_target,
+        "target_hit_days": hit_days if daily_target is not None else None,
+        "target_missed_days": len(days) - hit_days if daily_target is not None else None,
+        "no_trade_days": sum(1 for item in days if int(item["trades"]) == 0),
+        "cumulative_profit_loss": cumulative,
+        "average_daily_profit_loss": round(cumulative / len(days), 2),
     }
 
 
