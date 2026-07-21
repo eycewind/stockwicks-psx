@@ -28,6 +28,7 @@ MIN_ACCOUNT_EQUITY = 5000.0
 # Sparkie is intentionally an all-cash, one-position day-trading agent.
 # Share rounding can leave a small residual cash balance, but sizing always
 # starts from the entire client equity rather than a percentage allocation.
+CASH_DEPLOYMENT_POLICY = "full_cash_v1"
 DEFAULT_SYMBOL_BUCKET = ("AAPL", "NVDA", "AMD", "PLTR", "INTC")
 DEFAULT_INTERVAL_POLICY = ("15min", "10min", "5min", "1min")
 DEFAULT_ALGO_POLICY = ("Algo1_MM", "Algo2_MM", "Algo3_MM")
@@ -90,6 +91,7 @@ def create_sparkie_job(
         "target_period": target_period,
         "confidence_level": float(confidence_level),
         "symbol_bucket": symbols,
+        "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
     }
     job = SparkieJob(
         id=job_id,
@@ -735,6 +737,7 @@ def _backtest_symbol_interval(
     for row in result.get("top") or []:
         row["sparkie_trade_size"] = float(trade_size)
         row["sparkie_allocation_usd"] = round(float(allocation_usd), 2)
+        row["sparkie_cash_deployment_policy"] = CASH_DEPLOYMENT_POLICY
         row["sparkie_reference_price"] = round(float(reference_price), 4)
         row["sparkie_eod_close"] = True
         row["sparkie_overnight_positions_allowed"] = False
@@ -849,6 +852,7 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
             "message": "Sparkie day-trading mode forces end-of-day close in backtest and Replay.",
         },
         "trade_allocation_usd": _trade_allocation_usd(float(job.account_equity or 0.0)),
+        "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
         "candidate_count": len(ranked),
         "top": ranked,
         "errors": errors,
@@ -908,6 +912,7 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
         "min_new_bars_before_retrain",
         "sparkie_trade_size",
         "sparkie_allocation_usd",
+        "sparkie_cash_deployment_policy",
         "sparkie_reference_price",
         "sparkie_eod_close",
         "sparkie_overnight_positions_allowed",
@@ -1053,6 +1058,7 @@ def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[
             "sparkie_target_profit": float(job.target_profit),
             "sparkie_target_period": job.target_period,
             "sparkie_allocation_usd": round(allocation, 2),
+            "sparkie_cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
             "sparkie_eod_close": True,
             "sparkie_overnight_positions_allowed": False,
             "sparkie_fast_replay": True,
@@ -1083,7 +1089,7 @@ def _trade_quantity(
         raise ValueError(f"Sparkie could not determine a valid starting price for {symbol}.")
     allocation = _trade_allocation_usd(float(account_equity or 0.0))
     quantity = int(allocation // price)
-    if quantity < 1 and price <= float(account_equity) * 0.25:
+    if quantity < 1 and price <= float(account_equity):
         quantity = 1
     if quantity < 1:
         raise ValueError(f"{symbol} is above Sparkie's single-position cap.")

@@ -38,6 +38,7 @@ from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.replay_process import stop_session
 from app.services.sparkie_engine import (
     ACTIVE_STATUSES,
+    CASH_DEPLOYMENT_POLICY,
     MIN_ACCOUNT_EQUITY,
     TERMINAL_STATUSES,
     create_sparkie_job,
@@ -381,6 +382,12 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     created_at = job.created_at.isoformat() if job.created_at else None
     updated_at = job.updated_at.isoformat() if job.updated_at else None
     result_payload = _parse_json_value(job.result_json, {})
+    request_payload = _parse_json_value(job.request_json, {})
+    full_cash_policy = (
+        request_payload.get("cash_deployment_policy") == CASH_DEPLOYMENT_POLICY
+        if isinstance(request_payload, dict)
+        else False
+    )
     selected_row = next(
         (
             row for row in candidates
@@ -417,6 +424,8 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "target_profit_for_window": float(job.target_profit or 0.0) * _sparkie_target_window_units(job.target_period),
         "confidence_level": float(job.confidence_level or 0.0),
         "trade_allocation_usd": allocation,
+        "cash_deployment_policy": CASH_DEPLOYMENT_POLICY if full_cash_policy else "legacy_partial_cash",
+        "full_cash_results_valid": full_cash_policy,
         "target_math": {
             "account_return_pct": (target_profit / equity * 100.0) if equity else 0.0,
             "position_return_pct": (target_profit / allocation * 100.0) if allocation else 0.0,

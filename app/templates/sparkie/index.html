@@ -390,6 +390,10 @@
     const dayTradingPolicy = data.day_trading_policy || {};
     const targetMath = data.target_math || {};
     const replay = data.replay_verification;
+    const fullCashResultsValid = data.full_cash_results_valid === true;
+    const cashDeploymentText = fullCashResultsValid
+      ? `100% of available cash: up to $${Number(data.trade_allocation_usd || 0).toLocaleString()} in one day-trade (small residual may remain from whole-share rounding)`
+      : "Legacy partial-cash result. It is not valid for a full-cash decision; start a fresh evaluation.";
     const targetMathText = `Target is ${Number(targetMath.account_return_pct || 0).toFixed(2)}% of the account per ${escapeHtml(periodLabel)} and ${Number(targetMath.position_return_pct || 0).toFixed(2)}% of the $${Number(data.trade_allocation_usd || 0).toLocaleString()} trade allocation.`;
     const replayText = replay
       ? `${escapeHtml(replay.status || "unknown")} &middot; P/L $${Number(replay.profit_loss || 0).toLocaleString()} &middot; ${Number(replay.trades || 0).toLocaleString()} trades${replay.error_message ? ` &middot; ${escapeHtml(replay.error_message)}` : ""}`
@@ -406,7 +410,7 @@
         <div class="sparkie-summary-row"><span>Target return</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} per ${escapeHtml(periodLabel)}</strong></div>
         <div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>
         <div class="sparkie-summary-row"><span>Day-trading rule</span><strong>${dayTradingPolicy.eod_close === false ? "EOD close not enforced" : "End-of-day close required; no overnight positions"}</strong></div>
-        <div class="sparkie-summary-row"><span>Cash deployment</span><strong>100% of available cash: up to $${Number(data.trade_allocation_usd || 0).toLocaleString()} in one day-trade (small residual may remain from whole-share rounding)</strong></div>
+        <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${cashDeploymentText}</strong></div>
         <div class="sparkie-summary-row"><span>Required return</span><strong>${targetMathText}</strong></div>
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
@@ -437,6 +441,7 @@
 
     return `
       ${statusBanner(data)}
+      ${!fullCashResultsValid ? `<div class="sparkie-status-banner" style="border-color:rgba(251,191,36,.6);"><strong>Fresh run required</strong><div class="sparkie-muted">This historical job was calculated under Sparkie's former partial-cash sizing policy. Its P/L and share counts cannot be used to evaluate a full-cash account.</div></div>` : ""}
       ${summary}
       ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-muted">Sparkie reports estimated ${escapeHtml(periodLabel)} P/L first. Evidence total is the backtest-window support behind that estimate.</div><div class="sparkie-summary">${candidateRows}</div>` : ""}
       ${eventRows ? `<div style="height:14px"></div><h3>Events</h3><div class="sparkie-list">${eventRows}</div>` : ""}
