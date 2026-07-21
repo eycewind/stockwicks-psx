@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 MIN_ACCOUNT_EQUITY = 5000.0
 DEFAULT_SYMBOL_BUCKET = ("AAPL", "NVDA", "AMD", "PLTR", "INTC")
-DEFAULT_INTERVAL_POLICY = ("1min", "5min", "10min", "15min")
+DEFAULT_INTERVAL_POLICY = ("15min", "10min", "5min", "1min")
 DEFAULT_ALGO_POLICY = ("Algo1_MM", "Algo2_MM", "Algo3_MM")
 TERMINAL_STATUSES = {"completed", "rejected", "error", "stopped"}
 ACTIVE_STATUSES = {"queued", "preparing_data", "backtesting", "scoring", "verifying_replay"}
@@ -138,7 +138,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
     intervals = _json_list(job.interval_policy_json) or list(DEFAULT_INTERVAL_POLICY)
     algos = set(_json_list(job.algo_policy_json) or list(DEFAULT_ALGO_POLICY))
     lookback_days = int(os.getenv("SPARKIE_DATA_LOOKBACK_DAYS", "45"))
-    workers = max(1, min(int(os.getenv("SPARKIE_BACKTEST_WORKERS", "6")), 8))
+    workers = max(1, min(int(os.getenv("SPARKIE_BACKTEST_WORKERS", "4")), 8))
 
     total_steps = max(len(symbols) + 2, 1)
     _set_job(db, job, total_steps=total_steps, completed_steps=0, progress_pct=1.0)
@@ -676,7 +676,7 @@ def _backtest_symbol_interval(
         trade_size=1.0,
         builder_days=int(os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "45")),
         k_forward=int(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
-        profile=os.getenv("SPARKIE_BACKTEST_PROFILE", "quick"),
+        profile=os.getenv("SPARKIE_BACKTEST_PROFILE", "sparkie_probe"),
         allow_short=True,
         eod_close=True,
         oos_fraction=0.35,

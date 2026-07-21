@@ -240,8 +240,16 @@ def _fetch_price_frame(symbol: str, interval: str, builder_days: int, user_id: i
 
 def _param_grid(profile: str, algo_name: str) -> list[dict[str, Any]]:
     is_algo4 = str(algo_name or "") == "Algo4_MM"
-    is_deep = str(profile or "quick").lower() == "deep"
-    if is_deep:
+    profile_name = str(profile or "quick").lower()
+    is_deep = profile_name == "deep"
+    if profile_name == "sparkie_probe":
+        long_entries = [0.60]
+        short_entries = [0.40]
+        prob_trail_drops = [0.20]
+        stop_loss_pcts = [0.02]
+        trailing_profit_pcts = [0.005]
+        prob_exit_modes = ["trailing"]
+    elif is_deep:
         long_entries = [0.50, 0.55, 0.60, 0.65]
         short_entries = [0.30, 0.35, 0.40, 0.45]
         prob_trail_drops = [round(x / 100.0, 2) for x in range(5, 66, 5)]
@@ -319,7 +327,12 @@ def _indicator_param_grid() -> list[dict[str, Any]]:
 
 
 def _holdout_candidate_limit(profile: str) -> int:
-    return 50 if str(profile or "quick").lower() == "deep" else 20
+    profile_name = str(profile or "quick").lower()
+    if profile_name == "deep":
+        return 50
+    if profile_name == "sparkie_probe":
+        return 3
+    return 20
 
 
 def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
