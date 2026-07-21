@@ -377,6 +377,7 @@
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.progress_pct || 0).toLocaleString()}% · ${escapeHtml(data.completed_steps || 0)} / ${escapeHtml(data.total_steps || 0)} steps</strong></div>
         <div class="sparkie-summary-row"><span>Time</span><strong>Elapsed ${secondsText(data.elapsed_seconds)} · ETA ${secondsText(data.eta_seconds)}</strong></div>
         <div class="sparkie-summary-row"><span>Goal</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} ${escapeHtml(data.target_period || "")} on $${Number(data.account_equity || 0).toLocaleString()}</strong></div>
+        <div class="sparkie-summary-row"><span>Trade allocation</span><strong>About $${Number(data.trade_allocation_usd || 0).toLocaleString()} per trade, capped by account equity</strong></div>
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
@@ -390,7 +391,7 @@
 
     const candidateRows = candidates.map((item) => `
       <div class="sparkie-summary-row">
-        <span>${escapeHtml(item.symbol)} ${escapeHtml(item.interval)}</span>
+        <span>${escapeHtml(item.symbol)} ${escapeHtml(item.interval)} · ${Number(item.trade_size || 0).toLocaleString()} shares · about $${Number(item.allocation_usd || 0).toLocaleString()} notional</span>
         <strong>${escapeHtml(item.algo_name)} · score ${Number(item.score || 0).toLocaleString()} · P/L $${Number(item.profit_loss || 0).toLocaleString()} · ${Number(item.trades || 0).toLocaleString()} trades · win ${Number((item.win_rate || 0) * 100).toFixed(1)}%</strong>
       </div>
     `).join("");

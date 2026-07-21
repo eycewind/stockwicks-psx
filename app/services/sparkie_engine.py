@@ -25,6 +25,9 @@ from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_chea
 log = logging.getLogger(__name__)
 
 MIN_ACCOUNT_EQUITY = 5000.0
+MIN_TRADE_ALLOCATION_USD = 5000.0
+DEFAULT_TRADE_ALLOCATION_PCT = 0.20
+MAX_TRADE_ALLOCATION_PCT = 1.00
 DEFAULT_SYMBOL_BUCKET = ("AAPL", "NVDA", "AMD", "PLTR", "INTC")
 DEFAULT_INTERVAL_POLICY = ("15min", "10min", "5min", "1min")
 DEFAULT_ALGO_POLICY = ("Algo1_MM", "Algo2_MM", "Algo3_MM")
@@ -255,6 +258,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             interval,
             frame,
             int(job.user_id),
+            float(job.account_equity),
             str(job.id),
         ): (symbol, interval)
         for symbol, interval, frame in pending_units
@@ -667,6 +671,7 @@ def _backtest_symbol_interval(
     interval: str,
     frame: Any,
     user_id: int,
+    account_equity: float,
     job_id: str | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
@@ -688,11 +693,15 @@ def _backtest_symbol_interval(
                 f"{len(frame) if hasattr(frame, '__len__') else '?'} bars."
             ),
         )
+    trade_size, allocation_usd, reference_price = _trade_quantity_from_frame(
+        frame,
+        account_equity=account_equity,
+    )
     req = CheatSheetRequest(
         symbol=symbol,
         intervals=(interval,),
         user_id=user_id,
-        trade_size=1.0,
+        trade_size=trade_size,
         builder_days=int(os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "45")),
         k_forward=int(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
         profile=os.getenv("SPARKIE_BACKTEST_PROFILE", "sparkie_probe"),
@@ -715,11 +724,20 @@ def _backtest_symbol_interval(
         "bars_per_second": round((float(bars or 0) / elapsed), 2) if bars else None,
         "tested_combinations": int(result.get("tested_combinations") or 0),
         "candidate_count": len(result.get("top") or []),
+        "trade_size": float(trade_size),
+        "allocation_usd": round(float(allocation_usd), 2),
+        "reference_price": round(float(reference_price), 4),
     }
+    for row in result.get("top") or []:
+        row["sparkie_trade_size"] = float(trade_size)
+        row["sparkie_allocation_usd"] = round(float(allocation_usd), 2)
+        row["sparkie_reference_price"] = round(float(reference_price), 4)
     log.info(
-        "[SPARKIE] backtest unit done symbol=%s interval=%s tested=%s rows=%s seconds=%.1f",
+        "[SPARKIE] backtest unit done symbol=%s interval=%s trade_size=%s allocation=%.2f tested=%s rows=%s seconds=%.1f",
         symbol,
         interval,
+        trade_size,
+        allocation_usd,
         result.get("tested_combinations"),
         len(result.get("top") or []),
         elapsed,
@@ -819,6 +837,7 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
         "symbol_bucket": _json_list(job.symbol_bucket_json),
         "interval_policy": _json_list(job.interval_policy_json),
         "algo_policy": _json_list(job.algo_policy_json),
+        "trade_allocation_usd": _trade_allocation_usd(float(job.account_equity or 0.0)),
         "candidate_count": len(ranked),
         "top": ranked,
         "errors": errors,
@@ -876,6 +895,9 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
         "model_refresh_mode",
         "model_max_age_minutes",
         "min_new_bars_before_retrain",
+        "sparkie_trade_size",
+        "sparkie_allocation_usd",
+        "sparkie_reference_price",
     )
     return {
         "symbol": str(row.get("symbol") or "").upper(),
@@ -889,6 +911,8 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
         "validation_profit_loss": float(row.get("validation_total_profit") or 0.0),
         "validation_trades": int(row.get("validation_num_trades") or 0),
         "confidence": _confidence_number(row.get("confidence")),
+        "trade_size": float(row.get("sparkie_trade_size") or 0.0),
+        "allocation_usd": float(row.get("sparkie_allocation_usd") or 0.0),
         "params": {key: row.get(key) for key in keys if row.get(key) is not None},
     }
 
@@ -977,7 +1001,7 @@ def _apply_best_candidate(db: Session, job: SparkieJob, row: dict[str, Any], dec
 
 def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
     params = dict(row.get("params") or {})
-    allocation = max(float(job.account_equity) * 0.10, 1.0)
+    allocation = _trade_allocation_usd(float(job.account_equity or 0.0))
     cfg = _build_mm_replay_config(
         algo_name=str(row["algo_name"]),
         eod_auto_close="on",
@@ -1031,13 +1055,42 @@ def _trade_quantity(
     price = float(first_bar.get("open") or first_bar.get("close") or 0.0)
     if not math.isfinite(price) or price <= 0:
         raise ValueError(f"Sparkie could not determine a valid starting price for {symbol}.")
-    allocation = max(float(account_equity) * 0.10, 1.0)
+    allocation = _trade_allocation_usd(float(account_equity or 0.0))
     quantity = int(allocation // price)
     if quantity < 1 and price <= float(account_equity) * 0.25:
         quantity = 1
     if quantity < 1:
         raise ValueError(f"{symbol} is above Sparkie's single-position cap.")
     return float(quantity)
+
+
+def _trade_allocation_usd(account_equity: float) -> float:
+    equity = max(float(account_equity or 0.0), 0.0)
+    if equity <= 0:
+        return 0.0
+    min_allocation = float(os.getenv("SPARKIE_MIN_TRADE_ALLOCATION_USD", str(MIN_TRADE_ALLOCATION_USD)))
+    allocation_pct = float(os.getenv("SPARKIE_TRADE_ALLOCATION_PCT", str(DEFAULT_TRADE_ALLOCATION_PCT)))
+    max_pct = float(os.getenv("SPARKIE_MAX_TRADE_ALLOCATION_PCT", str(MAX_TRADE_ALLOCATION_PCT)))
+    target = max(equity * allocation_pct, min_allocation)
+    cap = max(equity * max_pct, 1.0)
+    return max(1.0, min(target, cap, equity))
+
+
+def _trade_quantity_from_frame(frame: Any, *, account_equity: float) -> tuple[float, float, float]:
+    df = pd.DataFrame(frame)
+    if df.empty:
+        raise ValueError("Sparkie cannot size trade from empty price frame.")
+    first_bar = df.iloc[0]
+    price = float(first_bar.get("open") or first_bar.get("close") or 0.0)
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError("Sparkie cannot size trade without a valid starting price.")
+    allocation = _trade_allocation_usd(float(account_equity or 0.0))
+    quantity = int(allocation // price)
+    if quantity < 1 and price <= float(account_equity or 0.0):
+        quantity = 1
+    if quantity < 1:
+        raise ValueError("Sparkie account allocation cannot buy one share for this symbol.")
+    return float(quantity), float(quantity) * price, price
 
 
 def _set_job(db: Session, job: SparkieJob, **updates: Any) -> None:

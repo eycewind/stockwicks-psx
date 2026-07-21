@@ -401,6 +401,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "target_profit": float(job.target_profit or 0.0),
         "target_period": job.target_period,
         "confidence_level": float(job.confidence_level or 0.0),
+        "trade_allocation_usd": _sparkie_trade_allocation_usd(float(job.account_equity or 0.0)),
         "progress_pct": round(float(job.progress_pct or 0.0), 1),
         "percent_complete": round(float(job.progress_pct or 0.0), 1),
         "elapsed_seconds": live_elapsed_seconds,
@@ -512,6 +513,18 @@ def _stop_sparkie_process_id(task_id: str | None) -> bool:
             return False
 
 
+def _sparkie_trade_allocation_usd(account_equity: float) -> float:
+    equity = max(float(account_equity or 0.0), 0.0)
+    if equity <= 0:
+        return 0.0
+    min_allocation = float(os.getenv("SPARKIE_MIN_TRADE_ALLOCATION_USD", "5000"))
+    allocation_pct = float(os.getenv("SPARKIE_TRADE_ALLOCATION_PCT", "0.20"))
+    max_pct = float(os.getenv("SPARKIE_MAX_TRADE_ALLOCATION_PCT", "1.00"))
+    target = max(equity * allocation_pct, min_allocation)
+    cap = max(equity * max_pct, 1.0)
+    return max(1.0, min(target, cap, equity))
+
+
 def _refresh_sparkie_v2_replay_status(db: Session, job: SparkieJob) -> None:
     if str(job.status or "") != "verifying_replay" or not job.replay_session_id:
         return
@@ -572,6 +585,7 @@ def _sparkie_elapsed_seconds(job: SparkieJob) -> int:
 
 
 def _sparkie_candidate_payload(row: SparkieCandidate) -> dict[str, Any]:
+    params = _parse_config_json(row.params_json)
     return {
         "id": row.id,
         "symbol": row.symbol,
@@ -586,7 +600,10 @@ def _sparkie_candidate_payload(row: SparkieCandidate) -> dict[str, Any]:
         "validation_profit_loss": row.validation_profit_loss,
         "validation_trades": row.validation_trades,
         "confidence": row.confidence,
-        "params": _parse_config_json(row.params_json),
+        "trade_size": params.get("sparkie_trade_size"),
+        "allocation_usd": params.get("sparkie_allocation_usd"),
+        "reference_price": params.get("sparkie_reference_price"),
+        "params": params,
         "error_message": row.error_message,
     }
 
