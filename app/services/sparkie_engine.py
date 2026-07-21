@@ -6,6 +6,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -133,7 +134,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
     intervals = _json_list(job.interval_policy_json) or list(DEFAULT_INTERVAL_POLICY)
     algos = set(_json_list(job.algo_policy_json) or list(DEFAULT_ALGO_POLICY))
     lookback_days = int(os.getenv("SPARKIE_DATA_LOOKBACK_DAYS", "45"))
-    workers = max(1, min(int(os.getenv("SPARKIE_BACKTEST_WORKERS", "3")), 4))
+    workers = max(1, min(int(os.getenv("SPARKIE_BACKTEST_WORKERS", "6")), 8))
 
     total_steps = max(len(symbols) + 2, 1)
     _set_job(db, job, total_steps=total_steps, completed_steps=0, progress_pct=1.0)
@@ -181,6 +182,19 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         )
         return {"ok": True, "status": job.status}
 
+    total_backtest_units = sum(
+        1
+        for frames in frames_by_symbol.values()
+        for interval in intervals
+        if interval in frames
+    )
+    _set_job(
+        db,
+        job,
+        total_steps=max(len(symbols) + total_backtest_units + 2, 1),
+        eta_seconds=None,
+    )
+
     _set_job(
         db,
         job,
@@ -194,28 +208,38 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         job,
         "backtesting",
         f"Backtesting {len(frames_by_symbol)} symbols across {len(intervals)} interval(s) and {len(algos)} algo(s).",
+        {
+            "backtest_units": [
+                {"symbol": symbol, "interval": interval}
+                for symbol in frames_by_symbol
+                for interval in intervals
+            ],
+            "workers": workers,
+        },
     )
 
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
+    completed_units = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
-                _backtest_symbol,
+                _backtest_symbol_interval,
                 symbol,
-                frames,
-                intervals,
+                interval,
+                frames[interval],
                 int(job.user_id),
-            ): symbol
+            ): (symbol, interval)
             for symbol, frames in frames_by_symbol.items()
+            for interval in intervals
+            if interval in frames
         }
-        completed_backtests = 0
         for future in as_completed(futures):
-            symbol = futures[future]
+            symbol, interval = futures[future]
             if _stop_requested(db, job_id):
                 pool.shutdown(wait=False, cancel_futures=True)
                 return _mark_stopped(db, job)
-            completed_backtests += 1
+            completed_units += 1
             try:
                 result = future.result()
                 symbol_rows = [
@@ -228,21 +252,32 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                     db,
                     job,
                     "backtesting",
-                    f"{symbol}: tested {result.get('tested_combinations') or 0} combinations, {len(symbol_rows)} candidates.",
-                    {"symbol": symbol, "candidate_count": len(symbol_rows)},
+                    (
+                        f"{symbol} {interval}: tested {result.get('tested_combinations') or 0} "
+                        f"combinations, {len(symbol_rows)} candidates."
+                    ),
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "candidate_count": len(symbol_rows),
+                        "tested_combinations": result.get("tested_combinations") or 0,
+                    },
                 )
+                _replace_candidates(db, job, _rank_candidates(rows)[:50], errors[:20])
             except Exception as exc:
-                errors.append(f"{symbol}: {exc}")
-                add_event(db, job, "backtesting", f"{symbol}: backtest failed: {exc}", level="warning")
+                errors.append(f"{symbol} {interval}: {exc}")
+                add_event(db, job, "backtesting", f"{symbol} {interval}: backtest failed: {exc}", level="warning")
             _update_progress(
                 db,
                 job,
-                completed_steps=len(symbols) + completed_backtests,
+                completed_steps=len(symbols) + completed_units,
                 started_at=started,
+                candidates_tested=len(rows),
             )
 
     ranked = _rank_candidates(rows)
     _replace_candidates(db, job, ranked[:50], errors[:20])
+    summary_path = _write_summary_file(job, ranked[:50], errors[:50])
     _set_job(
         db,
         job,
@@ -250,6 +285,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         stage="scoring",
         message="Sparkie is scoring the final pick.",
         candidates_tested=len(rows),
+        result_json=_json({"summary_file": str(summary_path), "top": ranked[:10], "errors": errors[:30]}),
     )
 
     if not ranked:
@@ -513,15 +549,15 @@ def add_event(
     db.flush()
 
 
-def _backtest_symbol(
+def _backtest_symbol_interval(
     symbol: str,
-    frames: dict[str, Any],
-    intervals: list[str],
+    interval: str,
+    frame: Any,
     user_id: int,
 ) -> dict[str, Any]:
     req = CheatSheetRequest(
         symbol=symbol,
-        intervals=tuple(intervals),
+        intervals=(interval,),
         user_id=user_id,
         trade_size=1.0,
         builder_days=int(os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "45")),
@@ -532,7 +568,28 @@ def _backtest_symbol(
         oos_fraction=0.35,
         algo_names=tuple(sparkie_algo_policy()),
     )
-    return run_cheatsheet(req, price_frames=frames)
+    return run_cheatsheet(req, price_frames={interval: frame})
+
+
+def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: list[str]) -> Path:
+    base_dir = Path(os.getenv("DATA_DIR", "data")) / str(job.user_id) / "sparkie"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    path = base_dir / f"{job.id}_summary.json"
+    payload = {
+        "job_id": job.id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "account_equity": float(job.account_equity or 0.0),
+        "target_profit": float(job.target_profit or 0.0),
+        "target_period": job.target_period,
+        "symbol_bucket": _json_list(job.symbol_bucket_json),
+        "interval_policy": _json_list(job.interval_policy_json),
+        "algo_policy": _json_list(job.algo_policy_json),
+        "candidate_count": len(ranked),
+        "top": ranked,
+        "errors": errors,
+    }
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return path
 
 
 def _rank_candidates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -785,7 +842,14 @@ def _finish_job(
     db.commit()
 
 
-def _update_progress(db: Session, job: SparkieJob, *, completed_steps: int, started_at: datetime) -> None:
+def _update_progress(
+    db: Session,
+    job: SparkieJob,
+    *,
+    completed_steps: int,
+    started_at: datetime,
+    candidates_tested: int | None = None,
+) -> None:
     total = max(int(job.total_steps or 1), 1)
     completed = max(0, min(int(completed_steps), total))
     elapsed = max(int((datetime.utcnow() - started_at).total_seconds()), 0)
@@ -797,6 +861,8 @@ def _update_progress(db: Session, job: SparkieJob, *, completed_steps: int, star
     job.elapsed_seconds = elapsed
     job.eta_seconds = eta
     job.progress_pct = pct
+    if candidates_tested is not None:
+        job.candidates_tested = int(candidates_tested)
     job.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(job)

@@ -357,6 +357,7 @@
     const replayLink = data.replay_session_id
       ? `<a class="sparkie-link" href="${urlPrefix}/replay-simulator">Replay session #${escapeHtml(data.replay_session_id)}</a>`
       : "Not queued yet";
+    const summaryFile = data.summary_file || "Not written yet";
     const policy = [
       `Bucket: ${(data.symbol_bucket || []).join(", ") || "default"}`,
       `Intervals: ${(data.interval_policy || []).join(", ") || "auto"}`,
@@ -374,6 +375,7 @@
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Summary file</span><strong>${escapeHtml(summaryFile)}</strong></div>
         <div class="sparkie-summary-row"><span>Replay verify</span><strong>${replayLink}</strong></div>
         ${best ? `<div class="sparkie-summary-row"><span>Best pick</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()} · ${Number(best.trades || 0).toLocaleString()} trades</strong></div>` : ""}
       </div>

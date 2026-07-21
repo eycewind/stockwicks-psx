@@ -358,6 +358,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         )
     created_at = job.created_at.isoformat() if job.created_at else None
     updated_at = job.updated_at.isoformat() if job.updated_at else None
+    result_payload = _parse_json_value(job.result_json, {})
     best = None
     if job.best_symbol:
         best = {
@@ -392,6 +393,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "best_session": best,
         "best_candidate": best,
         "replay_session_id": job.replay_session_id,
+        "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "error_message": job.error_message,
         "created_at": created_at,
         "updated_at": updated_at,
