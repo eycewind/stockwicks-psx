@@ -221,7 +221,7 @@
             </select>
           </div>
           <div class="sparkie-field">
-            <label for="confidenceLevel">Confidence level</label>
+            <label for="confidenceLevel">Required target-hit confidence</label>
             <input id="confidenceLevel" type="number" min="0.4" max="0.95" step="0.05" value="0.6">
           </div>
         </div>
@@ -392,12 +392,19 @@
     const replay = data.replay_verification;
     const fullCashResultsValid = data.full_cash_results_valid === true;
     const bestDailyPnl = best && best.daily_pnl ? best.daily_pnl : {};
+    const liveReadiness = bestDailyPnl.historical_live_readiness || {};
     const dailyPnlText = bestDailyPnl.available
       ? `Average $${Number(bestDailyPnl.average_daily_profit_loss || 0).toLocaleString()} daily; cumulative $${Number(bestDailyPnl.cumulative_profit_loss || 0).toLocaleString()} across ${Number(bestDailyPnl.days_tested || 0).toLocaleString()} trading days`
       : "Not recorded for this historical result. Start a fresh evaluation.";
     const targetHitText = bestDailyPnl.available && bestDailyPnl.daily_target !== null && bestDailyPnl.daily_target !== undefined
       ? `${Number(bestDailyPnl.target_hit_days || 0).toLocaleString()} target-hit days; ${Number(bestDailyPnl.target_missed_days || 0).toLocaleString()} missed days; ${Number(bestDailyPnl.no_trade_days || 0).toLocaleString()} no-trade days`
       : "Available for fresh daily-target evaluations.";
+    const profitableDayText = bestDailyPnl.available
+      ? `${Number(bestDailyPnl.profitable_days || 0).toLocaleString()} profitable days (${(Number(bestDailyPnl.profitable_day_rate || 0) * 100).toFixed(1)}%); ${Number(bestDailyPnl.non_profitable_days || 0).toLocaleString()} days with no profit or a loss`
+      : "Not recorded for this historical result. Start a fresh evaluation.";
+    const liveConfidenceText = bestDailyPnl.available && liveReadiness.observed_target_hit_rate !== null && liveReadiness.observed_target_hit_rate !== undefined
+      ? `Historical target-hit estimate ${(Number(liveReadiness.observed_target_hit_rate || 0) * 100).toFixed(1)}%; 95% uncertainty range ${(Number(liveReadiness.target_hit_rate_95pct_low || 0) * 100).toFixed(1)}%–${(Number(liveReadiness.target_hit_rate_95pct_high || 0) * 100).toFixed(1)}%; evidence: ${escapeHtml(liveReadiness.evidence_level || "unknown")}. Not a live-profit promise.`
+      : "Not available until a daily backtest has been completed.";
     const cashDeploymentText = fullCashResultsValid
       ? `100% of available cash: up to $${Number(data.trade_allocation_usd || 0).toLocaleString()} in one day-trade (small residual may remain from whole-share rounding)`
       : "Legacy partial-cash result. It is not valid for a full-cash decision; start a fresh evaluation.";
@@ -423,7 +430,9 @@
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
         ${best ? `<div class="sparkie-summary-row"><span>Actual daily P/L</span><strong>${dailyPnlText}</strong></div>` : ""}
+        ${best ? `<div class="sparkie-summary-row"><span>Profitable-day rate</span><strong>${profitableDayText}</strong></div>` : ""}
         ${best ? `<div class="sparkie-summary-row"><span>Daily target results</span><strong>${targetHitText}</strong></div>` : ""}
+        ${best ? `<div class="sparkie-summary-row"><span>Historical live confidence</span><strong>${liveConfidenceText}</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Summary file</span><strong>${escapeHtml(summaryFile)}</strong></div>

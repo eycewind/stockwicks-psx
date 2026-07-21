@@ -712,6 +712,8 @@ def _sparkie_daily_pnl_summary(raw_rows: Any, daily_target: float | None) -> dic
     if not days:
         return {"available": False, "days": []}
     hit_days = sum(1 for item in days if item.get("target_met") is True)
+    profitable_days = sum(1 for item in days if float(item["profit_loss"]) > 0.0)
+    target_interval = _wilson_interval(hit_days, len(days)) if daily_target is not None else None
     return {
         "available": True,
         "days": days,
@@ -719,10 +721,32 @@ def _sparkie_daily_pnl_summary(raw_rows: Any, daily_target: float | None) -> dic
         "daily_target": daily_target,
         "target_hit_days": hit_days if daily_target is not None else None,
         "target_missed_days": len(days) - hit_days if daily_target is not None else None,
+        "target_hit_rate": round(hit_days / len(days), 4) if daily_target is not None else None,
+        "profitable_days": profitable_days,
+        "non_profitable_days": len(days) - profitable_days,
+        "profitable_day_rate": round(profitable_days / len(days), 4),
         "no_trade_days": sum(1 for item in days if int(item["trades"]) == 0),
         "cumulative_profit_loss": cumulative,
         "average_daily_profit_loss": round(cumulative / len(days), 2),
+        "historical_live_readiness": {
+            "observed_target_hit_rate": round(hit_days / len(days), 4) if daily_target is not None else None,
+            "target_hit_rate_95pct_low": target_interval[0] if target_interval else None,
+            "target_hit_rate_95pct_high": target_interval[1] if target_interval else None,
+            "evidence_level": "insufficient" if len(days) < 10 else "limited" if len(days) < 20 else "moderate",
+            "message": "Historical evidence only; this is not a promise of live-trading profit.",
+        },
     }
+
+
+def _wilson_interval(successes: int, trials: int, z_score: float = 1.96) -> tuple[float, float] | None:
+    if trials <= 0:
+        return None
+    observed = max(0.0, min(1.0, float(successes) / float(trials)))
+    z_squared = z_score * z_score
+    denominator = 1.0 + z_squared / trials
+    center = (observed + z_squared / (2.0 * trials)) / denominator
+    spread = z_score * math.sqrt((observed * (1.0 - observed) + z_squared / (4.0 * trials)) / trials) / denominator
+    return round(max(0.0, center - spread), 4), round(min(1.0, center + spread), 4)
 
 
 def _sparkie_event_payload(row: SparkieEvent) -> dict[str, Any]:
