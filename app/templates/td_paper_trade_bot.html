@@ -148,12 +148,14 @@
 }
 
 .chart-title{ color:#a7a7c7; font-size:14px; margin:0 0 8px 0; }
+.chart-balance{ grid-column:1 / -1; max-width:1064px; width:100%; box-sizing:border-box; }
 .chart svg{
     width:100%;
     height:340px;   /* ← bigger chart */
     display:block;
 }
 @media (max-width:980px){ .chart-row{ grid-template-columns:1fr; } }
+@media (max-width:980px){ .chart-balance{ grid-column:auto; } }
   .prob-zoom{
     display:flex;
     gap:6px;
@@ -821,6 +823,10 @@
 <!-- 📈 Daily Performance Charts (driven by the same filters) -->
 <div class="charts-card" aria-live="polite">
   <div class="chart-row">
+    <div class="chart chart-balance">
+      <h4 class="chart-title">Daily Total Balance ($)</h4>
+      <svg id="balanceChart" viewBox="0 0 1200 200" preserveAspectRatio="none"></svg>
+    </div>
     <div class="chart">
       <h4 class="chart-title">Daily Success Rate (%)</h4>
       <svg id="winRateChart" viewBox="0 0 600 200" preserveAspectRatio="none"></svg>
@@ -911,6 +917,8 @@
 
   const winRateSVG = document.getElementById('winRateChart');
   const netPlSVG   = document.getElementById('netPlChart');
+  const balanceSVG = document.getElementById('balanceChart');
+  const initialBalance = Number({{ paper_account.initial_balance | tojson }});
 
   // Prob chart elements
   const probSvg    = document.getElementById('probChart');
@@ -1313,8 +1321,90 @@
     }
   }
 
+  // === Cumulative end-of-day account balance ===============================
+  function renderBalanceLine(svg, data) {
+    clearSVG(svg);
+    if (!svg || data.length === 0) return;
+
+    let runningBalance = Number.isFinite(initialBalance) ? initialBalance : 0;
+    const points = data.map(day => {
+      runningBalance += day.netPL;
+      return { ...day, balance: runningBalance };
+    });
+
+    const W = svg.viewBox.baseVal.width || 1200;
+    const H = svg.viewBox.baseVal.height || 200;
+    const PAD_L = 72, PAD_R = 20, PAD_T = 24, PAD_B = 32;
+    const innerW = W - PAD_L - PAD_R;
+    const innerH = H - PAD_T - PAD_B;
+    const balances = points.map(point => point.balance);
+    let yMin = Math.min(...balances, initialBalance);
+    let yMax = Math.max(...balances, initialBalance);
+    const padding = Math.max((yMax - yMin) * 0.12, Math.abs(yMax) * 0.002, 1);
+    yMin -= padding;
+    yMax += padding;
+
+    const x = index => PAD_L + (points.length > 1 ? index * innerW / (points.length - 1) : innerW / 2);
+    const y = value => H - PAD_B - ((value - yMin) / (yMax - yMin)) * innerH;
+
+    for (let i = 0; i <= 2; i += 1) {
+      const value = yMin + ((yMax - yMin) * i / 2);
+      const yy = y(value);
+      const grid = document.createElementNS(svg.namespaceURI, 'line');
+      grid.setAttribute('x1', String(PAD_L));
+      grid.setAttribute('x2', String(W - PAD_R));
+      grid.setAttribute('y1', String(yy));
+      grid.setAttribute('y2', String(yy));
+      grid.setAttribute('stroke', '#2a2a55');
+      svg.appendChild(grid);
+
+      const label = document.createElementNS(svg.namespaceURI, 'text');
+      label.setAttribute('x', String(PAD_L - 8));
+      label.setAttribute('y', String(yy + 4));
+      label.setAttribute('fill', '#a7a7c7');
+      label.setAttribute('font-size', '10');
+      label.setAttribute('text-anchor', 'end');
+      label.textContent = '$' + value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      svg.appendChild(label);
+    }
+
+    const line = document.createElementNS(svg.namespaceURI, 'polyline');
+    line.setAttribute('points', points.map((point, index) => `${x(index)},${y(point.balance)}`).join(' '));
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', '#6ff22e');
+    line.setAttribute('stroke-width', '3');
+    line.setAttribute('stroke-linejoin', 'round');
+    line.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(line);
+
+    const tickStep = Math.max(1, Math.ceil(points.length / 6));
+    points.forEach((point, index) => {
+      const dot = document.createElementNS(svg.namespaceURI, 'circle');
+      dot.setAttribute('cx', String(x(index)));
+      dot.setAttribute('cy', String(y(point.balance)));
+      dot.setAttribute('r', '3');
+      dot.setAttribute('fill', '#6ff22e');
+      const title = document.createElementNS(svg.namespaceURI, 'title');
+      title.textContent = `${point.date}: $${point.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      dot.appendChild(title);
+      svg.appendChild(dot);
+
+      if (index % tickStep === 0 || index === points.length - 1) {
+        const dateLabel = document.createElementNS(svg.namespaceURI, 'text');
+        dateLabel.setAttribute('x', String(x(index)));
+        dateLabel.setAttribute('y', String(H - 6));
+        dateLabel.setAttribute('fill', '#a7a7c7');
+        dateLabel.setAttribute('font-size', '10');
+        dateLabel.setAttribute('text-anchor', 'middle');
+        dateLabel.textContent = point.date.slice(5);
+        svg.appendChild(dateLabel);
+      }
+    });
+  }
+
   function renderChartsFrom(rows) {
     const daily = aggregateDaily(rows);
+    renderBalanceLine(balanceSVG, daily);
     renderWinRateLine(winRateSVG, daily);
     renderNetPlBars(netPlSVG, daily);
   }
