@@ -77,8 +77,11 @@ def create_sparkie_job(
     target_profit: float,
     target_period: str,
     confidence_level: float,
+    symbol_bucket: list[str] | None = None,
 ) -> SparkieJob:
-    symbols = sparkie_symbol_bucket()
+    # A user may intentionally narrow or replace the configured universe for
+    # one evaluation. An empty selection keeps the operator's default policy.
+    symbols = list(symbol_bucket or []) or sparkie_symbol_bucket()
     intervals = sparkie_interval_policy()
     algos = sparkie_algo_policy()
     request = {
@@ -86,6 +89,7 @@ def create_sparkie_job(
         "target_profit": float(target_profit),
         "target_period": target_period,
         "confidence_level": float(confidence_level),
+        "symbol_bucket": symbols,
     }
     job = SparkieJob(
         id=job_id,

@@ -67,7 +67,8 @@
     margin-bottom: 6px;
   }
   .sparkie-field input,
-  .sparkie-field select {
+  .sparkie-field select,
+  .sparkie-field textarea {
     width: 100%;
     box-sizing: border-box;
     border: 1px solid rgba(148, 163, 184, 0.26);
@@ -200,6 +201,12 @@
           </div>
         </div>
 
+        <div class="sparkie-field">
+          <label for="symbolBucket">Stocks Sparkie should evaluate</label>
+          <textarea id="symbolBucket" rows="2" maxlength="200">{{ default_symbol_bucket }}</textarea>
+          <div class="sparkie-muted" style="font-size:12px; margin-top:6px;">Comma-separated tickers. Change this bucket for this run; Sparkie still chooses the interval and strategy automatically.</div>
+        </div>
+
         <div class="sparkie-row">
           <div class="sparkie-field">
             <label for="targetPeriod">Target period</label>
@@ -330,11 +337,16 @@
   }
 
   function evaluationPayload() {
+    const symbols = document.getElementById("symbolBucket").value
+      .split(/[\s,]+/)
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean);
     return {
       account_equity: Number(document.getElementById("accountEquity").value || 0),
       target_profit: Number(document.getElementById("targetProfit").value || 0),
       target_period: document.getElementById("targetPeriod").value,
-      confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6)
+      confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
+      symbols
     };
   }
 
@@ -372,6 +384,12 @@
     const periodLabel = data.target_period || "period";
     const evidenceWindowText = `${Number(data.target_window_units || 0).toLocaleString()} ${periodLabel} unit(s), target total $${Number(data.target_profit_for_window || 0).toLocaleString()}`;
     const dayTradingPolicy = data.day_trading_policy || {};
+    const targetMath = data.target_math || {};
+    const replay = data.replay_verification;
+    const targetMathText = `Target is ${Number(targetMath.account_return_pct || 0).toFixed(2)}% of the account per ${escapeHtml(periodLabel)} and ${Number(targetMath.position_return_pct || 0).toFixed(2)}% of the $${Number(data.trade_allocation_usd || 0).toLocaleString()} trade allocation.`;
+    const replayText = replay
+      ? `${escapeHtml(replay.status || "unknown")} &middot; P/L $${Number(replay.profit_loss || 0).toLocaleString()} &middot; ${Number(replay.trades || 0).toLocaleString()} trades${replay.error_message ? ` &middot; ${escapeHtml(replay.error_message)}` : ""}`
+      : "Not queued yet";
 
     const summary = `
       <div class="sparkie-summary">
@@ -385,13 +403,14 @@
         <div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>
         <div class="sparkie-summary-row"><span>Day-trading rule</span><strong>${dayTradingPolicy.eod_close === false ? "EOD close not enforced" : "End-of-day close required; no overnight positions"}</strong></div>
         <div class="sparkie-summary-row"><span>Trade allocation</span><strong>About $${Number(data.trade_allocation_usd || 0).toLocaleString()} per trade, capped by account equity</strong></div>
+        <div class="sparkie-summary-row"><span>Required return</span><strong>${targetMathText}</strong></div>
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
         <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Summary file</span><strong>${escapeHtml(summaryFile)}</strong></div>
-        <div class="sparkie-summary-row"><span>Replay verify</span><strong>${replayLink}</strong></div>
+        <div class="sparkie-summary-row"><span>Replay verification</span><strong>${replayText}${data.replay_session_id ? ` &middot; ${replayLink}` : ""}</strong></div>
         ${best ? `<div class="sparkie-summary-row"><span>Best estimated ${escapeHtml(periodLabel)} P/L</span><strong>$${Number(best.estimated_profit_per_period || 0).toLocaleString()} · evidence-window total $${Number(best.total_profit_loss || best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
         ${best ? `<div class="sparkie-summary-row"><span>Best pick</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()} · ${Number(best.trades || 0).toLocaleString()} trades</strong></div>` : ""}
       </div>

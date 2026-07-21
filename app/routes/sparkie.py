@@ -41,6 +41,7 @@ from app.services.sparkie_engine import (
     MIN_ACCOUNT_EQUITY,
     TERMINAL_STATUSES,
     create_sparkie_job,
+    sparkie_symbol_bucket,
     stop_sparkie_job,
 )
 from app.trading.sparkie import (
@@ -107,6 +108,7 @@ def sparkie_page(
             "request": request,
             "user": user,
             "title": "Sparkie Agent",
+            "default_symbol_bucket": ",".join(sparkie_symbol_bucket()),
         },
     )
 
@@ -182,6 +184,7 @@ def run_evaluation(
         target_profit=payload.target_profit,
         target_period=payload.target_period,
         confidence_level=payload.confidence_level,
+        symbol_bucket=_clean_symbols(payload.symbols),
     )
     db.commit()
 
@@ -378,21 +381,27 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     created_at = job.created_at.isoformat() if job.created_at else None
     updated_at = job.updated_at.isoformat() if job.updated_at else None
     result_payload = _parse_json_value(job.result_json, {})
+    selected_row = next(
+        (
+            row for row in candidates
+            if row.symbol == job.best_symbol
+            and row.interval == job.best_interval
+            and row.algo_name == job.best_algo_name
+        ),
+        None,
+    )
     best = None
     if job.best_symbol:
-        target_units = _sparkie_target_window_units(job.target_period)
-        best_profit = float(job.best_profit_loss or 0.0)
-        best = {
-            "symbol": job.best_symbol,
-            "interval": job.best_interval,
-            "algo_name": job.best_algo_name,
-            "score": job.best_score,
-            "profit_loss": job.best_profit_loss,
-            "total_profit_loss": job.best_profit_loss,
-            "estimated_profit_per_period": best_profit / target_units if target_units else best_profit,
-            "trades": job.best_trades,
-            "win_rate": job.best_win_rate,
-        }
+        # Candidate rows are the backtest evidence. Replay is displayed
+        # separately instead of replacing this evidence with a one-session P/L.
+        best = (
+            _sparkie_candidate_payload(selected_row, job.target_period)
+            if selected_row
+            else _sparkie_best_backtest_payload(job)
+        )
+    allocation = _sparkie_trade_allocation_usd(float(job.account_equity or 0.0))
+    equity = float(job.account_equity or 0.0)
+    target_profit = float(job.target_profit or 0.0)
     live_elapsed_seconds = _sparkie_elapsed_seconds(job) if str(job.status or "") in ACTIVE_STATUSES else int(job.elapsed_seconds or 0)
     payload = {
         "ok": True,
@@ -407,7 +416,12 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "target_window_units": _sparkie_target_window_units(job.target_period),
         "target_profit_for_window": float(job.target_profit or 0.0) * _sparkie_target_window_units(job.target_period),
         "confidence_level": float(job.confidence_level or 0.0),
-        "trade_allocation_usd": _sparkie_trade_allocation_usd(float(job.account_equity or 0.0)),
+        "trade_allocation_usd": allocation,
+        "target_math": {
+            "account_return_pct": (target_profit / equity * 100.0) if equity else 0.0,
+            "position_return_pct": (target_profit / allocation * 100.0) if allocation else 0.0,
+            "allocation_share_of_equity_pct": (allocation / equity * 100.0) if equity else 0.0,
+        },
         "day_trading_policy": {
             "eod_close": True,
             "overnight_positions_allowed": False,
@@ -425,6 +439,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "best_session": best,
         "best_candidate": best,
         "replay_session_id": job.replay_session_id,
+        "replay_verification": _sparkie_replay_verification_payload(db, job),
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,
         "error_message": job.error_message,
@@ -457,6 +472,38 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     else:
         payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period) for row in candidates]
     return payload
+
+
+def _sparkie_best_backtest_payload(job: SparkieJob) -> dict[str, Any]:
+    target_units = _sparkie_target_window_units(job.target_period)
+    profit = float(job.best_profit_loss or 0.0)
+    return {
+        "symbol": job.best_symbol,
+        "interval": job.best_interval,
+        "algo_name": job.best_algo_name,
+        "score": job.best_score,
+        "profit_loss": profit,
+        "total_profit_loss": profit,
+        "estimated_profit_per_period": profit / target_units if target_units else profit,
+        "trades": job.best_trades,
+        "win_rate": job.best_win_rate,
+    }
+
+
+def _sparkie_replay_verification_payload(db: Session, job: SparkieJob) -> dict[str, Any] | None:
+    if not job.replay_session_id:
+        return None
+    replay = db.get(ReplaySession, int(job.replay_session_id))
+    if not replay:
+        return {"session_id": job.replay_session_id, "status": "missing"}
+    pnl, trades = _replay_session_pnl(db, int(replay.id))
+    return {
+        "session_id": int(replay.id),
+        "status": str(replay.status or "").lower(),
+        "profit_loss": pnl,
+        "trades": trades,
+        "error_message": replay.error_message,
+    }
 
 
 def _refresh_sparkie_v2_runtime_status(db: Session, job: SparkieJob) -> None:
@@ -579,8 +626,8 @@ def _refresh_sparkie_v2_replay_status(db: Session, job: SparkieJob) -> None:
         job.stage = "error"
         job.message = replay.error_message or "Sparkie Replay verification failed."
         job.error_message = job.message
-    job.best_profit_loss = pnl if replay_status == "COMPLETED" else job.best_profit_loss
-    job.best_trades = trade_count if replay_status == "COMPLETED" else job.best_trades
+    # best_* remains the selected backtest result. Replay is a separate
+    # verification result and must never overwrite the selection evidence.
     job.progress_pct = 100.0
     job.completed_steps = max(int(job.total_steps or 0), int(job.completed_steps or 0))
     job.elapsed_seconds = _sparkie_elapsed_seconds(job)
