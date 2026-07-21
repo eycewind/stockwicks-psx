@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import time
@@ -19,6 +20,8 @@ from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 
+
+log = logging.getLogger(__name__)
 
 MIN_ACCOUNT_EQUITY = 5000.0
 DEFAULT_SYMBOL_BUCKET = ("AAPL", "NVDA", "AMD", "PLTR", "INTC")
@@ -217,22 +220,39 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             "workers": workers,
         },
     )
+    db.commit()
+    db.refresh(job)
 
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     completed_units = 0
+    pending_units = [
+        (symbol, interval, frames[interval])
+        for symbol, frames in frames_by_symbol.items()
+        for interval in intervals
+        if interval in frames
+    ]
+    for symbol, interval, frame in pending_units:
+        add_event(
+            db,
+            job,
+            "backtesting",
+            f"{symbol} {interval}: queued backtest unit with {len(frame)} bars.",
+            {"symbol": symbol, "interval": interval, "bars": len(frame)},
+        )
+    db.commit()
+    db.refresh(job)
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
                 _backtest_symbol_interval,
                 symbol,
                 interval,
-                frames[interval],
+                frame,
                 int(job.user_id),
             ): (symbol, interval)
-            for symbol, frames in frames_by_symbol.items()
-            for interval in intervals
-            if interval in frames
+            for symbol, interval, frame in pending_units
         }
         for future in as_completed(futures):
             symbol, interval = futures[future]
@@ -555,6 +575,14 @@ def _backtest_symbol_interval(
     frame: Any,
     user_id: int,
 ) -> dict[str, Any]:
+    started = time.monotonic()
+    log.info(
+        "[SPARKIE] backtest unit start symbol=%s interval=%s rows=%s user_id=%s",
+        symbol,
+        interval,
+        len(frame) if hasattr(frame, "__len__") else "?",
+        user_id,
+    )
     req = CheatSheetRequest(
         symbol=symbol,
         intervals=(interval,),
@@ -568,7 +596,16 @@ def _backtest_symbol_interval(
         oos_fraction=0.35,
         algo_names=tuple(sparkie_algo_policy()),
     )
-    return run_cheatsheet(req, price_frames={interval: frame})
+    result = run_cheatsheet(req, price_frames={interval: frame})
+    log.info(
+        "[SPARKIE] backtest unit done symbol=%s interval=%s tested=%s rows=%s seconds=%.1f",
+        symbol,
+        interval,
+        result.get("tested_combinations"),
+        len(result.get("top") or []),
+        time.monotonic() - started,
+    )
+    return result
 
 
 def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: list[str]) -> Path:
