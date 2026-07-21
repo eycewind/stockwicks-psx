@@ -5,7 +5,7 @@ import logging
 import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -191,10 +191,12 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         for interval in intervals
         if interval in frames
     )
+    total_backtest_steps = max(len(symbols) + total_backtest_units + 2, 1)
     _set_job(
         db,
         job,
-        total_steps=max(len(symbols) + total_backtest_units + 2, 1),
+        total_steps=total_backtest_steps,
+        progress_pct=round((min(len(symbols), total_backtest_steps) / total_backtest_steps) * 100.0, 1),
         eta_seconds=None,
     )
 
@@ -243,57 +245,69 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
     db.commit()
     db.refresh(job)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
-                _backtest_symbol_interval,
-                symbol,
-                interval,
-                frame,
-                int(job.user_id),
-            ): (symbol, interval)
-            for symbol, interval, frame in pending_units
-        }
-        for future in as_completed(futures):
-            symbol, interval = futures[future]
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = {
+        pool.submit(
+            _backtest_symbol_interval,
+            symbol,
+            interval,
+            frame,
+            int(job.user_id),
+        ): (symbol, interval)
+        for symbol, interval, frame in pending_units
+    }
+    pending = set(futures.keys())
+    try:
+        while pending:
             if _stop_requested(db, job_id):
+                for pending_future in pending:
+                    pending_future.cancel()
                 pool.shutdown(wait=False, cancel_futures=True)
                 return _mark_stopped(db, job)
-            completed_units += 1
-            try:
-                result = future.result()
-                symbol_rows = [
-                    row for row in (result.get("top") or [])
-                    if str(row.get("algo_name") or "") in algos
-                ]
-                rows.extend(symbol_rows)
-                errors.extend(str(err) for err in (result.get("errors") or []))
-                add_event(
+
+            done, pending = wait(pending, timeout=5.0, return_when=FIRST_COMPLETED)
+            if not done:
+                continue
+
+            for future in done:
+                symbol, interval = futures[future]
+                completed_units += 1
+                try:
+                    result = future.result()
+                    symbol_rows = [
+                        row for row in (result.get("top") or [])
+                        if str(row.get("algo_name") or "") in algos
+                    ]
+                    rows.extend(symbol_rows)
+                    errors.extend(str(err) for err in (result.get("errors") or []))
+                    add_event(
+                        db,
+                        job,
+                        "backtesting",
+                        (
+                            f"{symbol} {interval}: tested {result.get('tested_combinations') or 0} "
+                            f"combinations, {len(symbol_rows)} candidates."
+                        ),
+                        {
+                            "symbol": symbol,
+                            "interval": interval,
+                            "candidate_count": len(symbol_rows),
+                            "tested_combinations": result.get("tested_combinations") or 0,
+                        },
+                    )
+                    _replace_candidates(db, job, _rank_candidates(rows)[:50], errors[:20])
+                except Exception as exc:
+                    errors.append(f"{symbol} {interval}: {exc}")
+                    add_event(db, job, "backtesting", f"{symbol} {interval}: backtest failed: {exc}", level="warning")
+                _update_progress(
                     db,
                     job,
-                    "backtesting",
-                    (
-                        f"{symbol} {interval}: tested {result.get('tested_combinations') or 0} "
-                        f"combinations, {len(symbol_rows)} candidates."
-                    ),
-                    {
-                        "symbol": symbol,
-                        "interval": interval,
-                        "candidate_count": len(symbol_rows),
-                        "tested_combinations": result.get("tested_combinations") or 0,
-                    },
+                    completed_steps=len(symbols) + completed_units,
+                    started_at=started,
+                    candidates_tested=len(rows),
                 )
-                _replace_candidates(db, job, _rank_candidates(rows)[:50], errors[:20])
-            except Exception as exc:
-                errors.append(f"{symbol} {interval}: {exc}")
-                add_event(db, job, "backtesting", f"{symbol} {interval}: backtest failed: {exc}", level="warning")
-            _update_progress(
-                db,
-                job,
-                completed_steps=len(symbols) + completed_units,
-                started_at=started,
-                candidates_tested=len(rows),
-            )
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     ranked = _rank_candidates(rows)
     _replace_candidates(db, job, ranked[:50], errors[:20])
@@ -522,6 +536,7 @@ def queue_replay_verification(db: Session, job: SparkieJob, best: dict[str, Any]
 
 
 def stop_sparkie_job(db: Session, job: SparkieJob, reason: str = "Sparkie stop requested.") -> None:
+    revoke_requested = _revoke_sparkie_task(job)
     if job.status not in TERMINAL_STATUSES:
         job.status = "stopped"
         job.stage = "stopped"
@@ -530,7 +545,15 @@ def stop_sparkie_job(db: Session, job: SparkieJob, reason: str = "Sparkie stop r
         job.stop_requested_at = datetime.utcnow()
         job.finished_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()
-        add_event(db, job, "stopped", reason, level="warning")
+        add_event(
+            db,
+            job,
+            "stopped",
+            f"{reason} Celery revoke requested." if revoke_requested else reason,
+            level="warning",
+        )
+    elif revoke_requested:
+        add_event(db, job, "stopped", "Sparkie revoke requested for an already-stopped background task.", level="warning")
     if job.replay_session_id:
         try:
             from app.services.replay_process import stop_session
@@ -538,13 +561,20 @@ def stop_sparkie_job(db: Session, job: SparkieJob, reason: str = "Sparkie stop r
             stop_session(db, int(job.replay_session_id))
         except Exception:
             pass
-    if job.task_id:
-        try:
-            from app.celery_app import celery_app
 
-            celery_app.control.revoke(str(job.task_id), terminate=True, signal="SIGTERM")
-        except Exception:
-            pass
+
+def _revoke_sparkie_task(job: SparkieJob) -> bool:
+    if not job.task_id:
+        return False
+    try:
+        from app.celery_app import celery_app
+
+        celery_app.control.revoke(str(job.task_id), terminate=True, signal="SIGTERM")
+        log.warning("[SPARKIE] revoke requested job_id=%s task_id=%s", job.id, job.task_id)
+        return True
+    except Exception:
+        log.exception("[SPARKIE] failed to revoke job_id=%s task_id=%s", job.id, job.task_id)
+        return False
 
 
 def add_event(

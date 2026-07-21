@@ -255,10 +255,13 @@ def stop_all_evaluations(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    # Include already-stopped jobs that still have a Celery task id. A previous
+    # stop may have changed the DB status while the worker process continued
+    # burning CPU inside a long backtest unit.
     jobs = (
         db.query(SparkieJob)
         .filter(SparkieJob.user_id == user.id)
-        .filter(SparkieJob.status.in_(tuple(ACTIVE_STATUSES)))
+        .filter((SparkieJob.status.in_(tuple(ACTIVE_STATUSES))) | ((SparkieJob.status == "stopped") & (SparkieJob.task_id.isnot(None))))
         .all()
     )
     for job in jobs:
@@ -293,9 +296,8 @@ def clear_history(
     stopped = 0
     job_ids = [job.id for job in jobs]
     for job in jobs:
-        if job.status not in TERMINAL_STATUSES:
-            stop_sparkie_job(db, job, reason="Sparkie history cleared.")
-            stopped += 1
+        stop_sparkie_job(db, job, reason="Sparkie history cleared.")
+        stopped += 1
     db.query(SparkieEvent).filter(SparkieEvent.job_id.in_(job_ids)).delete(synchronize_session=False)
     db.query(SparkieCandidate).filter(SparkieCandidate.job_id.in_(job_ids)).delete(synchronize_session=False)
     deleted = db.query(SparkieJob).filter(SparkieJob.id.in_(job_ids)).delete(synchronize_session=False)
@@ -318,8 +320,7 @@ def delete_history_job(
     job = db.get(SparkieJob, job_id)
     if not job or int(job.user_id) != int(user.id):
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
-    if job.status not in TERMINAL_STATUSES:
-        stop_sparkie_job(db, job, reason="Sparkie job deleted.")
+    stop_sparkie_job(db, job, reason="Sparkie job deleted.")
     db.query(SparkieEvent).filter(SparkieEvent.job_id == job.id).delete(synchronize_session=False)
     db.query(SparkieCandidate).filter(SparkieCandidate.job_id == job.id).delete(synchronize_session=False)
     db.delete(job)
@@ -374,6 +375,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     payload = {
         "ok": True,
         "job_id": job.id,
+        "task_id": job.task_id,
         "status": job.status,
         "stage": job.stage,
         "message": job.message,

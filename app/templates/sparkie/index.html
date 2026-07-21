@@ -368,6 +368,7 @@
       <div class="sparkie-summary">
         <div class="sparkie-summary-row"><span>Status</span><strong class="${statusClass(data.status)}">${escapeHtml(data.status || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Stage</span><strong>${escapeHtml(data.stage || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Task id</span><strong>${escapeHtml(data.task_id || "Not queued")}</strong></div>
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.progress_pct || 0).toLocaleString()}% · ${escapeHtml(data.completed_steps || 0)} / ${escapeHtml(data.total_steps || 0)} steps</strong></div>
         <div class="sparkie-summary-row"><span>Time</span><strong>Elapsed ${secondsText(data.elapsed_seconds)} · ETA ${secondsText(data.eta_seconds)}</strong></div>
         <div class="sparkie-summary-row"><span>Goal</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} ${escapeHtml(data.target_period || "")} on $${Number(data.account_equity || 0).toLocaleString()}</strong></div>
