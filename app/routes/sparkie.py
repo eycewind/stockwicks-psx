@@ -64,7 +64,7 @@ class GoalFeasibilityRequest(BaseModel):
     account_equity: float = Field(..., gt=0)
     target_profit: float = Field(..., gt=0)
     target_period: Literal["daily", "weekly", "monthly"] = "daily"
-    confidence_level: float = Field(0.60, ge=0.50, le=0.95)
+    confidence_level: float = Field(0.60, ge=0.40, le=0.95)
 
 
 class SparkieLaunchRequest(GoalFeasibilityRequest):

@@ -211,7 +211,7 @@
           </div>
           <div class="sparkie-field">
             <label for="confidenceLevel">Confidence level</label>
-            <input id="confidenceLevel" type="number" min="0.5" max="0.95" step="0.05" value="0.6">
+            <input id="confidenceLevel" type="number" min="0.4" max="0.95" step="0.05" value="0.6">
           </div>
         </div>
 
@@ -275,9 +275,28 @@
       throw new Error(`Sparkie API returned non-JSON HTTP ${response.status}. ${text.slice(0, 160)}`);
     }
     if (!response.ok || data.ok === false) {
-      throw new Error(data.detail || data.message || "Sparkie request failed.");
+      throw new Error(errorMessage(data));
     }
     return data;
+  }
+
+  function errorMessage(data) {
+    const detail = data && data.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail.map((item) => {
+        if (typeof item === "string") return item;
+        const location = Array.isArray(item.loc) ? item.loc.join(".") : "";
+        const message = item.msg || JSON.stringify(item);
+        return location ? `${location}: ${message}` : message;
+      }).join(" | ");
+    }
+    if (detail && typeof detail === "object") {
+      return detail.msg || JSON.stringify(detail);
+    }
+    if (typeof data.message === "string") return data.message;
+    if (data.message && typeof data.message === "object") return JSON.stringify(data.message);
+    return "Sparkie request failed.";
   }
 
   function escapeHtml(value) {

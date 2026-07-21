@@ -292,8 +292,8 @@ def _validate_request(request: GoalRequest) -> None:
         raise ValueError("target_profit must be greater than zero")
     if request.target_period not in TRADING_PERIODS_PER_YEAR:
         raise ValueError("target_period must be daily, weekly, or monthly")
-    if not 0.5 <= request.confidence_level <= 0.95:
-        raise ValueError("confidence_level must be between 0.50 and 0.95")
+    if not 0.4 <= request.confidence_level <= 0.95:
+        raise ValueError("confidence_level must be between 0.40 and 0.95")
 
 
 def _meets_minimum_equity(account_equity: float) -> bool:
