@@ -573,14 +573,7 @@ def _stop_sparkie_process_id(task_id: str | None) -> bool:
 
 def _sparkie_trade_allocation_usd(account_equity: float) -> float:
     equity = max(float(account_equity or 0.0), 0.0)
-    if equity <= 0:
-        return 0.0
-    min_allocation = float(os.getenv("SPARKIE_MIN_TRADE_ALLOCATION_USD", "5000"))
-    allocation_pct = float(os.getenv("SPARKIE_TRADE_ALLOCATION_PCT", "0.20"))
-    max_pct = float(os.getenv("SPARKIE_MAX_TRADE_ALLOCATION_PCT", "1.00"))
-    target = max(equity * allocation_pct, min_allocation)
-    cap = max(equity * max_pct, 1.0)
-    return max(1.0, min(target, cap, equity))
+    return equity
 
 
 def _sparkie_target_window_units(target_period: str | None) -> float:
@@ -830,11 +823,11 @@ def _sparkie_trade_quantity(
         raise ValueError(f"Sparkie could not determine a valid starting price for {symbol}.")
     allocation = max(float(account_equity) * 0.10, 1.0)
     quantity = int(allocation // price)
-    if quantity < 1 and price <= float(account_equity) * 0.25:
+    if quantity < 1 and price <= float(account_equity):
         quantity = 1
     if quantity < 1:
         raise ValueError(
-            f"{symbol} costs about ${price:,.2f}, above Sparkie's 25% single-position cap."
+            f"{symbol} costs about ${price:,.2f}, above available Sparkie account equity."
         )
     return float(quantity)
 

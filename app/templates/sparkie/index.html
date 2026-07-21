@@ -189,6 +189,10 @@
   <div class="sparkie-grid">
     <section class="sparkie-panel">
       <h2>Goal</h2>
+      <div class="sparkie-status-banner" style="margin-bottom:14px;">
+        <strong>Full-cash day trading</strong>
+        <div class="sparkie-muted">Sparkie uses 100% of the available cash for its one selected day-trade, then closes it before market close. You are accepting that the full account is at risk.</div>
+      </div>
       <form class="sparkie-form" id="sparkieForm">
         <div class="sparkie-row">
           <div class="sparkie-field">
@@ -402,7 +406,7 @@
         <div class="sparkie-summary-row"><span>Target return</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} per ${escapeHtml(periodLabel)}</strong></div>
         <div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>
         <div class="sparkie-summary-row"><span>Day-trading rule</span><strong>${dayTradingPolicy.eod_close === false ? "EOD close not enforced" : "End-of-day close required; no overnight positions"}</strong></div>
-        <div class="sparkie-summary-row"><span>Trade allocation</span><strong>About $${Number(data.trade_allocation_usd || 0).toLocaleString()} per trade, capped by account equity</strong></div>
+        <div class="sparkie-summary-row"><span>Cash deployment</span><strong>100% of available cash: up to $${Number(data.trade_allocation_usd || 0).toLocaleString()} in one day-trade (small residual may remain from whole-share rounding)</strong></div>
         <div class="sparkie-summary-row"><span>Required return</span><strong>${targetMathText}</strong></div>
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>

@@ -25,9 +25,9 @@ from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_chea
 log = logging.getLogger(__name__)
 
 MIN_ACCOUNT_EQUITY = 5000.0
-MIN_TRADE_ALLOCATION_USD = 5000.0
-DEFAULT_TRADE_ALLOCATION_PCT = 0.20
-MAX_TRADE_ALLOCATION_PCT = 1.00
+# Sparkie is intentionally an all-cash, one-position day-trading agent.
+# Share rounding can leave a small residual cash balance, but sizing always
+# starts from the entire client equity rather than a percentage allocation.
 DEFAULT_SYMBOL_BUCKET = ("AAPL", "NVDA", "AMD", "PLTR", "INTC")
 DEFAULT_INTERVAL_POLICY = ("15min", "10min", "5min", "1min")
 DEFAULT_ALGO_POLICY = ("Algo1_MM", "Algo2_MM", "Algo3_MM")
@@ -1092,14 +1092,7 @@ def _trade_quantity(
 
 def _trade_allocation_usd(account_equity: float) -> float:
     equity = max(float(account_equity or 0.0), 0.0)
-    if equity <= 0:
-        return 0.0
-    min_allocation = float(os.getenv("SPARKIE_MIN_TRADE_ALLOCATION_USD", str(MIN_TRADE_ALLOCATION_USD)))
-    allocation_pct = float(os.getenv("SPARKIE_TRADE_ALLOCATION_PCT", str(DEFAULT_TRADE_ALLOCATION_PCT)))
-    max_pct = float(os.getenv("SPARKIE_MAX_TRADE_ALLOCATION_PCT", str(MAX_TRADE_ALLOCATION_PCT)))
-    target = max(equity * allocation_pct, min_allocation)
-    cap = max(equity * max_pct, 1.0)
-    return max(1.0, min(target, cap, equity))
+    return equity
 
 
 def _trade_quantity_from_frame(frame: Any, *, account_equity: float) -> tuple[float, float, float]:
