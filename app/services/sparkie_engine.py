@@ -25,6 +25,8 @@ DEFAULT_INTERVAL_POLICY = ("1min", "5min", "10min", "15min")
 DEFAULT_ALGO_POLICY = ("Algo1_MM", "Algo2_MM", "Algo3_MM")
 TERMINAL_STATUSES = {"completed", "rejected", "error", "stopped"}
 ACTIVE_STATUSES = {"queued", "preparing_data", "backtesting", "scoring", "verifying_replay"}
+MIN_BACKTEST_BARS_PER_INTERVAL = 80
+MIN_BACKTEST_TRADING_DAYS = 5
 
 
 def sparkie_symbol_bucket() -> list[str]:
@@ -152,8 +154,17 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                 db,
                 job,
                 "preparing_data",
-                f"{symbol}: data ready through {meta.get('last_bar') or 'latest cached bar'}.",
-                {"symbol": symbol, "rows": meta.get("rows"), "last_bar": meta.get("last_bar")},
+                (
+                    f"{symbol}: data verified through {meta.get('last_bar') or 'latest cached bar'} "
+                    f"({len(meta.get('unique_dates') or [])} trading days)."
+                ),
+                {
+                    "symbol": symbol,
+                    "rows": meta.get("rows"),
+                    "interval_rows": meta.get("interval_rows"),
+                    "last_bar": meta.get("last_bar"),
+                    "unique_dates": meta.get("unique_dates"),
+                },
             )
         except Exception as exc:
             add_event(db, job, "preparing_data", f"{symbol}: data unavailable: {exc}", level="warning")
@@ -303,11 +314,39 @@ def refresh_symbol_data(
     intervals: list[str],
     lookback_days: int,
 ) -> dict[str, Any]:
-    _path, meta = fetch_and_save(user_id=user_id, symbol=symbol, days=lookback_days, force=False)
+    try:
+        return _refresh_symbol_data_once(
+            user_id=user_id,
+            symbol=symbol,
+            intervals=intervals,
+            lookback_days=lookback_days,
+            force=False,
+        )
+    except Exception:
+        return _refresh_symbol_data_once(
+            user_id=user_id,
+            symbol=symbol,
+            intervals=intervals,
+            lookback_days=lookback_days,
+            force=True,
+        )
+
+
+def _refresh_symbol_data_once(
+    *,
+    user_id: int,
+    symbol: str,
+    intervals: list[str],
+    lookback_days: int,
+    force: bool,
+) -> dict[str, Any]:
+    _path, meta = fetch_and_save(user_id=user_id, symbol=symbol, days=lookback_days, force=force)
+    _validate_ingest_meta(symbol=symbol, meta=meta)
     end_date = datetime.utcnow().date()
     start_date = end_date - timedelta(days=max(lookback_days, 10))
     frames: dict[str, Any] = {}
     row_count = 0
+    interval_rows: dict[str, int] = {}
     for interval in intervals:
         provider = ReplayDataProvider(
             user_id=user_id,
@@ -319,14 +358,46 @@ def refresh_symbol_data(
         frame = provider.bars.copy()
         if frame is None or frame.empty:
             raise RuntimeError(f"No cached bars for {symbol} {interval}.")
-        frames[interval] = _normalize_backtest_frame(frame)
+        normalized = _normalize_backtest_frame(frame)
+        if len(normalized) < MIN_BACKTEST_BARS_PER_INTERVAL:
+            raise RuntimeError(
+                f"Downloaded data for {symbol} {interval} has only {len(normalized)} usable bars; "
+                f"Sparkie needs at least {MIN_BACKTEST_BARS_PER_INTERVAL} before backtesting."
+            )
+        frames[interval] = normalized
+        interval_rows[interval] = len(normalized)
         row_count += len(frame)
     return {
         "symbol": symbol,
         "frames": frames,
         "rows": row_count,
+        "interval_rows": interval_rows,
         "last_bar": getattr(meta, "last_bar", None),
+        "unique_dates": list(getattr(meta, "unique_dates", []) or []),
     }
+
+
+def _validate_ingest_meta(*, symbol: str, meta: Any) -> None:
+    total_rows = int(getattr(meta, "total_rows", 0) or 0)
+    unique_dates = list(getattr(meta, "unique_dates", []) or [])
+    last_bar_text = str(getattr(meta, "last_bar", "") or "")
+    if total_rows <= 0:
+        raise RuntimeError(f"Downloaded data for {symbol} is empty.")
+    if len(unique_dates) < MIN_BACKTEST_TRADING_DAYS:
+        raise RuntimeError(
+            f"Downloaded data for {symbol} has only {len(unique_dates)} trading day(s); "
+            f"Sparkie needs at least {MIN_BACKTEST_TRADING_DAYS}."
+        )
+    if last_bar_text:
+        try:
+            last_bar = datetime.fromisoformat(last_bar_text)
+            age_days = (datetime.utcnow().date() - last_bar.date()).days
+            if age_days > 4:
+                raise RuntimeError(
+                    f"Downloaded data for {symbol} is stale; latest bar is {last_bar_text}."
+                )
+        except ValueError:
+            raise RuntimeError(f"Downloaded data for {symbol} has invalid metadata timestamp.")
 
 
 def _normalize_backtest_frame(frame: Any) -> pd.DataFrame:
