@@ -636,8 +636,8 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
         return {
             "recommendation": "paper_only",
             "run_replay": True,
-            "message": "Sparkie found a positive candidate, but it did not meet the target window.",
-            "reason": f"Best backtest P/L ${profit:,.2f} is below target window ${target_window:,.2f}.",
+            "message": "Sparkie found a positive candidate, but it did not meet the minimum target.",
+            "reason": f"Best backtest P/L ${profit:,.2f} is below the minimum target window ${target_window:,.2f}.",
         }
     if trades < 5 or win_rate < 0.50:
         return {
@@ -657,7 +657,7 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
         "recommendation": "paper_candidate",
         "run_replay": True,
         "message": "Sparkie found a positive candidate and queued Replay verification.",
-        "reason": "Backtest met profit, trade count, win-rate, and drawdown gates. Replay verification is still required before Live Mirror.",
+        "reason": f"Backtest P/L ${profit:,.2f} is greater than or equal to the minimum target ${target_window:,.2f}, with trade count, win-rate, and drawdown gates met. Replay verification is still required before Live Mirror.",
     }
 
 
