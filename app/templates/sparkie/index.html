@@ -370,7 +370,7 @@
     ].join(" · ");
 
     const periodLabel = data.target_period || "period";
-    const targetWindowText = `$${Number(data.target_profit_for_window || 0).toLocaleString()} over ${Number(data.target_window_units || 0).toLocaleString()} ${periodLabel} unit(s)`;
+    const evidenceWindowText = `${Number(data.target_window_units || 0).toLocaleString()} ${periodLabel} unit(s), target total $${Number(data.target_profit_for_window || 0).toLocaleString()}`;
 
     const summary = `
       <div class="sparkie-summary">
@@ -380,7 +380,8 @@
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.progress_pct || 0).toLocaleString()}% · ${escapeHtml(data.completed_steps || 0)} / ${escapeHtml(data.total_steps || 0)} steps</strong></div>
         <div class="sparkie-summary-row"><span>Time</span><strong>Elapsed ${secondsText(data.elapsed_seconds)} · ETA ${secondsText(data.eta_seconds)}</strong></div>
         <div class="sparkie-summary-row"><span>Goal</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} ${escapeHtml(data.target_period || "")} on $${Number(data.account_equity || 0).toLocaleString()}</strong></div>
-        <div class="sparkie-summary-row"><span>Target window</span><strong>${escapeHtml(targetWindowText)}</strong></div>
+        <div class="sparkie-summary-row"><span>Target return</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} per ${escapeHtml(periodLabel)}</strong></div>
+        <div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>
         <div class="sparkie-summary-row"><span>Trade allocation</span><strong>About $${Number(data.trade_allocation_usd || 0).toLocaleString()} per trade, capped by account equity</strong></div>
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
@@ -389,7 +390,7 @@
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Summary file</span><strong>${escapeHtml(summaryFile)}</strong></div>
         <div class="sparkie-summary-row"><span>Replay verify</span><strong>${replayLink}</strong></div>
-        ${best ? `<div class="sparkie-summary-row"><span>Best P/L basis</span><strong>Total window P/L $${Number(best.total_profit_loss || best.profit_loss || 0).toLocaleString()} · estimated ${escapeHtml(periodLabel)} P/L $${Number(best.estimated_profit_per_period || 0).toLocaleString()}</strong></div>` : ""}
+        ${best ? `<div class="sparkie-summary-row"><span>Best estimated ${escapeHtml(periodLabel)} P/L</span><strong>$${Number(best.estimated_profit_per_period || 0).toLocaleString()} · evidence-window total $${Number(best.total_profit_loss || best.profit_loss || 0).toLocaleString()}</strong></div>` : ""}
         ${best ? `<div class="sparkie-summary-row"><span>Best pick</span><strong>${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)} · P/L $${Number(best.profit_loss || 0).toLocaleString()} · ${Number(best.trades || 0).toLocaleString()} trades</strong></div>` : ""}
       </div>
     `;
@@ -397,7 +398,7 @@
     const candidateRows = candidates.map((item) => `
       <div class="sparkie-summary-row">
         <span>${escapeHtml(item.symbol)} ${escapeHtml(item.interval)} · ${Number(item.trade_size || 0).toLocaleString()} shares · about $${Number(item.allocation_usd || 0).toLocaleString()} notional</span>
-        <strong>${escapeHtml(item.algo_name)} · score ${Number(item.score || 0).toLocaleString()} · P/L $${Number(item.profit_loss || 0).toLocaleString()} · ${Number(item.trades || 0).toLocaleString()} trades · win ${Number((item.win_rate || 0) * 100).toFixed(1)}%</strong>
+        <strong>${escapeHtml(item.algo_name)} · est. ${escapeHtml(periodLabel)} P/L $${Number(item.estimated_profit_per_period || 0).toLocaleString()} · evidence total $${Number(item.total_profit_loss || item.profit_loss || 0).toLocaleString()} · ${Number(item.trades || 0).toLocaleString()} trades · win ${Number((item.win_rate || 0) * 100).toFixed(1)}% · score ${Number(item.score || 0).toLocaleString()}</strong>
       </div>
     `).join("");
 
@@ -412,7 +413,7 @@
     return `
       ${statusBanner(data)}
       ${summary}
-      ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-muted">Candidate P/L is total over the evaluation window; divide by ${Number(data.target_window_units || 1).toLocaleString()} for estimated ${escapeHtml(periodLabel)} P/L.</div><div class="sparkie-summary">${candidateRows}</div>` : ""}
+      ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-muted">Sparkie reports estimated ${escapeHtml(periodLabel)} P/L first. Evidence total is the backtest-window support behind that estimate.</div><div class="sparkie-summary">${candidateRows}</div>` : ""}
       ${eventRows ? `<div style="height:14px"></div><h3>Events</h3><div class="sparkie-list">${eventRows}</div>` : ""}
     `;
   }
@@ -431,7 +432,7 @@
             <span>${escapeHtml(created)}</span>
           </div>
           <div><strong class="${statusClass(job.status)}">${escapeHtml(job.status)}</strong><br><span>${Number(job.progress_pct || 0).toLocaleString()}% · ${secondsText(job.elapsed_seconds)}</span></div>
-          <div><strong>${best ? `${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)}` : "No pick yet"}</strong><br><span>${best ? `P/L $${Number(best.profit_loss || 0).toLocaleString()}` : escapeHtml(job.recommendation || "")}</span></div>
+          <div><strong>${best ? `${escapeHtml(best.symbol)} ${escapeHtml(best.interval)} ${escapeHtml(best.algo_name)}` : "No pick yet"}</strong><br><span>${best ? `Est. ${escapeHtml(job.target_period || "period")} P/L $${Number(best.estimated_profit_per_period || 0).toLocaleString()}` : escapeHtml(job.recommendation || "")}</span></div>
           <div class="sparkie-actions" style="margin-top:0;">
             <button class="btn btn-secondary" type="button" data-view-job="${escapeHtml(job.job_id)}">View</button>
             ${canStop ? `<button class="btn btn-secondary" type="button" data-stop-job="${escapeHtml(job.job_id)}">Stop</button>` : ""}

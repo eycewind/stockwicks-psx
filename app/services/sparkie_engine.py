@@ -944,17 +944,23 @@ def _replace_candidates(db: Session, job: SparkieJob, rows: list[dict[str, Any]]
 
 
 def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
-    target_window = _target_for_backtest_window(job)
+    target_units = _target_window_units(job.target_period)
     profit = float(row.get("profit_loss") or 0.0)
+    estimated_period_profit = profit / target_units if target_units else profit
+    target_period = str(job.target_period or "daily")
     trades = int(row.get("trades") or 0)
     win_rate = float(row.get("win_rate") or 0.0)
     max_drawdown = abs(float(row.get("max_drawdown") or 0.0))
-    if profit < target_window:
+    if estimated_period_profit < float(job.target_profit or 0.0):
         return {
             "recommendation": "paper_only",
             "run_replay": True,
             "message": "Sparkie found a positive candidate, but it did not meet the minimum target.",
-            "reason": f"Best backtest P/L ${profit:,.2f} is below the minimum target window ${target_window:,.2f}.",
+            "reason": (
+                f"Estimated {target_period} backtest P/L ${estimated_period_profit:,.2f} "
+                f"is below the user target ${float(job.target_profit or 0.0):,.2f} "
+                f"({target_units:g} {target_period} unit evidence window total: ${profit:,.2f})."
+            ),
         }
     if trades < 5 or win_rate < 0.50:
         return {
@@ -974,7 +980,12 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
         "recommendation": "paper_candidate",
         "run_replay": True,
         "message": "Sparkie found a positive candidate and queued Replay verification.",
-        "reason": f"Backtest P/L ${profit:,.2f} is greater than or equal to the minimum target ${target_window:,.2f}, with trade count, win-rate, and drawdown gates met. Replay verification is still required before Live Mirror.",
+        "reason": (
+            f"Estimated {target_period} backtest P/L ${estimated_period_profit:,.2f} "
+            f"is greater than or equal to the user target ${float(job.target_profit or 0.0):,.2f}, "
+            f"with trade count, win-rate, and drawdown gates met. "
+            f"Replay verification is still required before Live Mirror."
+        ),
     }
 
 
@@ -1174,8 +1185,12 @@ def _stop_requested(db: Session, job_id: str) -> bool:
 
 
 def _target_for_backtest_window(job: SparkieJob) -> float:
-    multiplier = {"daily": 10.0, "weekly": 2.0, "monthly": 0.5}.get(str(job.target_period), 10.0)
+    multiplier = _target_window_units(job.target_period)
     return float(job.target_profit or 0.0) * multiplier
+
+
+def _target_window_units(target_period: str | None) -> float:
+    return {"daily": 10.0, "weekly": 2.0, "monthly": 0.5}.get(str(target_period or "daily").lower(), 10.0)
 
 
 def _elapsed(started_at: datetime | None) -> int:
