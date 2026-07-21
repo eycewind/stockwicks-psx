@@ -414,6 +414,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "best_candidate": best,
         "replay_session_id": job.replay_session_id,
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
+        "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,
         "error_message": job.error_message,
         "created_at": created_at,
         "updated_at": updated_at,

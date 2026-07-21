@@ -358,6 +358,11 @@
       ? `<a class="sparkie-link" href="${urlPrefix}/replay-simulator">Replay session #${escapeHtml(data.replay_session_id)}</a>`
       : "Not queued yet";
     const summaryFile = data.summary_file || "Not written yet";
+    const timing = data.backtest_timing || {};
+    const slowest = (timing.slowest_units || [])[0];
+    const timingText = timing.completed_units
+      ? `${Number(timing.completed_units || 0).toLocaleString()} units · ${secondsText(timing.total_duration_seconds)} backtest CPU time · ${Number(timing.bars_per_second || 0).toLocaleString()} bars/sec${slowest ? ` · slowest ${escapeHtml(slowest.symbol)} ${escapeHtml(slowest.interval)} ${secondsText(slowest.duration_seconds)}` : ""}`
+      : "Waiting for first completed backtest unit";
     const policy = [
       `Bucket: ${(data.symbol_bucket || []).join(", ") || "default"}`,
       `Intervals: ${(data.interval_policy || []).join(", ") || "auto"}`,
@@ -374,6 +379,7 @@
         <div class="sparkie-summary-row"><span>Goal</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} ${escapeHtml(data.target_period || "")} on $${Number(data.account_equity || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
+        <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
         <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Summary file</span><strong>${escapeHtml(summaryFile)}</strong></div>

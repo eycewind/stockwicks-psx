@@ -228,13 +228,14 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
+    unit_timings: list[dict[str, Any]] = []
     completed_units = 0
-    pending_units = [
+    pending_units = sorted([
         (symbol, interval, frames[interval])
         for symbol, frames in frames_by_symbol.items()
         for interval in intervals
         if interval in frames
-    ]
+    ], key=lambda unit: (len(unit[2]) if hasattr(unit[2], "__len__") else 0, unit[1], unit[0]))
     for symbol, interval, frame in pending_units:
         add_event(
             db,
@@ -276,6 +277,9 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                 completed_units += 1
                 try:
                     result = future.result()
+                    timing = result.get("sparkie_timing") or {}
+                    if timing:
+                        unit_timings.append(timing)
                     symbol_rows = [
                         row for row in (result.get("top") or [])
                         if str(row.get("algo_name") or "") in algos
@@ -288,13 +292,15 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                         "backtesting",
                         (
                             f"{symbol} {interval}: tested {result.get('tested_combinations') or 0} "
-                            f"combinations, {len(symbol_rows)} candidates."
+                            f"combinations, {len(symbol_rows)} candidates"
+                            f"{_timing_message_suffix(timing)}."
                         ),
                         {
                             "symbol": symbol,
                             "interval": interval,
                             "candidate_count": len(symbol_rows),
                             "tested_combinations": result.get("tested_combinations") or 0,
+                            "timing": timing,
                         },
                     )
                     _replace_candidates(db, job, _rank_candidates(rows)[:50], errors[:20])
@@ -313,7 +319,8 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
 
     ranked = _rank_candidates(rows)
     _replace_candidates(db, job, ranked[:50], errors[:20])
-    summary_path = _write_summary_file(job, ranked[:50], errors[:50])
+    timing_summary = _backtest_timing_summary(unit_timings)
+    summary_path = _write_summary_file(job, ranked[:50], errors[:50], timing_summary)
     _set_job(
         db,
         job,
@@ -321,7 +328,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         stage="scoring",
         message="Sparkie is scoring the final pick.",
         candidates_tested=len(rows),
-        result_json=_json({"summary_file": str(summary_path), "top": ranked[:10], "errors": errors[:30]}),
+        result_json=_json({"summary_file": str(summary_path), "top": ranked[:10], "errors": errors[:30], "backtest_timing": timing_summary}),
     )
 
     if not ranked:
@@ -332,7 +339,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             message="Sparkie did not find a positive, validated candidate.",
             recommendation="paper_only",
             decision_reason="Backtest scan returned no candidate with positive holdout and validation evidence.",
-            result={"errors": errors[:30], "top": []},
+            result={"errors": errors[:30], "top": [], "backtest_timing": timing_summary, "summary_file": str(summary_path)},
         )
         return {"ok": True, "status": job.status}
 
@@ -368,7 +375,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         job.recommendation = decision["recommendation"]
         job.decision_reason = decision["reason"]
         job.replay_session_id = replay_session_id
-        job.result_json = _json({"top": ranked[:10], "errors": errors[:30]})
+        job.result_json = _json({"summary_file": str(summary_path), "top": ranked[:10], "errors": errors[:30], "backtest_timing": timing_summary})
         job.progress_pct = 95.0
         job.eta_seconds = None
         job.updated_at = datetime.utcnow()
@@ -381,7 +388,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             message=decision["message"],
             recommendation=decision["recommendation"],
             decision_reason=decision["reason"],
-            result={"top": ranked[:10], "errors": errors[:30]},
+            result={"summary_file": str(summary_path), "top": ranked[:10], "errors": errors[:30], "backtest_timing": timing_summary},
         )
     return {"ok": True, "status": job.status, "job_id": job.id}
 
@@ -676,13 +683,24 @@ def _backtest_symbol_interval(
         algo_names=tuple(sparkie_algo_policy()),
     )
     result = run_cheatsheet(req, price_frames={interval: frame})
+    elapsed = max(time.monotonic() - started, 0.001)
+    bars = len(frame) if hasattr(frame, "__len__") else 0
+    result["sparkie_timing"] = {
+        "symbol": symbol,
+        "interval": interval,
+        "bars": int(bars or 0),
+        "duration_seconds": round(elapsed, 2),
+        "bars_per_second": round((float(bars or 0) / elapsed), 2) if bars else None,
+        "tested_combinations": int(result.get("tested_combinations") or 0),
+        "candidate_count": len(result.get("top") or []),
+    }
     log.info(
         "[SPARKIE] backtest unit done symbol=%s interval=%s tested=%s rows=%s seconds=%.1f",
         symbol,
         interval,
         result.get("tested_combinations"),
         len(result.get("top") or []),
-        time.monotonic() - started,
+        elapsed,
     )
     return result
 
@@ -709,7 +727,64 @@ def _add_backtest_unit_event(*, job_id: str, user_id: int, symbol: str, interval
         log.exception("[SPARKIE] failed writing backtest unit event job_id=%s symbol=%s interval=%s", job_id, symbol, interval)
 
 
-def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: list[str]) -> Path:
+def _timing_message_suffix(timing: dict[str, Any]) -> str:
+    if not timing:
+        return ""
+    seconds = float(timing.get("duration_seconds") or 0.0)
+    bars_per_second = timing.get("bars_per_second")
+    if bars_per_second is None:
+        return f" in {seconds:,.1f}s"
+    return f" in {seconds:,.1f}s ({float(bars_per_second):,.0f} bars/sec)"
+
+
+def _backtest_timing_summary(unit_timings: list[dict[str, Any]]) -> dict[str, Any]:
+    if not unit_timings:
+        return {
+            "completed_units": 0,
+            "total_duration_seconds": 0.0,
+            "slowest_units": [],
+            "by_interval": {},
+        }
+    timings = sorted(
+        unit_timings,
+        key=lambda row: float(row.get("duration_seconds") or 0.0),
+        reverse=True,
+    )
+    by_interval: dict[str, dict[str, Any]] = {}
+    for row in unit_timings:
+        interval = str(row.get("interval") or "")
+        stats = by_interval.setdefault(
+            interval,
+            {
+                "units": 0,
+                "bars": 0,
+                "duration_seconds": 0.0,
+                "tested_combinations": 0,
+                "candidates": 0,
+            },
+        )
+        stats["units"] += 1
+        stats["bars"] += int(row.get("bars") or 0)
+        stats["duration_seconds"] += float(row.get("duration_seconds") or 0.0)
+        stats["tested_combinations"] += int(row.get("tested_combinations") or 0)
+        stats["candidates"] += int(row.get("candidate_count") or 0)
+    for stats in by_interval.values():
+        duration = max(float(stats.get("duration_seconds") or 0.0), 0.001)
+        stats["duration_seconds"] = round(duration, 2)
+        stats["bars_per_second"] = round(float(stats.get("bars") or 0) / duration, 2)
+    total_duration = sum(float(row.get("duration_seconds") or 0.0) for row in unit_timings)
+    total_bars = sum(int(row.get("bars") or 0) for row in unit_timings)
+    return {
+        "completed_units": len(unit_timings),
+        "total_duration_seconds": round(total_duration, 2),
+        "total_bars": total_bars,
+        "bars_per_second": round(total_bars / max(total_duration, 0.001), 2),
+        "slowest_units": timings[:5],
+        "by_interval": by_interval,
+    }
+
+
+def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: list[str], timing_summary: dict[str, Any] | None = None) -> Path:
     base_dir = Path(os.getenv("DATA_DIR", "data")) / str(job.user_id) / "sparkie"
     base_dir.mkdir(parents=True, exist_ok=True)
     path = base_dir / f"{job.id}_summary.json"
@@ -725,6 +800,7 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
         "candidate_count": len(ranked),
         "top": ranked,
         "errors": errors,
+        "backtest_timing": timing_summary or {},
     }
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return path
