@@ -732,6 +732,8 @@ def _backtest_symbol_interval(
         row["sparkie_trade_size"] = float(trade_size)
         row["sparkie_allocation_usd"] = round(float(allocation_usd), 2)
         row["sparkie_reference_price"] = round(float(reference_price), 4)
+        row["sparkie_eod_close"] = True
+        row["sparkie_overnight_positions_allowed"] = False
     log.info(
         "[SPARKIE] backtest unit done symbol=%s interval=%s trade_size=%s allocation=%.2f tested=%s rows=%s seconds=%.1f",
         symbol,
@@ -837,6 +839,11 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
         "symbol_bucket": _json_list(job.symbol_bucket_json),
         "interval_policy": _json_list(job.interval_policy_json),
         "algo_policy": _json_list(job.algo_policy_json),
+        "day_trading_policy": {
+            "eod_close": True,
+            "overnight_positions_allowed": False,
+            "message": "Sparkie day-trading mode forces end-of-day close in backtest and Replay.",
+        },
         "trade_allocation_usd": _trade_allocation_usd(float(job.account_equity or 0.0)),
         "candidate_count": len(ranked),
         "top": ranked,
@@ -898,6 +905,8 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
         "sparkie_trade_size",
         "sparkie_allocation_usd",
         "sparkie_reference_price",
+        "sparkie_eod_close",
+        "sparkie_overnight_positions_allowed",
     )
     return {
         "symbol": str(row.get("symbol") or "").upper(),
@@ -1040,6 +1049,8 @@ def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[
             "sparkie_target_profit": float(job.target_profit),
             "sparkie_target_period": job.target_period,
             "sparkie_allocation_usd": round(allocation, 2),
+            "sparkie_eod_close": True,
+            "sparkie_overnight_positions_allowed": False,
             "sparkie_fast_replay": True,
         }
     )

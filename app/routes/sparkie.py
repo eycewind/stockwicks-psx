@@ -408,6 +408,11 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "target_profit_for_window": float(job.target_profit or 0.0) * _sparkie_target_window_units(job.target_period),
         "confidence_level": float(job.confidence_level or 0.0),
         "trade_allocation_usd": _sparkie_trade_allocation_usd(float(job.account_equity or 0.0)),
+        "day_trading_policy": {
+            "eod_close": True,
+            "overnight_positions_allowed": False,
+            "message": "End-of-day close is required; Sparkie does not hold overnight positions.",
+        },
         "progress_pct": round(float(job.progress_pct or 0.0), 1),
         "percent_complete": round(float(job.progress_pct or 0.0), 1),
         "elapsed_seconds": live_elapsed_seconds,
@@ -617,6 +622,8 @@ def _sparkie_candidate_payload(row: SparkieCandidate, target_period: str | None 
         "trade_size": params.get("sparkie_trade_size"),
         "allocation_usd": params.get("sparkie_allocation_usd"),
         "reference_price": params.get("sparkie_reference_price"),
+        "eod_close": params.get("sparkie_eod_close", True),
+        "overnight_positions_allowed": params.get("sparkie_overnight_positions_allowed", False),
         "params": params,
         "error_message": row.error_message,
     }
