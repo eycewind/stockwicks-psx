@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any
 
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models.replay import ReplaySession
@@ -318,7 +319,7 @@ def refresh_symbol_data(
         frame = provider.bars.copy()
         if frame is None or frame.empty:
             raise RuntimeError(f"No cached bars for {symbol} {interval}.")
-        frames[interval] = frame
+        frames[interval] = _normalize_backtest_frame(frame)
         row_count += len(frame)
     return {
         "symbol": symbol,
@@ -326,6 +327,28 @@ def refresh_symbol_data(
         "rows": row_count,
         "last_bar": getattr(meta, "last_bar", None),
     }
+
+
+def _normalize_backtest_frame(frame: Any) -> pd.DataFrame:
+    """
+    Replay cache stores naive Eastern timestamps. The MM feature builders work
+    with timezone-aware UTC bars, so normalize here before direct backtesting.
+    Without this, features and prices both exist but align to zero rows.
+    """
+    df = pd.DataFrame(frame).copy()
+    if df.empty:
+        return df
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors="coerce")
+    df = df[df.index.notna()]
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("America/New_York").tz_convert("UTC")
+    else:
+        df.index = df.index.tz_convert("UTC")
+    needed = ["open", "high", "low", "close", "volume"]
+    df = df[[col for col in needed if col in df.columns]].sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    return df
 
 
 def queue_replay_verification(db: Session, job: SparkieJob, best: dict[str, Any]) -> int:
