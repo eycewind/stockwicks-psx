@@ -1,6 +1,9 @@
 import json
 import math
 import os
+import signal
+import subprocess
+import sys
 import re
 import time
 import uuid
@@ -58,6 +61,7 @@ SPARKIE_STALE_MINUTES = 12
 SPARKIE_REPLAY_MAX_MINUTES = 30
 SPARKIE_OPTIMIZER_MAX_MINUTES = 60
 SPARKIE_JOB_PATTERN = re.compile(r"sparkie-\d+-\d{14}(?:-[a-f0-9]{8})?")
+SPARKIE_PROCESS_PREFIX = "sparkie-process:"
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -182,20 +186,34 @@ def run_evaluation(
     db.commit()
 
     try:
-        from app.tasks.sparkie_tasks import run_sparkie_evaluation_task
-
-        async_result = run_sparkie_evaluation_task.apply_async(args=(job.id,), queue="replay")
-        job.task_id = async_result.id
-        job.message = "Sparkie queued a background evaluation."
+        proc = _start_sparkie_process(job.id)
+        job.task_id = f"{SPARKIE_PROCESS_PREFIX}{proc.pid}"
+        job.message = "Sparkie started a dedicated background runner."
         db.commit()
     except Exception as exc:
         job.status = "error"
         job.stage = "error"
-        job.error_message = f"Sparkie queue failed: {str(exc)[:500]}"
+        job.error_message = f"Sparkie runner start failed: {str(exc)[:500]}"
         job.message = job.error_message
         db.commit()
 
     return _sparkie_v2_job_payload(db, job, include_details=True)
+
+
+def _start_sparkie_process(job_id: str) -> subprocess.Popen:
+    cmd = [sys.executable, "-m", "app.scripts.sparkie_runner", str(job_id)]
+    kwargs: dict[str, Any] = {
+        "cwd": os.getcwd(),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": os.name != "nt",
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **kwargs)
 
 
 @router.get("/evaluation-status/{job_id}")
@@ -459,13 +477,38 @@ def _refresh_sparkie_v2_runtime_status(db: Session, job: SparkieJob) -> None:
         )
     )
     db.commit()
-    if job.task_id:
-        try:
-            from app.celery_app import celery_app
+    _stop_sparkie_process_id(job.task_id)
 
-            celery_app.control.revoke(str(job.task_id), terminate=True, signal="SIGTERM")
+
+def _sparkie_process_pid(task_id: str | None) -> int | None:
+    text = str(task_id or "")
+    if not text.startswith(SPARKIE_PROCESS_PREFIX):
+        return None
+    try:
+        pid = int(text.removeprefix(SPARKIE_PROCESS_PREFIX))
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _stop_sparkie_process_id(task_id: str | None) -> bool:
+    pid = _sparkie_process_pid(task_id)
+    if not pid:
+        return False
+    try:
+        if os.name == "nt":
+            os.kill(pid, signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
         except Exception:
-            pass
+            return False
 
 
 def _refresh_sparkie_v2_replay_status(db: Session, job: SparkieJob) -> None:

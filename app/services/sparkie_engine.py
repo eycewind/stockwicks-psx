@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+import signal
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
@@ -253,6 +254,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             interval,
             frame,
             int(job.user_id),
+            str(job.id),
         ): (symbol, interval)
         for symbol, interval, frame in pending_units
     }
@@ -566,6 +568,9 @@ def stop_sparkie_job(db: Session, job: SparkieJob, reason: str = "Sparkie stop r
 def _revoke_sparkie_task(job: SparkieJob) -> bool:
     if not job.task_id:
         return False
+    pid = _sparkie_process_pid(job.task_id)
+    if pid:
+        return _stop_sparkie_process(pid)
     try:
         from app.celery_app import celery_app
 
@@ -575,6 +580,38 @@ def _revoke_sparkie_task(job: SparkieJob) -> bool:
     except Exception:
         log.exception("[SPARKIE] failed to revoke job_id=%s task_id=%s", job.id, job.task_id)
         return False
+
+
+def _sparkie_process_pid(task_id: str | None) -> int | None:
+    text = str(task_id or "")
+    prefix = "sparkie-process:"
+    if not text.startswith(prefix):
+        return None
+    try:
+        pid = int(text.removeprefix(prefix))
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _stop_sparkie_process(pid: int) -> bool:
+    try:
+        if os.name == "nt":
+            os.kill(pid, signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(pid, signal.SIGTERM)
+        log.warning("[SPARKIE] process stop requested pid=%s", pid)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            log.warning("[SPARKIE] process stop requested pid=%s fallback=true", pid)
+            return True
+        except Exception:
+            log.exception("[SPARKIE] failed to stop process pid=%s", pid)
+            return False
 
 
 def add_event(
@@ -604,6 +641,7 @@ def _backtest_symbol_interval(
     interval: str,
     frame: Any,
     user_id: int,
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     log.info(
@@ -613,6 +651,17 @@ def _backtest_symbol_interval(
         len(frame) if hasattr(frame, "__len__") else "?",
         user_id,
     )
+    if job_id:
+        _add_backtest_unit_event(
+            job_id=job_id,
+            user_id=user_id,
+            symbol=symbol,
+            interval=interval,
+            message=(
+                f"{symbol} {interval}: running backtest unit with "
+                f"{len(frame) if hasattr(frame, '__len__') else '?'} bars."
+            ),
+        )
     req = CheatSheetRequest(
         symbol=symbol,
         intervals=(interval,),
@@ -636,6 +685,28 @@ def _backtest_symbol_interval(
         time.monotonic() - started,
     )
     return result
+
+
+def _add_backtest_unit_event(*, job_id: str, user_id: int, symbol: str, interval: str, message: str) -> None:
+    try:
+        from app.database.connection import SessionLocal
+
+        unit_db = SessionLocal()
+        try:
+            job = unit_db.get(SparkieJob, job_id)
+            if job:
+                add_event(
+                    unit_db,
+                    job,
+                    "backtesting",
+                    message,
+                    {"symbol": symbol, "interval": interval, "status": "running"},
+                )
+                unit_db.commit()
+        finally:
+            unit_db.close()
+    except Exception:
+        log.exception("[SPARKIE] failed writing backtest unit event job_id=%s symbol=%s interval=%s", job_id, symbol, interval)
 
 
 def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: list[str]) -> Path:
