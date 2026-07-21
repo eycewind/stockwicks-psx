@@ -276,6 +276,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                 symbol, interval = futures[future]
                 completed_units += 1
                 try:
+                    job = _fresh_job_for_write(db, job_id, job)
                     result = future.result()
                     timing = result.get("sparkie_timing") or {}
                     if timing:
@@ -306,6 +307,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                     _replace_candidates(db, job, _rank_candidates(rows)[:50], errors[:20])
                 except Exception as exc:
                     errors.append(f"{symbol} {interval}: {exc}")
+                    job = _fresh_job_for_write(db, job_id, job)
                     add_event(db, job, "backtesting", f"{symbol} {interval}: backtest failed: {exc}", level="warning")
                 _update_progress(
                     db,
@@ -621,6 +623,23 @@ def _stop_sparkie_process(pid: int) -> bool:
             return False
 
 
+def _fresh_job_for_write(db: Session, job_id: str, fallback: SparkieJob) -> SparkieJob:
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    try:
+        job = db.get(SparkieJob, job_id)
+        if job:
+            return job
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return fallback
+
+
 def add_event(
     db: Session,
     job: SparkieJob,
@@ -681,6 +700,9 @@ def _backtest_symbol_interval(
         eod_close=True,
         oos_fraction=0.35,
         algo_names=tuple(sparkie_algo_policy()),
+        model_refresh_mode=os.getenv("SPARKIE_MODEL_REFRESH_MODE", "fixed"),
+        model_max_age_minutes=float(os.getenv("SPARKIE_MODEL_MAX_AGE_MINUTES", "0")),
+        min_new_bars_before_retrain=int(os.getenv("SPARKIE_MIN_NEW_BARS_BEFORE_RETRAIN", "0")),
     )
     result = run_cheatsheet(req, price_frames={interval: frame})
     elapsed = max(time.monotonic() - started, 0.001)
