@@ -674,7 +674,13 @@
   function buildMarkers(trades) {
     // Build markers for entries and exits
     const m = [];
+    const seen = new Set();
     for (const t of trades) {
+      const price = Number(t.price);
+      const key = `${t.time}|${t.type}|${t.side || ''}|${price.toFixed(4)}`;
+      if (!Number.isFinite(price) || seen.has(key)) continue;
+      seen.add(key);
+
       if (t.type === 'ENTRY') {
         const isLong = t.side === 'long';
         m.push({
@@ -682,7 +688,7 @@
           position: isLong ? 'belowBar' : 'aboveBar',
           color: isLong ? '#3ae374' : '#ff6b6b',
           shape: isLong ? 'arrowUp' : 'arrowDown',
-          text: (isLong ? 'LONG' : 'SHORT') + ' $' + t.price.toFixed(2),
+          text: (isLong ? 'LONG' : 'SHORT') + ' $' + price.toFixed(2),
         });
       } else if (t.type === 'EXIT') {
         m.push({
@@ -690,7 +696,7 @@
           position: 'aboveBar',
           color: '#ffa500',
           shape: 'circle',
-          text: 'EXIT $' + t.price.toFixed(2),
+          text: 'EXIT $' + price.toFixed(2),
         });
       }
     }

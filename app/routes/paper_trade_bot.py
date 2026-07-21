@@ -1862,12 +1862,10 @@ def bot_candles_json(
 
     history_markers = _history_trade_markers(db, bot)
     if history_markers:
-        existing = {(t.get("time"), t.get("type"), t.get("price")) for t in data.get("trades", [])}
-        for marker in history_markers:
-            key = (marker.get("time"), marker.get("type"), marker.get("price"))
-            if key not in existing:
-                data.setdefault("trades", []).append(marker)
-        data["trades"] = sorted(data.get("trades", []), key=lambda t: t["time"])
+        # The log parser and trade-history table describe the same executions,
+        # but their timestamps can differ slightly. Merging both sources causes
+        # visually duplicated markers, so prefer the authoritative DB records.
+        data["trades"] = history_markers
 
     # Also get thresholds from config
     try:
