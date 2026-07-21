@@ -380,12 +380,16 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     result_payload = _parse_json_value(job.result_json, {})
     best = None
     if job.best_symbol:
+        target_units = _sparkie_target_window_units(job.target_period)
+        best_profit = float(job.best_profit_loss or 0.0)
         best = {
             "symbol": job.best_symbol,
             "interval": job.best_interval,
             "algo_name": job.best_algo_name,
             "score": job.best_score,
             "profit_loss": job.best_profit_loss,
+            "total_profit_loss": job.best_profit_loss,
+            "estimated_profit_per_period": best_profit / target_units if target_units else best_profit,
             "trades": job.best_trades,
             "win_rate": job.best_win_rate,
         }
@@ -400,6 +404,8 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "account_equity": float(job.account_equity or 0.0),
         "target_profit": float(job.target_profit or 0.0),
         "target_period": job.target_period,
+        "target_window_units": _sparkie_target_window_units(job.target_period),
+        "target_profit_for_window": float(job.target_profit or 0.0) * _sparkie_target_window_units(job.target_period),
         "confidence_level": float(job.confidence_level or 0.0),
         "trade_allocation_usd": _sparkie_trade_allocation_usd(float(job.account_equity or 0.0)),
         "progress_pct": round(float(job.progress_pct or 0.0), 1),
@@ -441,10 +447,10 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "next_step": _sparkie_v2_next_step(job),
     }
     if include_details:
-        payload["candidates"] = [_sparkie_candidate_payload(row) for row in candidates]
+        payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period) for row in candidates]
         payload["events"] = [_sparkie_event_payload(row) for row in events]
     else:
-        payload["candidates"] = [_sparkie_candidate_payload(row) for row in candidates]
+        payload["candidates"] = [_sparkie_candidate_payload(row, job.target_period) for row in candidates]
     return payload
 
 
@@ -525,6 +531,10 @@ def _sparkie_trade_allocation_usd(account_equity: float) -> float:
     return max(1.0, min(target, cap, equity))
 
 
+def _sparkie_target_window_units(target_period: str | None) -> float:
+    return {"daily": 10.0, "weekly": 2.0, "monthly": 0.5}.get(str(target_period or "daily").lower(), 10.0)
+
+
 def _refresh_sparkie_v2_replay_status(db: Session, job: SparkieJob) -> None:
     if str(job.status or "") != "verifying_replay" or not job.replay_session_id:
         return
@@ -584,8 +594,10 @@ def _sparkie_elapsed_seconds(job: SparkieJob) -> int:
     return max(int((datetime.utcnow() - started_at).total_seconds()), 0)
 
 
-def _sparkie_candidate_payload(row: SparkieCandidate) -> dict[str, Any]:
+def _sparkie_candidate_payload(row: SparkieCandidate, target_period: str | None = None) -> dict[str, Any]:
     params = _parse_config_json(row.params_json)
+    target_units = _sparkie_target_window_units(target_period)
+    total_profit = float(row.profit_loss or 0.0)
     return {
         "id": row.id,
         "symbol": row.symbol,
@@ -594,6 +606,8 @@ def _sparkie_candidate_payload(row: SparkieCandidate) -> dict[str, Any]:
         "status": row.status,
         "score": row.score,
         "profit_loss": row.profit_loss,
+        "total_profit_loss": row.profit_loss,
+        "estimated_profit_per_period": total_profit / target_units if target_units else total_profit,
         "trades": row.trades,
         "win_rate": row.win_rate,
         "max_drawdown": row.max_drawdown,
