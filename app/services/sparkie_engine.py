@@ -20,6 +20,7 @@ from app.modules.replay.routes import DEFAULT_REPLAY_MM_CONFIG, _build_mm_replay
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
+from app.services.stocktwits_symbols import stocktwits_most_active_symbols
 
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,14 @@ MIN_BACKTEST_TRADING_DAYS = 5
 
 
 def sparkie_symbol_bucket() -> list[str]:
+    source = os.getenv("SPARKIE_SYMBOL_SOURCE", "stocktwits_most_active").lower().strip()
+    if source == "stocktwits_most_active":
+        try:
+            symbols = stocktwits_most_active_symbols()
+            if symbols:
+                return symbols
+        except Exception as exc:
+            log.warning("[SPARKIE] Stocktwits Most Active unavailable; using configured bucket: %s", exc)
     raw = os.getenv("SPARKIE_SYMBOL_BUCKET", ",".join(DEFAULT_SYMBOL_BUCKET))
     symbols: list[str] = []
     for value in raw.split(","):
