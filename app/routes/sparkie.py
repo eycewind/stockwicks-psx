@@ -139,11 +139,11 @@ def symbol_source(
         try:
             symbols, data_mode = barchart_top_symbols_with_source(5)
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Barchart Top 100 was unavailable: {exc}") from exc
+            raise HTTPException(status_code=503, detail=f"Stock Bullish rankings were unavailable: {exc}") from exc
         return {
             "ok": True,
             "source": source,
-            "provider": "Barchart",
+            "provider": "Stock Bullish",
             "label": "Top 5 by Weighted Alpha" + (" (CSV snapshot)" if data_mode == "snapshot" else ""),
             "data_mode": data_mode,
             "url": BARCHART_TOP_100_PAGE,

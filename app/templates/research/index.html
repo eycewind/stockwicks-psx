@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Market Research - StockWicks{% endblock %}
+
+{% block head %}
+<style>
+  .research-shell { max-width: 1600px; margin: 0 auto; padding: 30px 24px 48px; }
+  .research-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+  .research-hero h1 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 42px); }
+  .research-muted { color: #a7b4c6; line-height: 1.5; }
+  .research-controls { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .research-tabs { display: inline-flex; gap: 8px; padding: 5px; border: 1px solid rgba(148,163,184,.2); border-radius: 12px; background: rgba(15,23,42,.7); }
+  .research-tab { border: 0; border-radius: 9px; padding: 10px 18px; color: #dce7f5; background: transparent; cursor: pointer; font-weight: 700; }
+  .research-tab.active[data-view="bullish"] { color: #052e22; background: #5eead4; }
+  .research-tab.active[data-view="bearish"] { color: #450a0a; background: #fca5a5; }
+  .research-refresh { border: 1px solid rgba(94,234,212,.35); border-radius: 10px; padding: 10px 16px; color: #e9ffff; background: rgba(20,184,166,.12); cursor: pointer; font-weight: 700; }
+  .research-refresh:disabled { opacity: .55; cursor: wait; }
+  .research-status { min-height: 24px; margin: 0 0 12px; color: #b8c5d8; }
+  .research-card { overflow: hidden; border: 1px solid rgba(148,163,184,.2); border-radius: 14px; background: rgba(15,23,42,.72); box-shadow: 0 20px 55px rgba(0,0,0,.2); }
+  .research-table-wrap { overflow-x: auto; }
+  .research-table { width: 100%; min-width: 1320px; border-collapse: collapse; font-size: 14px; }
+  .research-table th { position: sticky; top: 0; z-index: 1; padding: 13px 12px; text-align: right; color: #d7e5f5; background: #17233a; border-bottom: 1px solid rgba(148,163,184,.22); white-space: nowrap; }
+  .research-table th:nth-child(1), .research-table th:nth-child(2), .research-table td:nth-child(1), .research-table td:nth-child(2) { text-align: left; }
+  .research-table td { padding: 12px; text-align: right; color: #e7edf6; border-bottom: 1px solid rgba(148,163,184,.11); white-space: nowrap; }
+  .research-table tbody tr:hover { background: rgba(56,189,248,.07); }
+  .research-table tbody tr:last-child td { border-bottom: 0; }
+  .research-symbol { color: #67e8f9; font-weight: 800; text-decoration: none; }
+  .research-symbol:hover, .research-link:hover { text-decoration: underline; }
+  .research-name { max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
+  .research-positive { color: #5eead4 !important; }
+  .research-negative { color: #fca5a5 !important; }
+  .research-link { color: #93c5fd; text-decoration: none; }
+  .research-empty { padding: 40px 20px; text-align: center; color: #b8c5d8; }
+  .research-note { margin-top: 12px; font-size: 13px; color: #8fa0b5; }
+  @media (max-width: 720px) {
+    .research-shell { padding: 22px 14px 38px; }
+    .research-hero { align-items: flex-start; flex-direction: column; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="research-shell">
+  <section class="research-hero">
+    <div>
+      <h1>Market Research</h1>
+      <div class="research-muted">Explore the complete 100-stock Weighted Alpha rankings in both market directions.</div>
+    </div>
+  </section>
+
+  <div class="research-controls">
+    <div class="research-tabs" role="tablist" aria-label="Stock ranking direction">
+      <button class="research-tab active" type="button" role="tab" aria-selected="true" data-view="bullish">Stock Bullish</button>
+      <button class="research-tab" type="button" role="tab" aria-selected="false" data-view="bearish">Stock Bearish</button>
+    </div>
+    <button class="research-refresh" id="refreshResearch" type="button">Refresh rankings</button>
+  </div>
+
+  <div class="research-status" id="researchStatus" aria-live="polite">Loading Stock Bullish rankings...</div>
+  <section class="research-card">
+    <div class="research-table-wrap">
+      <table class="research-table">
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Name</th><th>Wtd Alpha</th><th>Rank</th><th>Prev Rank</th>
+            <th>Latest</th><th>Change</th><th>%Change</th><th>52W High</th><th>52W Low</th>
+            <th>52W %Chg</th><th>Time</th><th>Links</th>
+          </tr>
+        </thead>
+        <tbody id="researchRows"><tr><td class="research-empty" colspan="13">Loading rankings...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  <div class="research-note">Weighted Alpha rankings are research data, not a recommendation to buy or sell.</div>
+</main>
+
+<script>
+(() => {
+  const prefix = {{ (request.headers.get("x-forwarded-prefix", ""))|tojson }};
+  const tabs = Array.from(document.querySelectorAll(".research-tab"));
+  const rowsBox = document.getElementById("researchRows");
+  const statusBox = document.getElementById("researchStatus");
+  const refreshButton = document.getElementById("refreshResearch");
+  const cache = {};
+  let activeView = new URLSearchParams(window.location.search).get("view") === "bearish" ? "bearish" : "bullish";
+
+  const escapeHtml = (value) => String(value ?? "N/A")
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+
+  const signClass = (value) => {
+    const parsed = Number.parseFloat(String(value ?? "").replaceAll(",", "").replace("%", ""));
+    return parsed > 0 ? "research-positive" : parsed < 0 ? "research-negative" : "";
+  };
+
+  function setActiveTab(view) {
+    activeView = view;
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.view === view;
+      tab.classList.toggle("active", selected);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", view);
+    window.history.replaceState({}, "", url);
+  }
+
+  function render(data) {
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    if (!rows.length) {
+      rowsBox.innerHTML = '<tr><td class="research-empty" colspan="13">No ranking rows are available.</td></tr>';
+      return;
+    }
+    rowsBox.innerHTML = rows.map((row) => {
+      const symbol = escapeHtml(row.symbol);
+      const quoteUrl = `https://www.barchart.com/stocks/quotes/${encodeURIComponent(row.symbol)}/overview`;
+      return `<tr>
+        <td><a class="research-symbol" href="${quoteUrl}" target="_blank" rel="noopener noreferrer">${symbol}</a></td>
+        <td class="research-name" title="${escapeHtml(row.name)}">${escapeHtml(row.name)}</td>
+        <td class="${signClass(row.weighted_alpha)}">${escapeHtml(row.weighted_alpha)}</td>
+        <td>${escapeHtml(row.rank)}</td><td>${escapeHtml(row.previous_rank)}</td>
+        <td>${escapeHtml(row.latest)}</td><td class="${signClass(row.change)}">${escapeHtml(row.change)}</td>
+        <td class="${signClass(row.percent_change)}">${escapeHtml(row.percent_change)}</td>
+        <td>${escapeHtml(row.high_52w)}</td><td>${escapeHtml(row.low_52w)}</td>
+        <td class="${signClass(row.percent_change_52w)}">${escapeHtml(row.percent_change_52w)}</td>
+        <td>${escapeHtml(row.time)}</td>
+        <td><a class="research-link" href="${quoteUrl}" target="_blank" rel="noopener noreferrer">Overview</a></td>
+      </tr>`;
+    }).join("");
+  }
+
+  async function load(view, forceRefresh = false) {
+    setActiveTab(view);
+    if (cache[view] && !forceRefresh) {
+      render(cache[view]);
+      statusBox.textContent = `${cache[view].label} · ${cache[view].count} stocks`;
+      return;
+    }
+    refreshButton.disabled = true;
+    statusBox.textContent = `Loading ${view === "bullish" ? "Stock Bullish" : "Stock Bearish"} rankings...`;
+    rowsBox.innerHTML = '<tr><td class="research-empty" colspan="13">Loading rankings...</td></tr>';
+    try {
+      const response = await fetch(`${prefix}/api/research/stocks/${view}?refresh=${forceRefresh ? "true" : "false"}`, { credentials: "same-origin" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `Request failed with HTTP ${response.status}`);
+      cache[view] = payload;
+      if (view !== activeView) return;
+      render(payload);
+      statusBox.textContent = `${payload.label} · ${payload.count} stocks · Updated ${new Date(payload.fetched_at).toLocaleString()}`;
+    } catch (error) {
+      if (view !== activeView) return;
+      rowsBox.innerHTML = `<tr><td class="research-empty" colspan="13">${escapeHtml(error.message || "Rankings could not be loaded.")}</td></tr>`;
+      statusBox.textContent = "Rankings unavailable";
+    } finally {
+      refreshButton.disabled = false;
+    }
+  }
+
+  tabs.forEach((tab) => tab.addEventListener("click", () => load(tab.dataset.view)));
+  refreshButton.addEventListener("click", () => load(activeView, true));
+  load(activeView);
+})();
+</script>
+{% endblock %}

@@ -211,7 +211,7 @@
             <option value="most_active" selected>Stocktwits Most Active</option>
             <option value="trending">Stocktwits Trending</option>
             <option value="watchers">Stocktwits Top Watchers</option>
-            <option value="barchart_top">Barchart Top 5 (Weighted Alpha)</option>
+            <option value="barchart_top">Stock Bullish Top 5 (Weighted Alpha)</option>
             <option value="own_list">Own List</option>
           </select>
         </div>
@@ -386,7 +386,7 @@
     symbolSource.disabled = true;
     symbolSourceStatus.className = "sparkie-muted";
     symbolSourceStatus.textContent = source === "barchart_top"
-      ? "Loading current Barchart Top 100 rankings..."
+      ? "Loading current Stock Bullish rankings..."
       : "Loading current Stocktwits rankings...";
     try {
       const data = await requestJson(`/api/sparkie/symbol-source/${encodeURIComponent(source)}`);

@@ -14,16 +14,23 @@ import requests
 
 log = logging.getLogger(__name__)
 
-BARCHART_TOP_100_PAGE = (
-    "https://www.barchart.com/stocks/top-100-stocks"
-    "?orderBy=weightedAlpha&orderDir=desc"
+BARCHART_BULLISH_PAGE = (
+    "https://www.barchart.com/stocks/top-100-stocks/top"
+    "?viewName=main&orderBy=weightedAlpha&orderDir=desc"
 )
+BARCHART_BEARISH_PAGE = (
+    "https://www.barchart.com/stocks/top-100-stocks/bottom"
+    "?viewName=main&orderBy=weightedAlpha&orderDir=asc"
+)
+# Keep the original public constant for the existing Sparkie integration.
+BARCHART_TOP_100_PAGE = BARCHART_BULLISH_PAGE
 BARCHART_TOP_100_API = "https://www.barchart.com/proxies/core-api/v1/quotes/get"
 BARCHART_TOP_100_FIELDS = (
     "symbol",
     "symbolName",
     "weightedAlpha",
     "currentRankUsTop100",
+    "currentRankUsBottom100",
     "previousRank",
     "lastPrice",
     "priceChange",
@@ -36,10 +43,41 @@ BARCHART_TOP_100_FIELDS = (
     "hasOptions",
     "symbolType",
 )
-BARCHART_CSV_FIELDS = BARCHART_TOP_100_FIELDS[:12]
+BARCHART_CSV_FIELDS = (
+    "symbol",
+    "symbolName",
+    "weightedAlpha",
+    "currentRankUsTop100",
+    "previousRank",
+    "lastPrice",
+    "priceChange",
+    "percentChange",
+    "highPrice1y",
+    "lowPrice1y",
+    "percentChange1y",
+    "tradeTime",
+)
 _SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
-_CACHE: dict[str, Any] = {"rows": [], "expires_at": 0.0}
+_CACHE: dict[str, dict[str, Any]] = {
+    "bullish": {"rows": [], "expires_at": 0.0},
+    "bearish": {"rows": [], "expires_at": 0.0},
+}
 _SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "barchart_top_100_stocks.csv"
+
+_RANKING_CONFIG = {
+    "bullish": {
+        "page": BARCHART_BULLISH_PAGE,
+        "list": "stocks.us.weighted_alpha.advances",
+        "order_dir": "desc",
+        "rank_field": "currentRankUsTop100",
+    },
+    "bearish": {
+        "page": BARCHART_BEARISH_PAGE,
+        "list": "stocks.us.weighted_alpha.declines",
+        "order_dir": "asc",
+        "rank_field": "currentRankUsBottom100",
+    },
+}
 
 
 def barchart_top_symbols(limit: int = 5) -> list[str]:
@@ -64,16 +102,32 @@ def barchart_top_symbols_with_source(limit: int = 5) -> tuple[list[str], str]:
 def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:
     """Return Barchart's public Top 100 table ordered by Weighted Alpha."""
 
+    return barchart_ranked_rows("bullish", force_refresh=force_refresh)
+
+
+def barchart_ranked_rows(
+    sentiment: str,
+    *,
+    force_refresh: bool = False,
+) -> list[dict[str, Any]]:
+    """Return all 100 bullish or bearish Weighted Alpha ranking rows."""
+
+    ranking = str(sentiment or "").lower().strip()
+    config = _RANKING_CONFIG.get(ranking)
+    if config is None:
+        raise ValueError("Ranking must be 'bullish' or 'bearish'.")
+
     now = time.monotonic()
-    cached = list(_CACHE.get("rows") or [])
-    if cached and not force_refresh and float(_CACHE.get("expires_at") or 0.0) > now:
+    cache = _CACHE[ranking]
+    cached = list(cache.get("rows") or [])
+    if cached and not force_refresh and float(cache.get("expires_at") or 0.0) > now:
         return cached
 
     timeout = max(2.0, min(float(os.getenv("SPARKIE_BARCHART_TIMEOUT_SECONDS", "12")), 30.0))
     user_agent = "Mozilla/5.0 (compatible; Stockwicks-Sparkie/1.0)"
     session = requests.Session()
     page_response = session.get(
-        BARCHART_TOP_100_PAGE,
+        config["page"],
         headers={"Accept": "text/html,application/xhtml+xml", "User-Agent": user_agent},
         timeout=timeout,
     )
@@ -81,7 +135,7 @@ def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]
 
     headers = {
         "Accept": "application/json,text/plain,*/*",
-        "Referer": BARCHART_TOP_100_PAGE,
+        "Referer": config["page"],
         "User-Agent": user_agent,
         "X-Requested-With": "XMLHttpRequest",
     }
@@ -92,10 +146,10 @@ def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]
     response = session.get(
         BARCHART_TOP_100_API,
         params={
-            "list": "stocks.us.weighted_alpha.advances",
+            "list": config["list"],
             "fields": ",".join(BARCHART_TOP_100_FIELDS),
             "orderBy": "weightedAlpha",
-            "orderDir": "desc",
+            "orderDir": config["order_dir"],
             "meta": "field.shortName,field.type,field.description,lists.lastUpdate",
             "page": 1,
             "limit": 100,
@@ -122,12 +176,13 @@ def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]
         row["symbol"] = symbol
         rows.append(row)
 
-    rows.sort(key=lambda row: _rank_value(row.get("currentRankUsTop100")))
-    if len(rows) < 5:
-        raise RuntimeError(f"Barchart Top 100 returned only {len(rows)} valid equities.")
+    rank_field = str(config["rank_field"])
+    rows.sort(key=lambda row: _rank_value(row.get(rank_field)))
+    if len(rows) < 100:
+        raise RuntimeError(f"Weighted Alpha {ranking} ranking returned only {len(rows)} valid equities.")
 
     ttl = max(60, min(int(os.getenv("SPARKIE_BARCHART_CACHE_SECONDS", "600")), 86_400))
-    _CACHE.update({"rows": rows, "expires_at": now + ttl})
+    cache.update({"rows": rows, "expires_at": now + ttl})
     return rows
 
 
