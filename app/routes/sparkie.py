@@ -26,6 +26,7 @@ from app.modules.replay.routes import (
     _cheatsheet_jobs_lock,
     _cleanup_cheatsheet_jobs,
     _build_mm_replay_config,
+    _create_live_bot_from_replay_session,
     _load_optimizer_run,
     _load_optimizer_cache,
     _queue_qqq_optimizer_job,
@@ -42,6 +43,7 @@ from app.services.sparkie_engine import (
     CASH_DEPLOYMENT_POLICY,
     MIN_ACCOUNT_EQUITY,
     TERMINAL_STATUSES,
+    add_event,
     create_sparkie_job,
     sparkie_symbol_bucket_with_source,
     stop_sparkie_job,
@@ -97,6 +99,11 @@ class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
 
 class SparkieClearHistoryRequest(BaseModel):
     confirm: bool = False
+
+
+class SparkieLiveBotSetupRequest(BaseModel):
+    mirror_live: bool = False
+    acknowledged_live_risk: bool = False
 
 
 @page_router.get("/auth/sparkie", response_class=HTMLResponse)
@@ -331,6 +338,64 @@ def stop_all_evaluations(
     }
 
 
+@router.post("/setup-live-bot/{job_id}")
+def setup_live_bot(
+    job_id: str,
+    payload: SparkieLiveBotSetupRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    job = db.get(SparkieJob, job_id)
+    if not job or int(job.user_id) != int(user.id):
+        raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
+    if str(job.status or "").lower() != "completed" or not job.replay_session_id:
+        raise HTTPException(status_code=409, detail="Complete Replay verification before setting up a bot.")
+
+    replay = db.get(ReplaySession, int(job.replay_session_id))
+    if not replay or int(replay.user_id) != int(user.id):
+        raise HTTPException(status_code=404, detail="Sparkie Replay verification session was not found.")
+    if str(replay.status or "").upper() != "COMPLETED":
+        raise HTTPException(status_code=409, detail="Replay verification must be completed before setting up a bot.")
+
+    replay_pnl, replay_trades = _replay_session_pnl(db, int(replay.id))
+    if payload.mirror_live:
+        if not payload.acknowledged_live_risk:
+            raise HTTPException(status_code=400, detail="Explicit live-trading risk acknowledgement is required.")
+        if job.recommendation != "paper_candidate":
+            raise HTTPException(
+                status_code=409,
+                detail="Sparkie recommends paper-only for this result, so Schwab Live Mirror is blocked.",
+            )
+        if replay_pnl <= 0 or replay_trades <= 0:
+            raise HTTPException(status_code=409, detail="Live Mirror requires positive Replay P/L and completed trades.")
+
+    bot = _create_live_bot_from_replay_session(
+        db,
+        user_id=int(user.id),
+        sess=replay,
+        mirror_live=bool(payload.mirror_live),
+    )
+    add_event(
+        db,
+        job,
+        "bot_setup",
+        (
+            f"Started bot #{bot.id} from Replay #{replay.id} "
+            f"({'Schwab Live Mirror' if payload.mirror_live else 'paper-only'})."
+        ),
+        {"bot_id": bot.id, "replay_session_id": replay.id, "mirror_live": bool(payload.mirror_live)},
+    )
+    db.commit()
+    return {
+        "ok": True,
+        "bot_id": int(bot.id),
+        "mirror_live": bool(payload.mirror_live),
+        "symbol": bot.symbol,
+        "interval": bot.interval,
+        "algo_name": bot.algo_name,
+    }
+
+
 @router.post("/history/clear")
 def clear_history(
     payload: SparkieClearHistoryRequest,
@@ -444,6 +509,13 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     equity = float(job.account_equity or 0.0)
     target_profit = float(job.target_profit or 0.0)
     live_elapsed_seconds = _sparkie_elapsed_seconds(job) if str(job.status or "") in ACTIVE_STATUSES else int(job.elapsed_seconds or 0)
+    replay_verification = _sparkie_replay_verification_payload(db, job)
+    replay_completed = bool(replay_verification and str(replay_verification.get("status") or "").lower() == "completed")
+    replay_positive = bool(
+        replay_completed
+        and float(replay_verification.get("profit_loss") or 0.0) > 0
+        and int(replay_verification.get("trades") or 0) > 0
+    )
     payload = {
         "ok": True,
         "job_id": job.id,
@@ -482,7 +554,15 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "best_session": best,
         "best_candidate": best,
         "replay_session_id": job.replay_session_id,
-        "replay_verification": _sparkie_replay_verification_payload(db, job),
+        "replay_verification": replay_verification,
+        "bot_setup": {
+            "paper_allowed": bool(job.replay_session_id and replay_completed),
+            "live_mirror_allowed": bool(
+                job.replay_session_id
+                and replay_positive
+                and job.recommendation == "paper_candidate"
+            ),
+        },
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,
         "error_message": job.error_message,

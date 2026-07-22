@@ -2139,6 +2139,24 @@ def run_replay_as_live_bot(
     if not _session_belongs_to_user(sess, user):
         raise HTTPException(status_code=404, detail="Session not found")
 
+    bot = _create_live_bot_from_replay_session(
+        db,
+        user_id=int(user.id),
+        sess=sess,
+        mirror_live=_checkbox_on(mirror_live),
+    )
+    return JSONResponse({"ok": True, "bot_id": bot.id})
+
+
+def _create_live_bot_from_replay_session(
+    db: Session,
+    *,
+    user_id: int,
+    sess: ReplaySession,
+    mirror_live: bool,
+):
+    """Create and start a paper bot from one replay configuration."""
+
     algo_name = (sess.algo_name or "").strip()
     if algo_name == "AlgoMM":
         algo_name = "Algo1_MM"
@@ -2149,7 +2167,7 @@ def run_replay_as_live_bot(
 
     existing = (
         db.query(PaperStockTradeBot)
-        .filter_by(user_id=user.id, symbol=sess.symbol, is_active=True)
+        .filter_by(user_id=user_id, symbol=sess.symbol, is_active=True)
         .first()
     )
     if existing:
@@ -2174,7 +2192,7 @@ def run_replay_as_live_bot(
     )
 
     bot = PaperStockTradeBot(
-        user_id=user.id,
+        user_id=user_id,
         symbol=sess.symbol,
         interval=sess.interval,
         algo_name=algo_name,
@@ -2183,7 +2201,7 @@ def run_replay_as_live_bot(
         notify_email=False,
         allow_short_selling=bool(cfg.get("allow_short_selling", cfg.get("allow_short", True))),
         eod_auto_close=bool(cfg.get("eod_close", True)),
-        mirror_live=_checkbox_on(mirror_live),
+        mirror_live=bool(mirror_live),
         is_active=True,
         status="RUNNING",
         created_at=datetime.utcnow(),
@@ -2197,13 +2215,12 @@ def run_replay_as_live_bot(
 
     log.info(
         "[REPLAY_ROUTE] replay session_id=%s copied to live bot_id=%s symbol=%s algo=%s",
-        session_id,
+        sess.id,
         bot.id,
         bot.symbol,
         bot.algo_name,
     )
-
-    return JSONResponse({"ok": True, "bot_id": bot.id})
+    return bot
 
 
 # =============================================================================

@@ -460,6 +460,20 @@
     const replayText = replay
       ? `${escapeHtml(replay.status || "unknown")} &middot; P/L $${Number(replay.profit_loss || 0).toLocaleString()} &middot; ${Number(replay.trades || 0).toLocaleString()} trades${replay.error_message ? ` &middot; ${escapeHtml(replay.error_message)}` : ""}`
       : "Not queued yet";
+    const botSetup = data.bot_setup || {};
+    const setupBotActions = botSetup.paper_allowed ? `
+      <div style="height:14px"></div>
+      <div class="sparkie-status-banner">
+        <strong>Set up bot from verified Replay</strong>
+        <div class="sparkie-muted">This immediately starts a bot with Replay #${escapeHtml(data.replay_session_id)} parameters. Paper mode sends no broker orders.</div>
+        <div class="sparkie-actions">
+          <button class="btn btn-primary" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', false)">Start Paper Bot</button>
+          ${botSetup.live_mirror_allowed
+            ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true)">Start Schwab Live Mirror</button>`
+            : `<span class="sparkie-warn">Live Mirror blocked: this result is paper-only.</span>`}
+        </div>
+      </div>
+    ` : "";
 
     const summary = `
       <div class="sparkie-summary">
@@ -516,10 +530,33 @@
       ${statusBanner(data)}
       ${!fullCashResultsValid ? `<div class="sparkie-status-banner" style="border-color:rgba(251,191,36,.6);"><strong>Fresh run required</strong><div class="sparkie-muted">This historical job was calculated under Sparkie's former partial-cash sizing policy. Its P/L and share counts cannot be used to evaluate a full-cash account.</div></div>` : ""}
       ${summary}
+      ${setupBotActions}
       ${dailyRows ? `<div style="height:14px"></div><h3>Actual Daily P/L — Selected Backtest</h3><div class="sparkie-muted">Each row is that trading day's EOD-closed P/L. Cumulative P/L is the running total; a no-trade day counts as a missed daily target.</div><div class="sparkie-summary">${dailyRows}</div>` : ""}
       ${candidateRows ? `<div style="height:14px"></div><h3>Top Candidates</h3><div class="sparkie-muted">For daily targets, Sparkie reports actual average daily EOD P/L first. Cumulative P/L is the supporting backtest evidence.</div><div class="sparkie-summary">${candidateRows}</div>` : ""}
       ${eventRows ? `<div style="height:14px"></div><h3>Events</h3><div class="sparkie-list">${eventRows}</div>` : ""}
     `;
+  }
+
+  async function setupSparkieBot(jobId, mirrorLive) {
+    if (!mirrorLive) {
+      if (!window.confirm("Create and immediately start a paper bot using this verified Replay configuration?")) return;
+    } else {
+      const accepted = window.prompt(
+        "WARNING: Live Mirror can submit real Schwab orders using the configured full-cash sizing. Type LIVE to acknowledge and start."
+      );
+      if (accepted !== "LIVE") return;
+    }
+    try {
+      const data = await requestJson(`/api/sparkie/setup-live-bot/${encodeURIComponent(jobId)}`, {
+        method: "POST",
+        body: JSON.stringify({mirror_live: mirrorLive, acknowledged_live_risk: mirrorLive})
+      });
+      const mode = data.mirror_live ? "Schwab Live Mirror" : "paper";
+      window.alert(`Bot #${data.bot_id} started in ${mode} mode for ${data.symbol} ${data.interval} ${data.algo_name}.`);
+      window.location.href = apiPath("/auth/papertradebot");
+    } catch (error) {
+      window.alert(error.message || String(error));
+    }
   }
 
   function renderHistory(data) {
