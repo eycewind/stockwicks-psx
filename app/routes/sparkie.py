@@ -36,6 +36,7 @@ from app.services.backtest_cheatsheet_service import CheatSheetRequest
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.replay_process import stop_session
+from app.services.stocktwits_symbols import STOCKTWITS_SOURCES, stocktwits_ranked_symbols
 from app.services.sparkie_engine import (
     ACTIVE_STATUSES,
     CASH_DEPLOYMENT_POLICY,
@@ -85,6 +86,7 @@ class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
     symbols: list[str] = Field(default_factory=list)
     intervals: list[str] = Field(default_factory=list)
     algos: list[str] = Field(default_factory=list)
+    symbol_source: Literal["most_active", "trending", "watchers", "own_list"] = "most_active"
 
 
 class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
@@ -114,6 +116,25 @@ def sparkie_page(
             "symbol_bucket_source": symbol_bucket_source,
         },
     )
+
+
+@router.get("/symbol-source/{source}")
+def symbol_source(
+    source: Literal["most_active", "trending", "watchers"],
+    _user=Depends(get_current_user),
+):
+    try:
+        symbols = stocktwits_ranked_symbols(source)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    config = STOCKTWITS_SOURCES[source]
+    return {
+        "ok": True,
+        "source": source,
+        "label": config["label"],
+        "url": config["page"],
+        "symbols": symbols,
+    }
 
 
 @router.post("/goal-feasibility")
@@ -178,6 +199,16 @@ def run_evaluation(
     if float(payload.account_equity or 0.0) < MIN_ACCOUNT_EQUITY:
         raise HTTPException(status_code=400, detail="Sparkie requires at least $5,000 account equity.")
 
+    if payload.symbol_source == "own_list":
+        selected_symbols = _clean_symbols(payload.symbols)
+        if not selected_symbols:
+            raise HTTPException(status_code=400, detail="Enter at least one ticker for Own List.")
+    else:
+        try:
+            selected_symbols = stocktwits_ranked_symbols(payload.symbol_source)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     job_id = f"sparkie-{user.id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
     job = create_sparkie_job(
         db,
@@ -187,7 +218,8 @@ def run_evaluation(
         target_profit=payload.target_profit,
         target_period=payload.target_period,
         confidence_level=payload.confidence_level,
-        symbol_bucket=_clean_symbols(payload.symbols),
+        symbol_bucket=selected_symbols,
+        symbol_source=payload.symbol_source,
     )
     db.commit()
 
@@ -458,6 +490,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "updated_at": updated_at,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         "symbol_bucket": _parse_json_value(job.symbol_bucket_json, []),
+        "symbol_source": request_payload.get("symbol_source", "legacy") if isinstance(request_payload, dict) else "legacy",
         "interval_policy": _parse_json_value(job.interval_policy_json, []),
         "algo_policy": _parse_json_value(job.algo_policy_json, []),
         "preview": {

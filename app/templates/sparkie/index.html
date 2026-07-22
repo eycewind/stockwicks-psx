@@ -206,12 +206,22 @@
         </div>
 
         <div class="sparkie-field">
+          <label for="symbolSource">Stock source</label>
+          <select id="symbolSource">
+            <option value="most_active" selected>Stocktwits Most Active</option>
+            <option value="trending">Stocktwits Trending</option>
+            <option value="watchers">Stocktwits Top Watchers</option>
+            <option value="own_list">Own List</option>
+          </select>
+        </div>
+
+        <div class="sparkie-field">
           <label for="symbolBucket">Stocks Sparkie should evaluate</label>
-          <textarea id="symbolBucket" rows="2" maxlength="200">{{ default_symbol_bucket }}</textarea>
+          <textarea id="symbolBucket" rows="2" maxlength="200" readonly>{{ default_symbol_bucket }}</textarea>
           {% if symbol_bucket_source == "stocktwits_most_active" %}
-          <div class="sparkie-muted" style="font-size:12px; margin-top:6px;">Source: Stocktwits Most Active public rankings (top {{ default_symbol_bucket.split(',') | length }}). You can change the tickers for this run.</div>
+          <div id="symbolSourceStatus" class="sparkie-muted" style="font-size:12px; margin-top:6px;">Source: Stocktwits Most Active public rankings ({{ default_symbol_bucket.split(',') | length }} equities).</div>
           {% else %}
-          <div class="sparkie-warn" style="font-size:12px; margin-top:6px;">Stocktwits Most Active could not be retrieved. This is the configured fallback bucket, not scraped Stocktwits data.</div>
+          <div id="symbolSourceStatus" class="sparkie-warn" style="font-size:12px; margin-top:6px;">Stocktwits Most Active could not be retrieved. Select Own List to use this configured fallback bucket.</div>
           {% endif %}
         </div>
 
@@ -267,6 +277,9 @@
   const stopBtn = document.getElementById("stopBtn");
   const stopAllBtn = document.getElementById("stopAllBtn");
   const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+  const symbolSource = document.getElementById("symbolSource");
+  const symbolBucket = document.getElementById("symbolBucket");
+  const symbolSourceStatus = document.getElementById("symbolSourceStatus");
   const activeJobStorageKey = "stockwicks.sparkie.v2.activeJobId";
   let activeJobId = null;
   let statusTimer = null;
@@ -345,7 +358,7 @@
   }
 
   function evaluationPayload() {
-    const symbols = document.getElementById("symbolBucket").value
+    const symbols = symbolBucket.value
       .split(/[\s,]+/)
       .map((value) => value.trim().toUpperCase())
       .filter(Boolean);
@@ -354,9 +367,39 @@
       target_profit: Number(document.getElementById("targetProfit").value || 0),
       target_period: document.getElementById("targetPeriod").value,
       confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
+      symbol_source: symbolSource.value,
       symbols
     };
   }
+
+  async function loadSymbolSource() {
+    const source = symbolSource.value;
+    if (source === "own_list") {
+      symbolBucket.readOnly = false;
+      symbolBucket.focus();
+      symbolSourceStatus.className = "sparkie-muted";
+      symbolSourceStatus.textContent = "Enter comma-separated stock tickers for this run.";
+      return;
+    }
+    symbolBucket.readOnly = true;
+    symbolSource.disabled = true;
+    symbolSourceStatus.className = "sparkie-muted";
+    symbolSourceStatus.textContent = "Loading current Stocktwits rankings...";
+    try {
+      const data = await requestJson(`/api/sparkie/symbol-source/${encodeURIComponent(source)}`);
+      symbolBucket.value = (data.symbols || []).join(",");
+      symbolSourceStatus.className = "sparkie-muted";
+      symbolSourceStatus.textContent = `Source: Stocktwits ${data.label} public rankings (${(data.symbols || []).length} equities).`;
+    } catch (error) {
+      symbolBucket.value = "";
+      symbolSourceStatus.className = "sparkie-bad";
+      symbolSourceStatus.textContent = error.message || String(error);
+    } finally {
+      symbolSource.disabled = false;
+    }
+  }
+
+  symbolSource.addEventListener("change", loadSymbolSource);
 
   function statusBanner(data) {
     const pct = Math.max(0, Math.min(100, Number(data.progress_pct ?? data.percent_complete ?? 0)));
@@ -384,6 +427,7 @@
       ? `${Number(timing.completed_units || 0).toLocaleString()} units · ${secondsText(timing.total_duration_seconds)} backtest CPU time · ${Number(timing.bars_per_second || 0).toLocaleString()} bars/sec${slowest ? ` · slowest ${escapeHtml(slowest.symbol)} ${escapeHtml(slowest.interval)} ${secondsText(slowest.duration_seconds)}` : ""}`
       : "Waiting for first completed backtest unit";
     const policy = [
+      `Source: ${String(data.symbol_source || "legacy").replaceAll("_", " ")}`,
       `Bucket: ${(data.symbol_bucket || []).join(", ") || "default"}`,
       `Intervals: ${(data.interval_policy || []).join(", ") || "auto"}`,
       `Algos: ${(data.algo_policy || []).join(", ") || "auto"}`

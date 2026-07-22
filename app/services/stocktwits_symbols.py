@@ -12,15 +12,39 @@ import requests
 
 log = logging.getLogger(__name__)
 
-STOCKTWITS_MOST_ACTIVE_API = "https://api.stocktwits.com/api/2/trending/most_active.json"
-STOCKTWITS_MOST_ACTIVE_PAGE = "https://stocktwits.com/sentiment/most-active"
-STOCKTWITS_MOST_ACTIVE_READER = "https://r.jina.ai/http://stocktwits.com/sentiment/most-active"
+STOCKTWITS_SOURCES: dict[str, dict[str, str]] = {
+    "most_active": {
+        "label": "Most Active",
+        "api": "https://api.stocktwits.com/api/2/trending/most_active.json",
+        "page": "https://stocktwits.com/sentiment/most-active",
+        "reader": "https://r.jina.ai/http://stocktwits.com/sentiment/most-active",
+        "heading": "Most Active",
+    },
+    "trending": {
+        "label": "Trending",
+        "api": "https://api.stocktwits.com/api/2/trending/symbols.json",
+        "page": "https://stocktwits.com/sentiment",
+        "reader": "https://r.jina.ai/http://stocktwits.com/sentiment",
+        "heading": "Trending",
+    },
+    "watchers": {
+        "label": "Top Watchers",
+        "api": "https://api.stocktwits.com/api/2/trending/top_watched.json",
+        "page": "https://stocktwits.com/sentiment/watchers",
+        "reader": "https://r.jina.ai/http://stocktwits.com/sentiment/watchers",
+        "heading": "Watchers",
+    },
+}
 _SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
-_CACHE: dict[str, Any] = {"expires_at": 0.0, "symbols": []}
+_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def stocktwits_most_active_symbols(limit: int | None = None) -> list[str]:
-    """Return Stocktwits' current most-active equity symbols.
+    return stocktwits_ranked_symbols("most_active", limit)
+
+
+def stocktwits_ranked_symbols(source: str, limit: int | None = None) -> list[str]:
+    """Return ranked equities from a supported Stocktwits sentiment page.
 
     Stocktwits' page is backed by a JSON endpoint but can also contain the
     ranked symbol links in its rendered HTML. Supporting both shapes gives us
@@ -30,23 +54,28 @@ def stocktwits_most_active_symbols(limit: int | None = None) -> list[str]:
 
     # Stocktwits exposes five ranked rows publicly and gates later rows behind
     # login. Operators may raise this if Stocktwits makes more rows public.
+    source_key = str(source or "").lower().strip()
+    config = STOCKTWITS_SOURCES.get(source_key)
+    if not config:
+        raise ValueError(f"Unsupported Stocktwits symbol source: {source}")
     resolved_limit = max(1, min(int(limit or os.getenv("SPARKIE_STOCKTWITS_LIMIT", "5")), 10))
     now = time.monotonic()
-    cached = list(_CACHE.get("symbols") or [])
-    if cached and float(_CACHE.get("expires_at") or 0.0) > now:
+    cache_entry = _CACHE.get(source_key) or {}
+    cached = list(cache_entry.get("symbols") or [])
+    if cached and float(cache_entry.get("expires_at") or 0.0) > now:
         return cached[:resolved_limit]
 
     timeout = max(1.0, min(float(os.getenv("SPARKIE_STOCKTWITS_TIMEOUT_SECONDS", "8")), 30.0))
     headers = {
         "Accept": "application/json, text/html;q=0.9",
-        "Referer": STOCKTWITS_MOST_ACTIVE_PAGE,
+        "Referer": config["page"],
         "User-Agent": "Mozilla/5.0 (compatible; Stockwicks-Sparkie/1.0)",
     }
     errors: list[str] = []
     symbols: list[str] = []
 
     try:
-        response = requests.get(STOCKTWITS_MOST_ACTIVE_API, headers=headers, timeout=timeout)
+        response = requests.get(config["api"], headers=headers, timeout=timeout)
         response.raise_for_status()
         symbols = _symbols_from_payload(response.json())
     except Exception as exc:
@@ -55,18 +84,18 @@ def stocktwits_most_active_symbols(limit: int | None = None) -> list[str]:
     if not symbols:
         try:
             response = requests.get(
-                STOCKTWITS_MOST_ACTIVE_READER,
+                config["reader"],
                 headers={"Accept": "text/plain", "User-Agent": headers["User-Agent"]},
                 timeout=timeout,
             )
             response.raise_for_status()
-            symbols = _symbols_from_markdown(response.text)
+            symbols = _symbols_from_markdown(response.text, config["heading"])
         except Exception as exc:
             errors.append(f"reader: {exc}")
 
     if not symbols:
         try:
-            response = requests.get(STOCKTWITS_MOST_ACTIVE_PAGE, headers=headers, timeout=timeout)
+            response = requests.get(config["page"], headers=headers, timeout=timeout)
             response.raise_for_status()
             symbols = _symbols_from_html(response.text)
         except Exception as exc:
@@ -74,11 +103,10 @@ def stocktwits_most_active_symbols(limit: int | None = None) -> list[str]:
 
     symbols = _dedupe_symbols(symbols)[:resolved_limit]
     if not symbols:
-        raise RuntimeError("Stocktwits Most Active was unavailable (" + "; ".join(errors) + ")")
+        raise RuntimeError(f"Stocktwits {config['label']} was unavailable (" + "; ".join(errors) + ")")
 
     ttl = max(60, min(int(os.getenv("SPARKIE_STOCKTWITS_CACHE_SECONDS", "3600")), 86_400))
-    _CACHE["symbols"] = symbols
-    _CACHE["expires_at"] = now + ttl
+    _CACHE[source_key] = {"symbols": symbols, "expires_at": now + ttl}
     return symbols
 
 
@@ -114,11 +142,11 @@ def _symbols_from_html(html: str) -> list[str]:
     return parser.symbols
 
 
-def _symbols_from_markdown(markdown: str) -> list[str]:
-    """Extract only numbered rows from the rendered Most Active table."""
+def _symbols_from_markdown(markdown: str, heading: str = "Most Active") -> list[str]:
+    """Extract only numbered rows from one rendered Stocktwits table."""
 
     text = (markdown or "").replace("\r\n", "\n")
-    heading_at = text.find("# Most Active")
+    heading_at = text.find(f"# {heading}")
     if heading_at < 0:
         return []
     table_at = text.find("\nRank\n", heading_at)

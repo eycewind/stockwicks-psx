@@ -49,4 +49,22 @@ QNTU
 
 [SPY](http://stocktwits.com/symbol/SPY)
 """
-    assert _symbols_from_markdown(markdown) == ["SPY", "SMCI", "MU"]
+    assert _symbols_from_markdown(markdown, "Most Active") == ["SPY", "SMCI", "MU"]
+
+
+def test_symbols_from_trending_markdown_skip_crypto_rank() -> None:
+    markdown = """
+# Trending
+Rank
+Symbol
+1
+
+[SMCI](http://stocktwits.com/symbol/SMCI)
+2
+
+[NEAR](http://stocktwits.com/coins/near)
+3
+
+[NNE](http://stocktwits.com/symbol/NNE)
+"""
+    assert _symbols_from_markdown(markdown, "Trending") == ["SMCI", "NNE"]

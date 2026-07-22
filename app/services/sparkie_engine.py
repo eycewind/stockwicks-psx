@@ -20,7 +20,7 @@ from app.modules.replay.routes import DEFAULT_REPLAY_MM_CONFIG, _build_mm_replay
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
-from app.services.stocktwits_symbols import stocktwits_most_active_symbols
+from app.services.stocktwits_symbols import stocktwits_ranked_symbols
 
 
 log = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def sparkie_symbol_bucket_with_source() -> tuple[list[str], str]:
     source = os.getenv("SPARKIE_SYMBOL_SOURCE", "stocktwits_most_active").lower().strip()
     if source == "stocktwits_most_active":
         try:
-            symbols = stocktwits_most_active_symbols()
+            symbols = stocktwits_ranked_symbols("most_active")
             if symbols:
                 return symbols, "stocktwits_most_active"
         except Exception as exc:
@@ -92,6 +92,7 @@ def create_sparkie_job(
     target_period: str,
     confidence_level: float,
     symbol_bucket: list[str] | None = None,
+    symbol_source: str = "own_list",
 ) -> SparkieJob:
     # A user may intentionally narrow or replace the configured universe for
     # one evaluation. An empty selection keeps the operator's default policy.
@@ -104,6 +105,7 @@ def create_sparkie_job(
         "target_period": target_period,
         "confidence_level": float(confidence_level),
         "symbol_bucket": symbols,
+        "symbol_source": symbol_source,
         "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
     }
     job = SparkieJob(
@@ -850,6 +852,7 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
     base_dir = Path(os.getenv("DATA_DIR", "data")) / str(job.user_id) / "sparkie"
     base_dir.mkdir(parents=True, exist_ok=True)
     path = base_dir / f"{job.id}_summary.json"
+    request_payload = _json_dict(job.request_json)
     payload = {
         "job_id": job.id,
         "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -857,6 +860,7 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
         "target_profit": float(job.target_profit or 0.0),
         "target_period": job.target_period,
         "symbol_bucket": _json_list(job.symbol_bucket_json),
+        "symbol_source": request_payload.get("symbol_source", "legacy"),
         "interval_policy": _json_list(job.interval_policy_json),
         "algo_policy": _json_list(job.algo_policy_json),
         "day_trading_policy": {
@@ -1304,3 +1308,13 @@ def _json_list(value: str | None) -> list[str]:
     except Exception:
         return []
     return []
+
+
+def _json_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
