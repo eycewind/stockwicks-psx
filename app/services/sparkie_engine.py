@@ -20,6 +20,7 @@ from app.modules.replay.routes import DEFAULT_REPLAY_MM_CONFIG, _build_mm_replay
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
+from app.services.barchart_symbols import barchart_top_symbols
 from app.services.stocktwits_symbols import stocktwits_ranked_symbols
 
 
@@ -41,6 +42,13 @@ MIN_BACKTEST_TRADING_DAYS = 5
 
 def sparkie_symbol_bucket_with_source() -> tuple[list[str], str]:
     source = os.getenv("SPARKIE_SYMBOL_SOURCE", "stocktwits_most_active").lower().strip()
+    if source == "barchart_top":
+        try:
+            symbols = barchart_top_symbols(5)
+            if symbols:
+                return symbols, "barchart_top"
+        except Exception as exc:
+            log.warning("[SPARKIE] Barchart Top 5 unavailable; using configured bucket: %s", exc)
     if source == "stocktwits_most_active":
         try:
             symbols = stocktwits_ranked_symbols("most_active")

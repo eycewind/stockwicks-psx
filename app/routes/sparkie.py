@@ -34,6 +34,11 @@ from app.modules.replay.routes import (
     _store_cheatsheet_job,
 )
 from app.services.backtest_cheatsheet_service import CheatSheetRequest
+from app.services.barchart_symbols import (
+    BARCHART_TOP_100_PAGE,
+    barchart_top_symbols,
+    barchart_top_symbols_with_source,
+)
 from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.replay_process import stop_session
@@ -88,7 +93,7 @@ class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
     symbols: list[str] = Field(default_factory=list)
     intervals: list[str] = Field(default_factory=list)
     algos: list[str] = Field(default_factory=list)
-    symbol_source: Literal["most_active", "trending", "watchers", "own_list"] = "most_active"
+    symbol_source: Literal["most_active", "trending", "watchers", "barchart_top", "own_list"] = "most_active"
 
 
 class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
@@ -127,9 +132,23 @@ def sparkie_page(
 
 @router.get("/symbol-source/{source}")
 def symbol_source(
-    source: Literal["most_active", "trending", "watchers"],
+    source: Literal["most_active", "trending", "watchers", "barchart_top"],
     _user=Depends(get_current_user),
 ):
+    if source == "barchart_top":
+        try:
+            symbols, data_mode = barchart_top_symbols_with_source(5)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Barchart Top 100 was unavailable: {exc}") from exc
+        return {
+            "ok": True,
+            "source": source,
+            "provider": "Barchart",
+            "label": "Top 5 by Weighted Alpha" + (" (CSV snapshot)" if data_mode == "snapshot" else ""),
+            "data_mode": data_mode,
+            "url": BARCHART_TOP_100_PAGE,
+            "symbols": symbols,
+        }
     try:
         symbols = stocktwits_ranked_symbols(source)
     except Exception as exc:
@@ -138,6 +157,7 @@ def symbol_source(
     return {
         "ok": True,
         "source": source,
+        "provider": "Stocktwits",
         "label": config["label"],
         "url": config["page"],
         "symbols": symbols,
@@ -212,7 +232,11 @@ def run_evaluation(
             raise HTTPException(status_code=400, detail="Enter at least one ticker for Own List.")
     else:
         try:
-            selected_symbols = stocktwits_ranked_symbols(payload.symbol_source)
+            selected_symbols = (
+                barchart_top_symbols(5)
+                if payload.symbol_source == "barchart_top"
+                else stocktwits_ranked_symbols(payload.symbol_source)
+            )
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
