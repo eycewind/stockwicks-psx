@@ -569,14 +569,34 @@ def queue_replay_verification(db: Session, job: SparkieJob, best: dict[str, Any]
     )
     db.add(session)
     db.flush()
+    session_id = int(session.id)
+    job.replay_session_id = session_id
+
+    # The replay worker uses a separate database connection. Commit the new
+    # session before publishing its id, otherwise a fast worker can consume the
+    # task while this row is still invisible and leave it QUEUED forever.
+    db.commit()
+
     from app.tasks.replay_tasks import start_replay_session_task
 
-    async_result = start_replay_session_task.apply_async(args=(int(session.id),), queue="replay")
-    cfg["sparkie_replay_task_id"] = async_result.id
-    session.config_json = _json(cfg)
-    job.replay_session_id = int(session.id)
-    db.flush()
-    return int(session.id)
+    try:
+        async_result = start_replay_session_task.apply_async(args=(session_id,), queue="replay")
+    except Exception as exc:
+        db.rollback()
+        session = db.query(ReplaySession).filter_by(id=session_id).first()
+        if session is not None:
+            session.status = "ERROR"
+            session.error_message = f"Sparkie replay queue failed: {str(exc)[:400]}"
+        db.commit()
+        raise
+
+    session = db.query(ReplaySession).filter_by(id=session_id).first()
+    if session is not None:
+        cfg["sparkie_replay_task_id"] = async_result.id
+        session.config_json = _json(cfg)
+        session.error_message = None
+    db.commit()
+    return session_id
 
 
 def stop_sparkie_job(db: Session, job: SparkieJob, reason: str = "Sparkie stop requested.") -> None:

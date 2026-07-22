@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict
 
 from celery import shared_task
+from celery.exceptions import Retry
 
 from app.database.connection import SessionLocal
 from app.models.replay import ReplaySession
@@ -151,8 +152,8 @@ def _mark_session_error(db, session_id: int, message: str) -> None:
 # Tasks
 # =============================================================================
 
-@shared_task(name="app.tasks.replay_tasks.start_replay_session_task", queue="replay")
-def start_replay_session_task(session_id: int):
+@shared_task(bind=True, name="app.tasks.replay_tasks.start_replay_session_task", queue="replay")
+def start_replay_session_task(self, session_id: int):
     """
     Start the existing replay orchestrator from Celery.
 
@@ -176,12 +177,16 @@ def start_replay_session_task(session_id: int):
     try:
         sess = db.query(ReplaySession).filter_by(id=session_id).first()
         if not sess:
-            logger.warning("[REPLAY] start requested but session not found id=%s", session_id)
-            return {
-                "ok": False,
-                "session_id": session_id,
-                "error": "SESSION_NOT_FOUND",
-            }
+            logger.warning(
+                "[REPLAY] start requested but session not found id=%s retry=%s/5",
+                session_id,
+                self.request.retries,
+            )
+            raise self.retry(
+                exc=RuntimeError(f"Replay session {session_id} is not visible yet"),
+                countdown=1,
+                max_retries=5,
+            )
 
         current_status = str(sess.status or "").upper()
         if current_status not in {"PENDING", "QUEUED", "STARTING", "CREATED"}:
@@ -253,6 +258,8 @@ def start_replay_session_task(session_id: int):
             },
         }
 
+    except Retry:
+        raise
     except Exception as e:
         db.rollback()
         logger.exception("[REPLAY] Failed starting session_id=%s", session_id)
