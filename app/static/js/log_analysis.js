@@ -150,28 +150,46 @@ async function loadChart() {
     return;
   }
 
-  const priceTrace = candles.length
-    ? {
-        x: candles.map(c => c.time),
-        open: candles.map(c => c.open),
-        high: candles.map(c => c.high),
-        low: candles.map(c => c.low),
-        close: candles.map(c => c.close),
-        type: "candlestick",
-        name: "Candles"
-      }
-    : {
-        x: pricePoints.map(p => p.time),
-        y: pricePoints.map(p => p.price),
-        mode: "lines",
-        type: "scatter",
-        name: "Close Price",
-        line: { color: "#57e6c2", width: 2 },
-        text: pricePoints.map(p =>
-          `Close ${fmt(p.close || p.price, 2)}<br>${safeText(p.action || "")}<br>${safeText(p.reason || "")}`
-        ),
-        hoverinfo: "text+x+y"
-      };
+  // A single line can use both candle closes and decision/execution prices.
+  // This keeps trades visible when an older Replay log has gaps in its candle
+  // file, instead of placing markers beyond the end of a candlestick series.
+  const linePoints = (candles.length
+    ? [
+        ...candles.map(c => ({
+          time: c.time,
+          price: c.close,
+          close: c.close,
+          action: "",
+          reason: ""
+        })),
+        ...events.map(e => ({
+          time: e.time,
+          price: e.price,
+          close: e.price,
+          action: e.action,
+          reason: e.reason
+        }))
+      ]
+    : pricePoints).sort((left, right) => {
+      const normalized = value => String(value || "")
+        .replace(/ EDT$/, "-04:00")
+        .replace(/ EST$/, "-05:00")
+        .replace(/ ET$/, "-04:00");
+      return Date.parse(normalized(left.time)) - Date.parse(normalized(right.time));
+    });
+  const priceTrace = {
+    x: linePoints.map(p => p.time),
+    y: linePoints.map(p => p.price),
+    mode: "lines",
+    type: "scatter",
+    name: "Price",
+    connectgaps: false,
+    line: { color: "#57e6c2", width: 2 },
+    text: linePoints.map(p =>
+      `Price ${fmt(p.close || p.price, 2)}<br>${safeText(p.action || "")}<br>${safeText(p.reason || "")}`
+    ),
+    hoverinfo: "text+x+y"
+  };
 
   const openEvents = events.filter(e =>
     e.action === "OPEN_LONG" ||
@@ -225,13 +243,15 @@ async function loadChart() {
     "priceChart",
     [priceTrace, openTrace, exitTrace],
     {
-      title: candles.length ? "Entry / Exit Candles" : "Entry / Exit Close Price",
+      title: "Entry / Exit Price",
       paper_bgcolor: "#0b0a2a",
       plot_bgcolor: "#0b0a2a",
       font: { color: "#ffffff" },
       xaxis: {
         rangeslider: { visible: false },
-        gridcolor: "#26324a"
+        gridcolor: "#26324a",
+        tickformat: "%m/%d<br>%H:%M",
+        automargin: true
       },
       yaxis: {
         title: "Price",
