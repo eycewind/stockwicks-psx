@@ -666,6 +666,7 @@ def log_trade_decision(
             decision_path,
             {
                 "ts_et": _fmt_est(ts_est),
+                "bar_time": _fmt_est(df.index[-1]) if df is not None and not df.empty else _fmt_est(ts_est),
                 "bot_id": bot_id_for_name,
                 "symbol": symbol,
                 "interval": interval,

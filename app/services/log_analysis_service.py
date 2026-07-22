@@ -146,6 +146,7 @@ def normalize_row(row: Dict[str, Any], path: Optional[Path] = None) -> Dict[str,
     if out.get("datetime") and not out.get("time"):
         out["time"] = out.get("datetime")
     if not out.get("bar_time"):
+        out["bar_time_inferred"] = True
         out["bar_time"] = out.get("ts_et") or out.get("time")
 
     for key in (
@@ -305,6 +306,11 @@ def _path_kind(path: Path) -> str:
     return "log"
 
 
+def _bot_id_from_filename(path: Path) -> Optional[str]:
+    match = re.match(r"^bot_([^_]+)_", path.name)
+    return match.group(1) if match else None
+
+
 def find_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
     candidates = []
     for folder in [base_dir / "logs", base_dir / "data"]:
@@ -325,16 +331,45 @@ def find_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
 
 def latest_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
     paths = find_algo_logs(base_dir, symbol=symbol)
-    latest_by_symbol_kind: Dict[tuple[str, str], Path] = {}
-
+    grouped: Dict[tuple[str, str], List[Path]] = {}
     for path in paths:
         path_symbol = (_symbol_from_filename(path) or "UNKNOWN").upper()
-        key = (path_symbol, _path_kind(path))
-        current = latest_by_symbol_kind.get(key)
-        if current is None or path.stat().st_mtime > current.stat().st_mtime:
-            latest_by_symbol_kind[key] = path
+        bot_id = _bot_id_from_filename(path)
+        if bot_id:
+            grouped.setdefault((path_symbol, bot_id), []).append(path)
 
-    return sorted(latest_by_symbol_kind.values(), key=lambda path: path.name)
+    latest_group_by_symbol: Dict[str, List[Path]] = {}
+    latest_group_score: Dict[str, tuple[int, float]] = {}
+    for (path_symbol, _bot_id), group in grouped.items():
+        # Anchor selection to trading decisions when available. This prevents a
+        # recently updated candle file from a different bot/session being mixed
+        # with the selected entries and exits.
+        decision_files = [path for path in group if _path_kind(path) == "decisions"]
+        anchor_files = decision_files or [path for path in group if _path_kind(path) == "log"] or group
+        score = (1 if decision_files else 0, max(path.stat().st_mtime for path in anchor_files))
+        current = latest_group_by_symbol.get(path_symbol)
+        if current is None or score > latest_group_score.get(path_symbol, (-1, -1.0)):
+            latest_group_by_symbol[path_symbol] = group
+            latest_group_score[path_symbol] = score
+
+    selected: List[Path] = []
+    for group in latest_group_by_symbol.values():
+        latest_by_kind: Dict[str, Path] = {}
+        for path in group:
+            kind = _path_kind(path)
+            current = latest_by_kind.get(kind)
+            if current is None or path.stat().st_mtime > current.stat().st_mtime:
+                latest_by_kind[kind] = path
+        # Structured decisions contain more reliable fields than the legacy
+        # text log. Use the text log only when no decision JSONL exists.
+        if "decisions" in latest_by_kind:
+            selected.append(latest_by_kind["decisions"])
+        elif "log" in latest_by_kind:
+            selected.append(latest_by_kind["log"])
+        if "candles" in latest_by_kind:
+            selected.append(latest_by_kind["candles"])
+
+    return sorted(selected, key=lambda path: path.name)
 
 
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -492,6 +527,82 @@ def error_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return errors
 
 
+def _parse_chart_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None)
+    except ValueError:
+        pass
+    cleaned = re.sub(r"\s+(?:EST|EDT|ET|UTC)$", "", text, flags=re.IGNORECASE)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _align_events_to_candles(events: List[Dict[str, Any]], candles: List[Dict[str, Any]]) -> None:
+    """Snap trade markers to their candle, including legacy Replay wall-clock logs."""
+    parsed_candles = [(_parse_chart_datetime(candle.get("time")), candle) for candle in candles]
+    parsed_candles = [(stamp, candle) for stamp, candle in parsed_candles if stamp is not None]
+    if not parsed_candles:
+        return
+
+    cursor_by_symbol: Dict[str, int] = {}
+    for event in events:
+        symbol = str(event.get("symbol") or "UNKNOWN").upper()
+        matching_indices = [
+            index
+            for index, (_stamp, candle) in enumerate(parsed_candles)
+            if str(candle.get("symbol") or symbol).upper() == symbol
+        ]
+        if not matching_indices:
+            matching_indices = list(range(len(parsed_candles)))
+        event_stamp = _parse_chart_datetime(event.get("time"))
+        nearest_index = None
+        nearest_seconds = None
+        if event_stamp is not None:
+            for index in matching_indices:
+                candle_stamp, _candle = parsed_candles[index]
+                distance = abs((candle_stamp - event_stamp).total_seconds())
+                if nearest_seconds is None or distance < nearest_seconds:
+                    nearest_index = index
+                    nearest_seconds = distance
+
+        # Normal live logs are already close to the candle timestamp; snapping
+        # removes seconds/timezone formatting differences on Plotly's x-axis.
+        if nearest_index is not None and nearest_seconds is not None and nearest_seconds <= 3600:
+            event["time"] = parsed_candles[nearest_index][1]["time"]
+            cursor_by_symbol[symbol] = nearest_index
+            event.pop("_bar_time_inferred", None)
+            continue
+
+        # Older Replay decision JSONL used the job's wall clock (often 04:03 ET)
+        # rather than simulated bar time. Its logged execution price is the
+        # candle close, so align monotonically by closest close price.
+        if event.get("_bar_time_inferred"):
+            price = _safe_float(event.get("price"))
+            if price is not None:
+                start_index = max(cursor_by_symbol.get(symbol, 0), 0)
+                candidates = []
+                for index in matching_indices:
+                    if index < start_index:
+                        continue
+                    close = _safe_float(parsed_candles[index][1].get("close"))
+                    if close is not None:
+                        candidates.append((abs(close - price), index))
+                if candidates:
+                    difference, matched_index = min(candidates)
+                    if difference <= max(abs(price) * 0.01, 0.25):
+                        event["time"] = parsed_candles[matched_index][1]["time"]
+                        cursor_by_symbol[symbol] = matched_index
+        event.pop("_bar_time_inferred", None)
+
+
 def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     candles = []
     price_points = []
@@ -508,6 +619,7 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             seen_candle_times.add(bar_time)
             candles.append({
                 "time": bar_time,
+                "symbol": row.get("symbol"),
                 "open": row.get("open"),
                 "high": row.get("high"),
                 "low": row.get("low"),
@@ -554,6 +666,7 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         ):
             events.append({
                 "time": time_value,
+                "_bar_time_inferred": bool(row.get("bar_time_inferred")),
                 "symbol": row.get("symbol"),
                 "action": action,
                 "reason": row.get("reason"),
@@ -561,6 +674,8 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "prob_up": row.get("prob_up"),
                 "prob_down": row.get("prob_down"),
             })
+
+    _align_events_to_candles(events, candles)
 
     return {
         "candles": candles,
