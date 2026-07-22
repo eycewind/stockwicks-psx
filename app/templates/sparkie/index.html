@@ -468,10 +468,11 @@
         <div class="sparkie-muted">This immediately starts a bot with Replay #${escapeHtml(data.replay_session_id)} parameters. Paper mode sends no broker orders.</div>
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', false)">Start Paper Bot</button>
-          ${botSetup.live_mirror_allowed
-            ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true)">Start Schwab Live Mirror</button>`
-            : `<span class="sparkie-warn">Live Mirror blocked: this result is paper-only.</span>`}
+          ${botSetup.live_mirror_allowed ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true)">Start Schwab Live Bot</button>` : ""}
         </div>
+        ${botSetup.live_mirror_allowed && !botSetup.live_mirror_recommended
+          ? `<div class="sparkie-warn">Caution: Sparkie recommends paper-only for this result. Live trading is still available by your explicit choice and can place real Schwab orders.</div>`
+          : ""}
       </div>
     ` : "";
 
@@ -542,7 +543,7 @@
       if (!window.confirm("Create and immediately start a paper bot using this verified Replay configuration?")) return;
     } else {
       const accepted = window.prompt(
-        "WARNING: Live Mirror can submit real Schwab orders using the configured full-cash sizing. Type LIVE to acknowledge and start."
+        "WARNING: This starts a live bot that can submit real Schwab orders using the configured full-cash sizing. Sparkie's recommendation is guidance, not a guarantee. Type LIVE to acknowledge and start."
       );
       if (accepted !== "LIVE") return;
     }

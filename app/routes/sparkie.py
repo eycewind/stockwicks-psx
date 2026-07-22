@@ -357,17 +357,9 @@ def setup_live_bot(
     if str(replay.status or "").upper() != "COMPLETED":
         raise HTTPException(status_code=409, detail="Replay verification must be completed before setting up a bot.")
 
-    replay_pnl, replay_trades = _replay_session_pnl(db, int(replay.id))
     if payload.mirror_live:
         if not payload.acknowledged_live_risk:
             raise HTTPException(status_code=400, detail="Explicit live-trading risk acknowledgement is required.")
-        if job.recommendation != "paper_candidate":
-            raise HTTPException(
-                status_code=409,
-                detail="Sparkie recommends paper-only for this result, so Schwab Live Mirror is blocked.",
-            )
-        if replay_pnl <= 0 or replay_trades <= 0:
-            raise HTTPException(status_code=409, detail="Live Mirror requires positive Replay P/L and completed trades.")
 
     bot = _create_live_bot_from_replay_session(
         db,
@@ -557,11 +549,11 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "replay_verification": replay_verification,
         "bot_setup": {
             "paper_allowed": bool(job.replay_session_id and replay_completed),
-            "live_mirror_allowed": bool(
-                job.replay_session_id
-                and replay_positive
-                and job.recommendation == "paper_candidate"
-            ),
+            # A completed Replay unlocks both user-selectable bot modes. The
+            # recommendation remains advisory and is surfaced as a warning in
+            # the UI instead of silently removing the live option.
+            "live_mirror_allowed": bool(job.replay_session_id and replay_completed),
+            "live_mirror_recommended": bool(replay_positive and job.recommendation == "paper_candidate"),
         },
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,

@@ -2155,7 +2155,7 @@ def _create_live_bot_from_replay_session(
     sess: ReplaySession,
     mirror_live: bool,
 ):
-    """Create and start a paper bot from one replay configuration."""
+    """Create and start a paper or live-mirroring bot from a Replay configuration."""
 
     algo_name = (sess.algo_name or "").strip()
     if algo_name == "AlgoMM":
