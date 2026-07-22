@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 
 STOCKTWITS_MOST_ACTIVE_API = "https://api.stocktwits.com/api/2/trending/most_active.json"
 STOCKTWITS_MOST_ACTIVE_PAGE = "https://stocktwits.com/sentiment/most-active"
+STOCKTWITS_MOST_ACTIVE_READER = "https://r.jina.ai/http://stocktwits.com/sentiment/most-active"
 _SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 _CACHE: dict[str, Any] = {"expires_at": 0.0, "symbols": []}
 
@@ -27,7 +28,9 @@ def stocktwits_most_active_symbols(limit: int | None = None) -> list[str]:
     fallback because Stocktwits may rate-limit or challenge server traffic.
     """
 
-    resolved_limit = max(1, min(int(limit or os.getenv("SPARKIE_STOCKTWITS_LIMIT", "10")), 30))
+    # Stocktwits exposes five ranked rows publicly and gates later rows behind
+    # login. Operators may raise this if Stocktwits makes more rows public.
+    resolved_limit = max(1, min(int(limit or os.getenv("SPARKIE_STOCKTWITS_LIMIT", "5")), 10))
     now = time.monotonic()
     cached = list(_CACHE.get("symbols") or [])
     if cached and float(_CACHE.get("expires_at") or 0.0) > now:
@@ -48,6 +51,18 @@ def stocktwits_most_active_symbols(limit: int | None = None) -> list[str]:
         symbols = _symbols_from_payload(response.json())
     except Exception as exc:
         errors.append(f"API: {exc}")
+
+    if not symbols:
+        try:
+            response = requests.get(
+                STOCKTWITS_MOST_ACTIVE_READER,
+                headers={"Accept": "text/plain", "User-Agent": headers["User-Agent"]},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            symbols = _symbols_from_markdown(response.text)
+        except Exception as exc:
+            errors.append(f"reader: {exc}")
 
     if not symbols:
         try:
@@ -97,6 +112,30 @@ def _symbols_from_html(html: str) -> list[str]:
     parser = _MostActiveHtmlParser()
     parser.feed(html or "")
     return parser.symbols
+
+
+def _symbols_from_markdown(markdown: str) -> list[str]:
+    """Extract only numbered rows from the rendered Most Active table."""
+
+    text = (markdown or "").replace("\r\n", "\n")
+    heading_at = text.find("# Most Active")
+    if heading_at < 0:
+        return []
+    table_at = text.find("\nRank\n", heading_at)
+    if table_at < 0:
+        return []
+    gated_at = text.find("Join the conversation", table_at)
+    table = text[table_at : gated_at if gated_at >= 0 else len(text)]
+    matches = re.findall(
+        r"(?:^|\n)(\d+)\n\n\[([A-Za-z][A-Za-z0-9.-]{0,9})\]\(https?://stocktwits\.com/symbol/[^)]+\)",
+        table,
+    )
+    ranked: list[tuple[int, str]] = []
+    for rank_text, symbol in matches:
+        rank = int(rank_text)
+        if rank > 0 and all(existing_rank != rank for existing_rank, _ in ranked):
+            ranked.append((rank, symbol))
+    return [symbol for _, symbol in sorted(ranked)]
 
 
 class _MostActiveHtmlParser(HTMLParser):

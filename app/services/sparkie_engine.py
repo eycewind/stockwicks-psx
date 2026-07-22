@@ -39,13 +39,13 @@ MIN_BACKTEST_BARS_PER_INTERVAL = 80
 MIN_BACKTEST_TRADING_DAYS = 5
 
 
-def sparkie_symbol_bucket() -> list[str]:
+def sparkie_symbol_bucket_with_source() -> tuple[list[str], str]:
     source = os.getenv("SPARKIE_SYMBOL_SOURCE", "stocktwits_most_active").lower().strip()
     if source == "stocktwits_most_active":
         try:
             symbols = stocktwits_most_active_symbols()
             if symbols:
-                return symbols
+                return symbols, "stocktwits_most_active"
         except Exception as exc:
             log.warning("[SPARKIE] Stocktwits Most Active unavailable; using configured bucket: %s", exc)
     raw = os.getenv("SPARKIE_SYMBOL_BUCKET", ",".join(DEFAULT_SYMBOL_BUCKET))
@@ -54,7 +54,11 @@ def sparkie_symbol_bucket() -> list[str]:
         symbol = value.upper().strip()
         if symbol and symbol not in symbols:
             symbols.append(symbol)
-    return symbols or list(DEFAULT_SYMBOL_BUCKET)
+    return symbols or list(DEFAULT_SYMBOL_BUCKET), "configured_fallback"
+
+
+def sparkie_symbol_bucket() -> list[str]:
+    return sparkie_symbol_bucket_with_source()[0]
 
 
 def sparkie_interval_policy() -> list[str]:

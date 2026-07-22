@@ -208,7 +208,11 @@
         <div class="sparkie-field">
           <label for="symbolBucket">Stocks Sparkie should evaluate</label>
           <textarea id="symbolBucket" rows="2" maxlength="200">{{ default_symbol_bucket }}</textarea>
-          <div class="sparkie-muted" style="font-size:12px; margin-top:6px;">Loaded from Stocktwits Most Active when available. You can change the comma-separated tickers for this run; Sparkie still chooses the interval and strategy automatically.</div>
+          {% if symbol_bucket_source == "stocktwits_most_active" %}
+          <div class="sparkie-muted" style="font-size:12px; margin-top:6px;">Source: Stocktwits Most Active public rankings (top {{ default_symbol_bucket.split(',') | length }}). You can change the tickers for this run.</div>
+          {% else %}
+          <div class="sparkie-warn" style="font-size:12px; margin-top:6px;">Stocktwits Most Active could not be retrieved. This is the configured fallback bucket, not scraped Stocktwits data.</div>
+          {% endif %}
         </div>
 
         <div class="sparkie-row">

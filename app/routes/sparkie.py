@@ -42,7 +42,7 @@ from app.services.sparkie_engine import (
     MIN_ACCOUNT_EQUITY,
     TERMINAL_STATUSES,
     create_sparkie_job,
-    sparkie_symbol_bucket,
+    sparkie_symbol_bucket_with_source,
     stop_sparkie_job,
 )
 from app.trading.sparkie import (
@@ -102,6 +102,7 @@ def sparkie_page(
     request: Request,
     user=Depends(get_current_user),
 ):
+    default_symbols, symbol_bucket_source = sparkie_symbol_bucket_with_source()
     return templates.TemplateResponse(
         request,
         "sparkie/index.html",
@@ -109,7 +110,8 @@ def sparkie_page(
             "request": request,
             "user": user,
             "title": "Sparkie Agent",
-            "default_symbol_bucket": ",".join(sparkie_symbol_bucket()),
+            "default_symbol_bucket": ",".join(default_symbols),
+            "symbol_bucket_source": symbol_bucket_source,
         },
     )
 

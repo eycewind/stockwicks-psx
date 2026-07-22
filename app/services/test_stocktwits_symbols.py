@@ -1,6 +1,7 @@
 from app.services.stocktwits_symbols import (
     _dedupe_symbols,
     _symbols_from_html,
+    _symbols_from_markdown,
     _symbols_from_payload,
 )
 
@@ -24,3 +25,28 @@ def test_symbols_are_validated_and_deduplicated() -> None:
         "SPY",
         "BRK.B",
     ]
+
+
+def test_symbols_from_numbered_markdown_table_only() -> None:
+    markdown = """
+[AAPL](http://stocktwits.com/symbol/AAPL)
+# Most Active
+Rank
+Symbol
+1
+
+[SPY](http://stocktwits.com/symbol/SPY)
+2
+
+[SMCI](http://stocktwits.com/symbol/SMCI)
+Ad
+QNTU
+3
+
+[MU](http://stocktwits.com/symbol/MU)
+**Join the conversation and get full access!**
+1
+
+[SPY](http://stocktwits.com/symbol/SPY)
+"""
+    assert _symbols_from_markdown(markdown) == ["SPY", "SMCI", "MU"]
