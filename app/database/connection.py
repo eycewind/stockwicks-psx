@@ -127,7 +127,14 @@ from app.models.audit import AuditEvent  # noqa: F401
 from app.models.notification_log import TradeNotificationLog  # noqa: F401
 from app.models.paper_spx_0dte import PaperSPXOpenTrade, PaperSPXPick, PaperSPXTradeHistory  # noqa: F401
 from app.models.spx_0dte_alert_subscription import SPX0DTEAlertSubscription  # noqa: F401
-from app.models.sparkie import SparkieCandidate, SparkieEvent, SparkieJob  # noqa: F401
+from app.models.sparkie import (  # noqa: F401
+    SparkieCandidate,
+    SparkieEvent,
+    SparkieJob,
+    SparkieWeeklyResult,
+    SparkieWeeklyRun,
+    SparkieWeeklySchedule,
+)
 
 
 # ----------------------------------------------------------------------------

@@ -11,7 +11,14 @@ from app.models.audit import AuditEvent
 from app.models.notification_log import TradeNotificationLog
 from app.models.paper_spx_0dte import PaperSPXOpenTrade, PaperSPXPick, PaperSPXTradeHistory
 from app.models.spx_0dte_alert_subscription import SPX0DTEAlertSubscription
-from app.models.sparkie import SparkieCandidate, SparkieEvent, SparkieJob
+from app.models.sparkie import (
+    SparkieCandidate,
+    SparkieEvent,
+    SparkieJob,
+    SparkieWeeklyResult,
+    SparkieWeeklyRun,
+    SparkieWeeklySchedule,
+)
 
 __all__ = [
     "User",
@@ -35,4 +42,7 @@ __all__ = [
     "SparkieJob",
     "SparkieCandidate",
     "SparkieEvent",
+    "SparkieWeeklyRun",
+    "SparkieWeeklyResult",
+    "SparkieWeeklySchedule",
 ]

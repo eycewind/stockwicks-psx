@@ -17,7 +17,13 @@ from typing import Any, Literal
 
 from app.database.connection import get_db
 from app.models.replay import ReplayOpenTrade, ReplaySession, ReplayTradeHistory
-from app.models.sparkie import SparkieCandidate, SparkieEvent, SparkieJob
+from app.models.sparkie import (
+    SparkieCandidate,
+    SparkieEvent,
+    SparkieJob,
+    SparkieWeeklyRun,
+    SparkieWeeklySchedule,
+)
 from app.routes.auth import get_current_user
 from app.modules.replay.routes import (
     ALLOWED_MM_ALGOS,
@@ -52,6 +58,15 @@ from app.services.sparkie_engine import (
     create_sparkie_job,
     sparkie_symbol_bucket_with_source,
     stop_sparkie_job,
+)
+from app.services.sparkie_weekly_service import (
+    DAILY_LOSS_MULTIPLIER,
+    WEEKLY_ACTIVE_STATUSES,
+    WEEKLY_PROCESS_PREFIX,
+    create_weekly_run,
+    latest_weekly_run,
+    weekly_recommendation,
+    weekly_run_payload,
 )
 from app.trading.sparkie import (
     AgentLaunchRequest,
@@ -94,6 +109,7 @@ class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
     intervals: list[str] = Field(default_factory=list)
     algos: list[str] = Field(default_factory=list)
     symbol_source: Literal["most_active", "trending", "watchers", "barchart_top", "own_list"] = "most_active"
+    acknowledged_full_cash_risk: bool = False
 
 
 class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
@@ -109,6 +125,22 @@ class SparkieClearHistoryRequest(BaseModel):
 class SparkieLiveBotSetupRequest(BaseModel):
     mirror_live: bool = False
     acknowledged_live_risk: bool = False
+    acknowledged_full_cash_risk: bool = False
+
+
+class SparkieWeeklyRunRequest(BaseModel):
+    baseline_cash: float = Field(10000.0, ge=5000.0, le=1_000_000.0)
+
+
+class SparkieWeeklyRecommendationRequest(BaseModel):
+    account_equity: float = Field(..., ge=5000.0)
+    daily_target: float = Field(..., gt=0.0)
+    confidence_level: float = Field(0.60, ge=0.40, le=0.95)
+    acknowledged_full_cash_risk: bool = False
+
+
+class SparkieWeeklyScheduleRequest(BaseModel):
+    enabled: bool
 
 
 @page_router.get("/auth/sparkie", response_class=HTMLResponse)
@@ -216,6 +248,11 @@ def run_evaluation(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    if not payload.acknowledged_full_cash_risk:
+        raise HTTPException(
+            status_code=400,
+            detail="Acknowledge that Sparkie may deploy all available cash and that the entire allocation is at risk.",
+        )
     active_job = _latest_active_sparkie_v2_job(db, user.id)
     if active_job:
         result = _sparkie_v2_job_payload(db, active_job, include_details=True)
@@ -283,6 +320,53 @@ def _start_sparkie_process(job_id: str) -> subprocess.Popen:
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(cmd, **kwargs)
+
+
+def _start_sparkie_weekly_process(run_id: str) -> subprocess.Popen:
+    cmd = [sys.executable, "-m", "app.scripts.sparkie_weekly_runner", str(run_id)]
+    kwargs: dict[str, Any] = {
+        "cwd": os.getcwd(),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": os.name != "nt",
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **kwargs)
+
+
+def _weekly_process_pid(task_id: str | None) -> int | None:
+    text = str(task_id or "")
+    if not text.startswith(WEEKLY_PROCESS_PREFIX):
+        return None
+    try:
+        pid = int(text.removeprefix(WEEKLY_PROCESS_PREFIX))
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _stop_sparkie_weekly_process(task_id: str | None) -> bool:
+    pid = _weekly_process_pid(task_id)
+    if not pid:
+        return False
+    try:
+        if os.name == "nt":
+            os.kill(pid, signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except Exception:
+            return False
 
 
 @router.get("/evaluation-status/{job_id}")
@@ -369,6 +453,8 @@ def setup_live_bot(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    if not payload.acknowledged_full_cash_risk:
+        raise HTTPException(status_code=400, detail="Full-cash risk acknowledgement is required before bot setup.")
     job = db.get(SparkieJob, job_id)
     if not job or int(job.user_id) != int(user.id):
         raise HTTPException(status_code=404, detail="Sparkie evaluation job not found.")
@@ -409,6 +495,180 @@ def setup_live_bot(
         "symbol": bot.symbol,
         "interval": bot.interval,
         "algo_name": bot.algo_name,
+    }
+
+
+@router.post("/weekly/run")
+def run_weekly_sparkie(
+    payload: SparkieWeeklyRunRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    run = create_weekly_run(
+        db,
+        user_id=int(user.id),
+        run_mode="manual",
+        baseline_cash=float(payload.baseline_cash),
+    )
+    if not run.task_id:
+        try:
+            proc = _start_sparkie_weekly_process(run.id)
+            run.task_id = f"{WEEKLY_PROCESS_PREFIX}{proc.pid}"
+            run.message = "Weekly Sparkie started in a dedicated background process."
+            db.commit()
+        except Exception as exc:
+            run.status = "error"
+            run.stage = "error"
+            run.error_message = f"Weekly Sparkie start failed: {str(exc)[:500]}"
+            run.message = run.error_message
+            db.commit()
+    return {"ok": True, "weekly_run": weekly_run_payload(db, run)}
+
+
+@router.get("/weekly/status")
+def weekly_sparkie_status(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    return {"ok": True, "weekly_run": weekly_run_payload(db, latest_weekly_run(db, int(user.id)))}
+
+
+@router.post("/weekly/stop")
+def stop_weekly_sparkie(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    run = latest_weekly_run(db, int(user.id))
+    if not run or str(run.status or "").lower() not in WEEKLY_ACTIVE_STATUSES:
+        return {"ok": True, "message": "No active Weekly Sparkie run was found.", "weekly_run": weekly_run_payload(db, run)}
+    run.status = "stopping"
+    run.stage = "stopping"
+    run.message = "Weekly Sparkie stop requested; completed symbols remain saved."
+    run.stop_requested_at = datetime.utcnow()
+    db.commit()
+    _stop_sparkie_weekly_process(run.task_id)
+    return {"ok": True, "message": run.message, "weekly_run": weekly_run_payload(db, run)}
+
+
+@router.post("/weekly/resume")
+def resume_weekly_sparkie(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    run = latest_weekly_run(db, int(user.id))
+    if not run or str(run.status or "").lower() not in {"stopped", "error"}:
+        raise HTTPException(status_code=409, detail="Only a stopped or failed Weekly Sparkie run can be resumed.")
+    run.status = "queued"
+    run.stage = "queued"
+    run.message = "Weekly Sparkie resume queued from the last saved symbol."
+    run.stop_requested_at = None
+    run.error_message = None
+    run.finished_at = None
+    db.commit()
+    try:
+        proc = _start_sparkie_weekly_process(run.id)
+        run.task_id = f"{WEEKLY_PROCESS_PREFIX}{proc.pid}"
+        db.commit()
+    except Exception as exc:
+        run.status = "error"
+        run.stage = "error"
+        run.error_message = f"Weekly Sparkie resume failed: {str(exc)[:500]}"
+        run.message = run.error_message
+        db.commit()
+    return {"ok": True, "weekly_run": weekly_run_payload(db, run)}
+
+
+@router.post("/weekly/restart")
+def restart_weekly_sparkie(
+    payload: SparkieWeeklyRunRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    current = latest_weekly_run(db, int(user.id))
+    if current and str(current.status or "").lower() in WEEKLY_ACTIVE_STATUSES:
+        current.status = "stopped"
+        current.stage = "stopped"
+        current.message = "Weekly Sparkie was replaced by a fresh run."
+        current.stop_requested_at = datetime.utcnow()
+        current.finished_at = datetime.utcnow()
+        db.commit()
+        _stop_sparkie_weekly_process(current.task_id)
+    run = create_weekly_run(
+        db,
+        user_id=int(user.id),
+        run_mode="manual_restart",
+        baseline_cash=float(payload.baseline_cash),
+    )
+    try:
+        proc = _start_sparkie_weekly_process(run.id)
+        run.task_id = f"{WEEKLY_PROCESS_PREFIX}{proc.pid}"
+        run.message = "Fresh Weekly Sparkie research started."
+        db.commit()
+    except Exception as exc:
+        run.status = "error"
+        run.stage = "error"
+        run.error_message = f"Fresh Weekly Sparkie start failed: {str(exc)[:500]}"
+        run.message = run.error_message
+        db.commit()
+    return {"ok": True, "weekly_run": weekly_run_payload(db, run)}
+
+
+@router.post("/weekly/recommendation")
+def saved_weekly_recommendation(
+    payload: SparkieWeeklyRecommendationRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not payload.acknowledged_full_cash_risk:
+        raise HTTPException(
+            status_code=400,
+            detail="Acknowledge that the proposed bot may deploy all client cash and that the entire allocation is at risk.",
+        )
+    try:
+        return weekly_recommendation(
+            db,
+            user_id=int(user.id),
+            account_equity=float(payload.account_equity),
+            daily_target=float(payload.daily_target),
+            confidence_level=float(payload.confidence_level),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/weekly/schedule")
+def get_weekly_schedule(
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    schedule = db.query(SparkieWeeklySchedule).filter_by(user_id=int(user.id)).first()
+    return {
+        "ok": True,
+        "enabled": bool(schedule.enabled) if schedule else False,
+        "weekday": int(schedule.weekday) if schedule else 6,
+        "hour_et": int(schedule.hour_et) if schedule else 2,
+        "label": "Sunday at 2:00 AM ET",
+        "last_trigger_date": schedule.last_trigger_date if schedule else None,
+    }
+
+
+@router.post("/weekly/schedule")
+def set_weekly_schedule(
+    payload: SparkieWeeklyScheduleRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    schedule = db.query(SparkieWeeklySchedule).filter_by(user_id=int(user.id)).first()
+    if not schedule:
+        schedule = SparkieWeeklySchedule(user_id=int(user.id), weekday=6, hour_et=2)
+        db.add(schedule)
+    schedule.enabled = bool(payload.enabled)
+    db.commit()
+    return {
+        "ok": True,
+        "enabled": bool(schedule.enabled),
+        "label": "Sunday at 2:00 AM ET",
+        "message": "Automatic Weekly Sparkie schedule updated.",
     }
 
 
@@ -552,6 +812,15 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
             "account_return_pct": (target_profit / equity * 100.0) if equity else 0.0,
             "position_return_pct": (target_profit / allocation * 100.0) if allocation else 0.0,
             "allocation_share_of_equity_pct": (allocation / equity * 100.0) if equity else 0.0,
+        },
+        "daily_risk_policy": {
+            "profit_target_usd": target_profit if str(job.target_period or "daily") == "daily" else None,
+            "loss_limit_usd": target_profit * DAILY_LOSS_MULTIPLIER if str(job.target_period or "daily") == "daily" else None,
+            "loss_multiplier": DAILY_LOSS_MULTIPLIER,
+            "stop_after_target": True,
+            "stop_after_loss_limit": True,
+            "all_cash_at_risk": True,
+            "loss_limit_is_not_guaranteed": True,
         },
         "day_trading_policy": {
             "eod_close": True,

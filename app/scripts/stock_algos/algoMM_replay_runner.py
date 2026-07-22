@@ -47,7 +47,7 @@ from app.services.replay_trade_service import (
     close_position_replay,
     update_open_trade_mark_replay,
     get_open_trade,
-    get_session_pnl,
+    get_session_daily_pnl,
 )
 from app.services.mm_core_engine import (
     MMCorePosition,
@@ -699,8 +699,13 @@ def run_algoMM_replay_tick(
         log_file = os.path.join(log_dir, f"replay_{session.id}_{session.symbol}_{cfg.algo_name}.log")
         model_path = _replay_model_path(session, cfg, interval)
 
-        realized_pnl = float(get_session_pnl(db, session_id) or 0.0)
+        realized_pnl = float(get_session_daily_pnl(db, session_id, now_et.replace(tzinfo=None)) or 0.0)
+        daily_profit_target = float(js.get("daily_profit_target_usd") or 0.0)
         daily_loss_limit = float(getattr(cfg, "daily_loss_limit_usd", 0.0) or 0.0)
+        if daily_profit_target > 0 and realized_pnl >= daily_profit_target:
+            decision = "DAILY_PROFIT_TARGET"
+            reason = f"REALIZED_PNL_{realized_pnl:.2f}_GE_TARGET_{daily_profit_target:.2f}"
+            return finish("blocked")
         if daily_loss_limit > 0 and realized_pnl <= -abs(daily_loss_limit):
             decision = "DAILY_LOSS_LIMIT"
             reason = f"REALIZED_PNL_{realized_pnl:.2f}_LE_LIMIT_{-abs(daily_loss_limit):.2f}"
@@ -739,6 +744,26 @@ def run_algoMM_replay_tick(
         open_trade = get_open_trade(db, session_id)
         if open_trade is not None:
             update_open_trade_mark_replay(db, open_trade, bar_close_px, commit=True)
+            open_trade = get_open_trade(db, session_id)
+            open_pnl = float(getattr(open_trade, "unrealized_pl", 0.0) or 0.0) if open_trade else 0.0
+            daily_total_pnl = realized_pnl + open_pnl
+            daily_limit_reason = None
+            if daily_profit_target > 0 and daily_total_pnl >= daily_profit_target:
+                daily_limit_reason = "DAILY_PROFIT_TARGET"
+            elif daily_loss_limit > 0 and daily_total_pnl <= -abs(daily_loss_limit):
+                daily_limit_reason = "DAILY_LOSS_LIMIT"
+            if daily_limit_reason and open_trade is not None:
+                close_position_replay(
+                    db,
+                    open_trade,
+                    bar_close_px,
+                    now_et.replace(tzinfo=None),
+                    reason=daily_limit_reason,
+                )
+                open_trade = None
+                decision = daily_limit_reason
+                reason = f"DAILY_TOTAL_PNL_{daily_total_pnl:.2f}"
+                return finish("blocked")
 
         if cfg.algo_name in {"Algo_SMI", "Algo_MACD"}:
             if cfg.algo_name == "Algo_SMI":

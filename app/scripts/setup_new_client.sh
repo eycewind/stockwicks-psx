@@ -420,6 +420,34 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  cat > "${SYSTEMD_DIR}/stockwicks-${CLIENT_SLUG}-sparkie-weekly.service" <<EOF
+[Unit]
+Description=StockWicks ${CLIENT_SLUG} Weekly Sparkie Research
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=${TARGET_ROOT}
+EnvironmentFile=${TARGET_ROOT}/.env
+ExecStart=${TARGET_ROOT}/venv/bin/python -m app.scripts.sparkie_weekly_scheduler
+TimeoutStartSec=infinity
+EOF
+
+  cat > "${SYSTEMD_DIR}/stockwicks-${CLIENT_SLUG}-sparkie-weekly.timer" <<EOF
+[Unit]
+Description=Run StockWicks ${CLIENT_SLUG} Weekly Sparkie every Sunday
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00 America/New_York
+Persistent=true
+Unit=stockwicks-${CLIENT_SLUG}-sparkie-weekly.service
+
+[Install]
+WantedBy=timers.target
+EOF
 }
 
 write_client_restart_script() {
@@ -578,7 +606,7 @@ main() {
   systemctl daemon-reload
   nginx -t
   systemctl reload nginx
-  systemctl enable --now "stockwicks-${CLIENT_SLUG}-web" "stockwicks-${CLIENT_SLUG}-celery" "stockwicks-${CLIENT_SLUG}-beat"
+  systemctl enable --now "stockwicks-${CLIENT_SLUG}-web" "stockwicks-${CLIENT_SLUG}-celery" "stockwicks-${CLIENT_SLUG}-beat" "stockwicks-${CLIENT_SLUG}-sparkie-weekly.timer"
   systemctl status --no-pager "stockwicks-${CLIENT_SLUG}-web" "stockwicks-${CLIENT_SLUG}-celery" "stockwicks-${CLIENT_SLUG}-beat"
 
   echo

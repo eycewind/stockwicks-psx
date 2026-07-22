@@ -86,17 +86,24 @@ def barchart_top_symbols(limit: int = 5) -> list[str]:
 
 def barchart_top_symbols_with_source(limit: int = 5) -> tuple[list[str], str]:
     resolved_limit = max(1, min(int(limit), 100))
-    try:
-        rows = barchart_top_100_rows()
-        source = "live"
-    except Exception as exc:
-        log.warning("[SPARKIE] Barchart live ranking unavailable; using CSV snapshot: %s", exc)
-        rows = _read_snapshot_rows()
-        source = "snapshot"
+    rows, source = barchart_bullish_rows_with_source()
     symbols = [str(row["symbol"]) for row in rows[:resolved_limit]]
     if not symbols:
         raise RuntimeError("Barchart Top 100 and its CSV snapshot were unavailable.")
     return symbols, source
+
+
+def barchart_bullish_rows_with_source(*, force_refresh: bool = False) -> tuple[list[dict[str, Any]], str]:
+    """Return the full bullish ranking, falling back to the last saved CSV snapshot."""
+
+    try:
+        return barchart_top_100_rows(force_refresh=force_refresh), "live"
+    except Exception as exc:
+        log.warning("[SPARKIE] Live bullish ranking unavailable; using CSV snapshot: %s", exc)
+        rows = _read_snapshot_rows()
+        if not rows:
+            raise RuntimeError("Stock Bullish Top 100 and its CSV snapshot were unavailable.") from exc
+        return rows, "snapshot"
 
 
 def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:

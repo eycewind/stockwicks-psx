@@ -19,6 +19,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.replay import (
@@ -333,6 +334,23 @@ def get_session_pnl(db: Session, session_id: int) -> float:
         log.error("[PNL] Failed for session %s: %s", session_id, e, exc_info=True)
         return 0.0
 
+
+def get_session_daily_pnl(db: Session, session_id: int, trading_time: datetime) -> float:
+    """Sum realized Replay P/L for the simulated trading date."""
+    try:
+        start = datetime.combine(trading_time.date(), datetime.min.time())
+        end = datetime.combine(trading_time.date(), datetime.max.time())
+        value = (
+            db.query(func.coalesce(func.sum(ReplayTradeHistory.profit_loss), 0.0))
+            .filter(ReplayTradeHistory.session_id == int(session_id))
+            .filter(ReplayTradeHistory.exit_time >= start)
+            .filter(ReplayTradeHistory.exit_time <= end)
+            .scalar()
+        )
+        return float(value or 0.0)
+    except Exception as exc:
+        log.error("[PNL] Failed daily P/L session=%s: %s", session_id, exc, exc_info=True)
+        return 0.0
 
 def get_last_trade_time(db: Session, session_id: int) -> Optional[datetime]:
     """

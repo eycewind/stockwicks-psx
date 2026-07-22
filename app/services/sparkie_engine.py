@@ -1127,6 +1127,7 @@ def _apply_best_candidate(db: Session, job: SparkieJob, row: dict[str, Any], dec
 def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
     params = dict(row.get("params") or {})
     allocation = _trade_allocation_usd(float(job.account_equity or 0.0))
+    daily_target = float(job.target_profit) if str(job.target_period or "").lower() == "daily" else 0.0
     cfg = _build_mm_replay_config(
         algo_name=str(row["algo_name"]),
         eod_auto_close="on",
@@ -1158,6 +1159,12 @@ def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[
             "sparkie_eod_close": True,
             "sparkie_overnight_positions_allowed": False,
             "sparkie_fast_replay": True,
+            "daily_profit_target_usd": daily_target,
+            "daily_loss_limit_usd": daily_target * 5.0,
+            "daily_loss_multiplier": 5.0,
+            "stop_trading_after_daily_target": daily_target > 0,
+            "stop_trading_after_daily_loss": daily_target > 0,
+            "full_cash_risk_acknowledged": True,
         }
     )
     return cfg

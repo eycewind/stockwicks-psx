@@ -2204,6 +2204,8 @@ def _create_live_bot_from_replay_session(
         mirror_live=bool(mirror_live),
         is_active=True,
         status="RUNNING",
+        stop_loss_usd=float(cfg.get("stop_loss_usd") or cfg.get("hard_stop_usd") or 0.0) or None,
+        take_profit_usd=float(cfg.get("daily_profit_target_usd") or 0.0) or None,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )

@@ -11,6 +11,7 @@ from app.scripts.stock_algos.Algo2_MM import run_algoMM_bot_tick as run_algo2_mm
 from app.scripts.stock_algos.Algo3_MM import run_algoMM_bot_tick as run_algo3_mm_tick
 from app.scripts.stock_algos.Algo4_MM import run_algoMM_bot_tick as run_algo4_mm_tick
 from app.scripts.stock_algos.Algo5_MM import run_algoMM_bot_tick as run_algo5_mm_tick
+from app.services.stock_daily_risk import entry_risk_gate
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,22 @@ def run_stock_bot_tick(
             },
         )
         return {"ok": False, "reason": "paper_trading_disabled"}
+
+    daily_gate = entry_risk_gate(bot_id)
+    if not daily_gate.get("allowed", False):
+        algo_logger.log_event(
+            user_id,
+            bot_id,
+            symbol,
+            algo_name,
+            {
+                "client": client_slug,
+                "event": "DAILY_RISK_LOCK",
+                "reason": daily_gate.get("reason"),
+                "daily_risk": daily_gate,
+            },
+        )
+        return {"ok": False, "reason": daily_gate.get("reason"), "daily_risk": daily_gate}
 
     try:
         algo_logger.log_event(

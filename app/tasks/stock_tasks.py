@@ -21,6 +21,7 @@ from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 from app.database.connection import SessionLocal
 from app.models.paper_trading_bot import PaperStockBotOpenTrade, PaperStockTradeBot
 from app.services.paper_trade_service import close_position
+from app.services.stock_daily_risk import evaluate_daily_state
 from app.trading.runners.stock_bot_runner import run_stock_bot_tick
 from app.utils.stock.market_price import get_live_price
 
@@ -534,6 +535,21 @@ def pnl_exit_open_trades(
                     trade.unrealized_pl = (trade.entry_price - trade.current_price) * trade.quantity
 
                 pnl = float(trade.unrealized_pl or 0.0)
+                daily_risk = evaluate_daily_state(db, bot, unrealized_pnl=pnl, now_et=now_et) if bot else {"locked": False}
+                if daily_risk.get("locked"):
+                    close_position(db, trade, float(trade.current_price))
+                    with db.begin_nested():
+                        db.flush()
+                    exited += 1
+                    logger.warning(
+                        "[PnL EXIT] daily lock bot_id=%s reason=%s total_pnl=%s target=%s loss_limit=%s",
+                        getattr(bot, "id", None),
+                        daily_risk.get("reason"),
+                        daily_risk.get("total_pnl"),
+                        daily_risk.get("target"),
+                        daily_risk.get("loss_limit"),
+                    )
+                    continue
                 if pnl <= -stop_loss_usd or pnl >= take_profit_usd:
                     close_position(db, trade, float(trade.current_price))
                     with db.begin_nested():

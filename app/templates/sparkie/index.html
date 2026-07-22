@@ -241,6 +241,11 @@
           </div>
         </div>
 
+        <label class="sparkie-status-banner" style="display:flex; gap:10px; align-items:flex-start; cursor:pointer;">
+          <input id="fullCashRiskAcknowledged" type="checkbox" style="width:auto; margin-top:3px;">
+          <span><strong>Full-cash risk acknowledgement</strong><br><span class="sparkie-muted">I understand Sparkie may deploy up to 100% of available cash in one position. The entire allocation is at risk, and gaps, halts, liquidity, or execution delays can exceed the configured loss threshold.</span></span>
+        </label>
+
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" id="runBtn">Run Sparkie Evaluation</button>
           <button class="btn btn-secondary" type="button" id="stopBtn" style="display:none;">Stop This Job</button>
@@ -254,6 +259,43 @@
       <div class="sparkie-result" id="sparkieResult">Enter equity and a minimum profit target, then run Sparkie once. Sparkie accepts candidates at or above that target and chooses the strongest risk-adjusted result.</div>
     </section>
   </div>
+
+  <section class="sparkie-panel" style="margin-top:22px;">
+    <div class="sparkie-header" style="margin-bottom:12px;">
+      <div>
+        <h2>Weekly Sparkie Research</h2>
+        <p class="sparkie-muted">Save the Stock Bullish Top 100, process five symbols at a time, and reuse the completed catalog for fast cash/target matching. This runner does not use Celery.</p>
+      </div>
+    </div>
+    <div class="sparkie-row">
+      <div class="sparkie-field">
+        <label for="weeklyBaselineCash">Research baseline cash</label>
+        <input id="weeklyBaselineCash" type="number" min="5000" step="1000" value="10000">
+      </div>
+      <div class="sparkie-field">
+        <label>Automatic schedule</label>
+        <label class="sparkie-muted" style="display:flex; gap:8px; align-items:center; min-height:42px;">
+          <input id="weeklyScheduleEnabled" type="checkbox" style="width:auto;"> Sunday at 2:00 AM ET
+        </label>
+      </div>
+    </div>
+    <div class="sparkie-actions">
+      <button class="btn btn-primary" id="weeklyRunBtn" type="button">Run Sparkie Weekly</button>
+      <button class="btn btn-secondary" id="weeklyStopBtn" type="button">Stop Weekly</button>
+      <button class="btn btn-secondary" id="weeklyResumeBtn" type="button">Resume Weekly</button>
+      <button class="btn btn-danger" id="weeklyRestartBtn" type="button">Restart Weekly</button>
+      <button class="btn btn-secondary" id="weeklyRefreshBtn" type="button">Refresh Weekly Status</button>
+    </div>
+    <div class="sparkie-result" id="weeklyStatus" style="margin-top:14px;">Loading Weekly Sparkie status...</div>
+
+    <div style="height:18px"></div>
+    <h3>Use Saved Weekly Results</h3>
+    <p class="sparkie-muted">Uses the account equity, daily target, and confidence entered above. Maximum daily loss is fixed at 5× the target. A fresh finalist verification remains required.</p>
+    <div class="sparkie-actions">
+      <button class="btn btn-primary" id="weeklyRecommendBtn" type="button">Find Cash / Target Match</button>
+    </div>
+    <div class="sparkie-result" id="weeklyRecommendation" style="margin-top:14px;">Complete a weekly catalog, then ask Sparkie for a saved match.</div>
+  </section>
 
   <section class="sparkie-panel" style="margin-top:22px;">
     <div class="sparkie-header" style="margin-bottom:12px;">
@@ -281,6 +323,9 @@
   const symbolSource = document.getElementById("symbolSource");
   const symbolBucket = document.getElementById("symbolBucket");
   const symbolSourceStatus = document.getElementById("symbolSourceStatus");
+  const fullCashRiskAcknowledged = document.getElementById("fullCashRiskAcknowledged");
+  const weeklyStatusBox = document.getElementById("weeklyStatus");
+  const weeklyRecommendationBox = document.getElementById("weeklyRecommendation");
   const activeJobStorageKey = "stockwicks.sparkie.v2.activeJobId";
   let activeJobId = null;
   let statusTimer = null;
@@ -369,6 +414,7 @@
       target_period: document.getElementById("targetPeriod").value,
       confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
       symbol_source: symbolSource.value,
+      acknowledged_full_cash_risk: fullCashRiskAcknowledged.checked,
       symbols
     };
   }
@@ -440,6 +486,7 @@
     const evidenceWindowText = `${Number(data.target_window_units || 0).toLocaleString()} ${periodLabel} unit(s), target total $${Number(data.target_profit_for_window || 0).toLocaleString()}`;
     const dayTradingPolicy = data.day_trading_policy || {};
     const targetMath = data.target_math || {};
+    const dailyRisk = data.daily_risk_policy || {};
     const replay = data.replay_verification;
     const fullCashResultsValid = data.full_cash_results_valid === true;
     const bestDailyPnl = best && best.daily_pnl ? best.daily_pnl : {};
@@ -492,6 +539,8 @@
         <div class="sparkie-summary-row"><span>Day-trading rule</span><strong>${dayTradingPolicy.eod_close === false ? "EOD close not enforced" : "End-of-day close required; no overnight positions"}</strong></div>
         <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${cashDeploymentText}</strong></div>
         <div class="sparkie-summary-row"><span>Required return</span><strong>${targetMathText}</strong></div>
+        ${dailyRisk.profit_target_usd ? `<div class="sparkie-summary-row"><span>Daily profit lock</span><strong>Close the position and stop trading at approximately +$${Number(dailyRisk.profit_target_usd).toLocaleString()}</strong></div>` : ""}
+        ${dailyRisk.loss_limit_usd ? `<div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(dailyRisk.loss_limit_usd).toLocaleString()} (${Number(dailyRisk.loss_multiplier || 5).toLocaleString()}× target); execution can exceed this threshold</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
@@ -542,6 +591,10 @@
   }
 
   async function setupSparkieBot(jobId, mirrorLive) {
+    if (!fullCashRiskAcknowledged.checked) {
+      window.alert("Acknowledge the full-cash risk before setting up a bot.");
+      return;
+    }
     if (!mirrorLive) {
       if (!window.confirm("Create and immediately start a paper bot using this verified Replay configuration?")) return;
     } else {
@@ -553,7 +606,7 @@
     try {
       const data = await requestJson(`/api/sparkie/setup-live-bot/${encodeURIComponent(jobId)}`, {
         method: "POST",
-        body: JSON.stringify({mirror_live: mirrorLive, acknowledged_live_risk: mirrorLive})
+        body: JSON.stringify({mirror_live: mirrorLive, acknowledged_live_risk: mirrorLive, acknowledged_full_cash_risk: true})
       });
       const mode = data.mirror_live ? "Schwab Live Mirror" : "paper";
       window.alert(`Bot #${data.bot_id} started in ${mode} mode for ${data.symbol} ${data.interval} ${data.algo_name}.`);
@@ -638,6 +691,12 @@
     if (runRequestPending) return;
     runRequestPending = true;
     runBtn.disabled = true;
+    if (!fullCashRiskAcknowledged.checked) {
+      resultBox.textContent = "Acknowledge the full-cash risk before running Sparkie.";
+      runRequestPending = false;
+      runBtn.disabled = false;
+      return;
+    }
     resultBox.textContent = "Sparkie is creating a background evaluation job...";
     try {
       const data = await requestJson("/api/sparkie/run-evaluation", {
@@ -726,6 +785,171 @@
     }
   });
 
+  function renderWeeklyStatus(run) {
+    const runBtn = document.getElementById("weeklyRunBtn");
+    const stopButton = document.getElementById("weeklyStopBtn");
+    const resumeButton = document.getElementById("weeklyResumeBtn");
+    const restartButton = document.getElementById("weeklyRestartBtn");
+    if (!run) {
+      runBtn.disabled = false;
+      stopButton.disabled = true;
+      resumeButton.disabled = true;
+      restartButton.disabled = true;
+      return '<div class="sparkie-muted">No Weekly Sparkie run yet.</div>';
+    }
+    const status = String(run.status || "").toLowerCase();
+    const active = ["queued", "snapshotting", "running", "stopping"].includes(status);
+    runBtn.disabled = active;
+    stopButton.disabled = !active;
+    resumeButton.disabled = !run.can_resume;
+    restartButton.disabled = false;
+    const heartbeatWarning = active && Number(run.heartbeat_age_seconds || 0) > 120
+      ? `<div class="sparkie-bad">Heartbeat is stale (${secondsText(run.heartbeat_age_seconds)}). Stop or Resume may be required.</div>`
+      : "";
+    return `
+      <div class="sparkie-status-banner">
+        <strong>Weekly Sparkie ${escapeHtml(run.status || "unknown")}</strong>
+        <div class="sparkie-muted">${escapeHtml(run.message || "")}</div>
+        <div class="sparkie-progress"><span style="width:${Math.max(0, Math.min(100, Number(run.progress_pct || 0)))}%"></span></div>
+      </div>
+      <div class="sparkie-summary">
+        <div class="sparkie-summary-row"><span>Run</span><strong>${escapeHtml(run.run_id)}</strong></div>
+        <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(run.completed_symbols || 0)} / ${Number(run.total_symbols || 100)} symbols · ${Number(run.progress_pct || 0)}%</strong></div>
+        <div class="sparkie-summary-row"><span>Current batch</span><strong>${Number(run.current_batch || 0)} · ${escapeHtml(run.current_symbol || "checkpoint idle")}</strong></div>
+        <div class="sparkie-summary-row"><span>Saved results</span><strong>${Number(run.result_count || 0).toLocaleString()} · failed symbols ${Number(run.failed_symbols || 0)}</strong></div>
+        <div class="sparkie-summary-row"><span>Runtime</span><strong>${secondsText(run.elapsed_seconds)} · ETA ${secondsText(run.eta_seconds)}</strong></div>
+        <div class="sparkie-summary-row"><span>Heartbeat</span><strong>${run.heartbeat_at ? new Date(run.heartbeat_at + "Z").toLocaleString() : "Not started"}</strong></div>
+      </div>
+      ${heartbeatWarning}
+    `;
+  }
+
+  async function loadWeeklyStatus() {
+    try {
+      const data = await requestJson("/api/sparkie/weekly/status");
+      weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
+    } catch (error) {
+      weeklyStatusBox.textContent = error.message || String(error);
+    }
+  }
+
+  function matchCard(title, match) {
+    if (!match) return `<div class="sparkie-status-banner"><strong>${escapeHtml(title)}</strong><div class="sparkie-muted">No calculable saved match.</div></div>`;
+    const failedGates = Object.entries(match.gates || {}).filter(([, passed]) => !passed).map(([name]) => name.replaceAll("_", " ")).join(", ");
+    return `
+      <div class="sparkie-status-banner" style="border-color:${match.qualified ? "rgba(94,234,212,.6)" : "rgba(251,191,36,.6)"}">
+        <strong>${escapeHtml(title)} · ${match.qualified ? "Qualified for fresh verification" : "Did not pass every gate"}</strong>
+        <div class="sparkie-summary">
+          <div class="sparkie-summary-row"><span>Combination</span><strong>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</strong></div>
+          <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${Number(match.shares || 0).toLocaleString()} shares · about $${Number(match.estimated_notional || 0).toLocaleString()} (${Number(match.cash_deployment_pct || 0).toFixed(1)}% of cash)</strong></div>
+          <div class="sparkie-summary-row"><span>Daily target evidence</span><strong>${Number(match.target_hit_days || 0)} / ${Number(match.days_tested || 0)} days · ${(Number(match.target_hit_rate || 0) * 100).toFixed(1)}%</strong></div>
+          <div class="sparkie-summary-row"><span>Controlled average daily P/L</span><strong>$${Number(match.average_daily_pnl || 0).toLocaleString()}</strong></div>
+          <div class="sparkie-summary-row"><span>Loss trigger / drawdown</span><strong>-$${Number(match.daily_loss_limit || 0).toLocaleString()} daily trigger · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
+          ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
+        </div>
+        ${match.qualified ? `<div class="sparkie-actions"><button class="btn btn-primary" type="button" data-weekly-verify="${escapeHtml(match.symbol)}" data-weekly-cash="${Number(match.account_equity || 0)}">Run Fresh Finalist Verification</button></div>` : ""}
+      </div>
+    `;
+  }
+
+  function renderWeeklyRecommendation(data) {
+    return `
+      <div class="sparkie-status-banner">
+        <strong>${escapeHtml(data.message || "Weekly catalog result")}</strong>
+        <div class="sparkie-muted">Catalog ${escapeHtml(data.run_id)} · ${Number(data.catalog_symbols || 0)} symbols · ${Number(data.catalog_results || 0)} saved results</div>
+      </div>
+      <div class="sparkie-summary">
+        <div class="sparkie-summary-row"><span>Client daily target</span><strong>+$${Number(data.daily_target || 0).toLocaleString()}</strong></div>
+        <div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(data.daily_loss_limit || 0).toLocaleString()} (${Number(data.daily_loss_multiplier || 5)}× target)</strong></div>
+        <div class="sparkie-summary-row"><span>Risk</span><strong>Up to 100% of client cash is deployed; the loss threshold is not guaranteed.</strong></div>
+      </div>
+      ${matchCard(`Requested cash $${Number(data.account_equity || 0).toLocaleString()}`, data.requested_cash_match)}
+      ${matchCard("Estimated minimum cash from configured ladder", data.minimum_cash_match)}
+    `;
+  }
+
+  document.getElementById("weeklyRunBtn").addEventListener("click", async () => {
+    weeklyStatusBox.textContent = "Starting Weekly Sparkie in a dedicated background process...";
+    try {
+      const data = await requestJson("/api/sparkie/weekly/run", {
+        method: "POST",
+        body: JSON.stringify({baseline_cash: Number(document.getElementById("weeklyBaselineCash").value || 10000)})
+      });
+      weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
+    } catch (error) { weeklyStatusBox.textContent = error.message || String(error); }
+  });
+
+  document.getElementById("weeklyStopBtn").addEventListener("click", async () => {
+    const data = await requestJson("/api/sparkie/weekly/stop", {method: "POST", body: "{}"});
+    weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
+  });
+  document.getElementById("weeklyResumeBtn").addEventListener("click", async () => {
+    const data = await requestJson("/api/sparkie/weekly/resume", {method: "POST", body: "{}"});
+    weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
+  });
+  document.getElementById("weeklyRestartBtn").addEventListener("click", async () => {
+    if (!window.confirm("Restart Weekly Sparkie from a fresh Top 100 snapshot? Existing run history will remain saved.")) return;
+    const data = await requestJson("/api/sparkie/weekly/restart", {
+      method: "POST",
+      body: JSON.stringify({baseline_cash: Number(document.getElementById("weeklyBaselineCash").value || 10000)})
+    });
+    weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
+  });
+  document.getElementById("weeklyRefreshBtn").addEventListener("click", loadWeeklyStatus);
+
+  document.getElementById("weeklyRecommendBtn").addEventListener("click", async () => {
+    if (!fullCashRiskAcknowledged.checked) {
+      weeklyRecommendationBox.textContent = "Acknowledge the full-cash risk before requesting a saved recommendation.";
+      return;
+    }
+    weeklyRecommendationBox.textContent = "Searching saved Weekly Sparkie results...";
+    try {
+      const data = await requestJson("/api/sparkie/weekly/recommendation", {
+        method: "POST",
+        body: JSON.stringify({
+          account_equity: Number(document.getElementById("accountEquity").value || 0),
+          daily_target: Number(document.getElementById("targetProfit").value || 0),
+          confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
+          acknowledged_full_cash_risk: true
+        })
+      });
+      weeklyRecommendationBox.innerHTML = renderWeeklyRecommendation(data);
+    } catch (error) { weeklyRecommendationBox.textContent = error.message || String(error); }
+  });
+
+  weeklyRecommendationBox.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-weekly-verify]");
+    if (!button) return;
+    document.getElementById("accountEquity").value = button.getAttribute("data-weekly-cash");
+    symbolSource.value = "own_list";
+    await loadSymbolSource();
+    symbolBucket.value = button.getAttribute("data-weekly-verify");
+    symbolBucket.readOnly = false;
+    resultBox.textContent = "Weekly match loaded. Starting a fresh one-symbol Sparkie evaluation and Replay verification...";
+    runBtn.click();
+  });
+
+  document.getElementById("weeklyScheduleEnabled").addEventListener("change", async (event) => {
+    try {
+      await requestJson("/api/sparkie/weekly/schedule", {
+        method: "POST",
+        body: JSON.stringify({enabled: Boolean(event.target.checked)})
+      });
+    } catch (error) {
+      event.target.checked = !event.target.checked;
+      weeklyStatusBox.textContent = error.message || String(error);
+    }
+  });
+
+  async function loadWeeklySchedule() {
+    try {
+      const data = await requestJson("/api/sparkie/weekly/schedule");
+      document.getElementById("weeklyScheduleEnabled").checked = Boolean(data.enabled);
+    } catch (error) {
+      weeklyStatusBox.textContent = error.message || String(error);
+    }
+  }
+
   (function resumeSparkieEvaluation() {
     const savedJobId = localStorage.getItem(activeJobStorageKey);
     if (!savedJobId) return;
@@ -740,5 +964,8 @@
   })();
 
   loadSparkieHistory();
+  loadWeeklyStatus();
+  loadWeeklySchedule();
+  setInterval(loadWeeklyStatus, 10000);
 </script>
 {% endblock %}
