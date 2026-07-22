@@ -1,6 +1,7 @@
 # /var/stockwicks/clients/ashakil/app/services/log_analysis_service.py
 import json
 import re
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -331,16 +332,20 @@ def find_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
 
 def latest_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]:
     paths = find_algo_logs(base_dir, symbol=symbol)
-    grouped: Dict[tuple[str, str], List[Path]] = {}
+    grouped: Dict[tuple[str, str, str], List[Path]] = {}
     for path in paths:
         path_symbol = (_symbol_from_filename(path) or "UNKNOWN").upper()
         bot_id = _bot_id_from_filename(path)
         if bot_id:
-            grouped.setdefault((path_symbol, bot_id), []).append(path)
+            # Paper bots and Replay sessions have independent numeric ID
+            # sequences. Keep their directories in the identity so bot #430 in
+            # logs/ cannot collide with Replay #430 in data/.
+            source_namespace = str(path.parent.resolve())
+            grouped.setdefault((path_symbol, bot_id, source_namespace), []).append(path)
 
     latest_group_by_symbol: Dict[str, List[Path]] = {}
     latest_group_score: Dict[str, tuple[int, float]] = {}
-    for (path_symbol, _bot_id), group in grouped.items():
+    for (path_symbol, _bot_id, _source_namespace), group in grouped.items():
         # Anchor selection to trading decisions when available. This prevents a
         # recently updated candle file from a different bot/session being mixed
         # with the selected entries and exits.
@@ -366,8 +371,9 @@ def latest_algo_logs(base_dir: Path, symbol: Optional[str] = None) -> List[Path]
             selected.append(latest_by_kind["decisions"])
         elif "log" in latest_by_kind:
             selected.append(latest_by_kind["log"])
-        if "candles" in latest_by_kind:
-            selected.append(latest_by_kind["candles"])
+        # Keep every interval for the selected bot/session. chart_payload then
+        # selects the interval declared by the decision rows.
+        selected.extend(path for path in group if _path_kind(path) == "candles")
 
     return sorted(selected, key=lambda path: path.name)
 
@@ -612,7 +618,21 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     seen_candle_times = set()
     seen_price_times = set()
 
-    for row in _candle_rows(rows) + rows:
+    interval_counts = Counter(
+        str(row.get("interval"))
+        for row in _decision_rows(rows)
+        if row.get("interval")
+    )
+    decision_interval = interval_counts.most_common(1)[0][0] if interval_counts else None
+    selected_candle_rows = [
+        row
+        for row in _candle_rows(rows)
+        if not decision_interval or str(row.get("interval") or "") == decision_interval
+    ]
+    if not selected_candle_rows:
+        selected_candle_rows = _candle_rows(rows)
+
+    for row in selected_candle_rows + [row for row in rows if row.get("row_type") != "candle"]:
         bar_time = row.get("bar_time")
         has_ohlc = all(row.get(k) is not None for k in ("open", "high", "low", "close"))
         if bar_time and has_ohlc and bar_time not in seen_candle_times:
@@ -620,6 +640,7 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             candles.append({
                 "time": bar_time,
                 "symbol": row.get("symbol"),
+                "interval": row.get("interval"),
                 "open": row.get("open"),
                 "high": row.get("high"),
                 "low": row.get("low"),
@@ -668,6 +689,7 @@ def chart_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "time": time_value,
                 "_bar_time_inferred": bool(row.get("bar_time_inferred")),
                 "symbol": row.get("symbol"),
+                "interval": row.get("interval"),
                 "action": action,
                 "reason": row.get("reason"),
                 "price": row.get("price") or row.get("close"),

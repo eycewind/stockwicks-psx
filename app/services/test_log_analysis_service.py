@@ -6,10 +6,13 @@ from app.services.log_analysis_service import chart_payload, latest_algo_logs
 
 def test_latest_logs_keep_decisions_and_candles_on_same_bot(tmp_path: Path):
     log_dir = tmp_path / "logs"
+    data_dir = tmp_path / "data"
     log_dir.mkdir()
+    data_dir.mkdir()
     decision = log_dir / "bot_10_MU_Algo2_MM_decisions.jsonl"
     matching_candles = log_dir / "bot_10_MU_5min_candles.jsonl"
-    unrelated_candles = log_dir / "bot_99_MU_1min_candles.jsonl"
+    # Same numeric ID in another namespace represents a Replay/paper collision.
+    unrelated_candles = data_dir / "bot_10_MU_1min_candles.jsonl"
     for path in (decision, matching_candles, unrelated_candles):
         path.write_text("\n", encoding="utf-8")
     os.utime(decision, (100, 100))
@@ -56,3 +59,40 @@ def test_legacy_replay_event_is_aligned_to_matching_candle_close():
 
     assert payload["events"][0]["time"] == "2026-07-21 09:35:00 EDT"
     assert "_bar_time_inferred" not in payload["events"][0]
+
+
+def test_chart_uses_the_decision_interval_candles():
+    rows = [
+        {
+            "row_type": "candle",
+            "bar_time": "2026-07-21 09:30:00 EDT",
+            "interval": "1min",
+            "open": 200.0,
+            "high": 201.0,
+            "low": 199.0,
+            "close": 200.0,
+        },
+        {
+            "row_type": "candle",
+            "bar_time": "2026-07-21 09:30:00 EDT",
+            "interval": "5min",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+        },
+        {
+            "row_type": "decision",
+            "bar_time": "2026-07-21 09:30:20 EDT",
+            "interval": "5min",
+            "symbol": "MU",
+            "action": "OPEN_LONG",
+            "price": 100.0,
+        },
+    ]
+
+    payload = chart_payload(rows)
+
+    assert len(payload["candles"]) == 1
+    assert payload["candles"][0]["interval"] == "5min"
+    assert payload["candles"][0]["close"] == 100.0
