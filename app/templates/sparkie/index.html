@@ -181,9 +181,9 @@
   <div class="sparkie-header">
     <div>
       <h1>Sparkie Agent</h1>
-      <p class="sparkie-muted">Give Sparkie the account and minimum profit goal. Sparkie updates data, backtests the bucket, applies daily evidence and risk gates, then verifies one finalist over at least three weeks in Replay.</p>
+      <p class="sparkie-muted">Give Sparkie the account and daily risk limit. Sparkie estimates a historical monthly return range, selects the strongest candidate within that risk, then verifies one finalist over at least three weeks in Replay.</p>
     </div>
-    <div class="sparkie-pill">Minimum account equity: $5,000</div>
+    <div class="sparkie-pill">Minimum account equity: $2,000</div>
   </div>
 
   <div class="sparkie-grid">
@@ -197,11 +197,11 @@
         <div class="sparkie-row">
           <div class="sparkie-field">
             <label for="accountEquity">Account equity</label>
-            <input id="accountEquity" type="number" min="5000" step="100" value="5000">
+            <input id="accountEquity" type="number" min="2000" step="100" value="5000">
           </div>
           <div class="sparkie-field">
-            <label for="targetProfit">Minimum profit target</label>
-            <input id="targetProfit" type="number" min="1" step="1" value="25">
+            <label for="riskPerDayPct">Maximum daily risk (%)</label>
+            <input id="riskPerDayPct" type="number" min="10" max="100" step="1" value="10">
           </div>
         </div>
 
@@ -226,19 +226,10 @@
           {% endif %}
         </div>
 
-        <div class="sparkie-row">
-          <div class="sparkie-field">
-            <label for="targetPeriod">Target period</label>
-            <select id="targetPeriod">
-              <option value="daily" selected>Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-            </select>
-          </div>
-          <div class="sparkie-field">
-            <label for="confidenceLevel">Required target-hit confidence</label>
-            <input id="confidenceLevel" type="number" min="0.4" max="0.95" step="0.05" value="0.6">
-          </div>
+        <div class="sparkie-field">
+          <label for="confidenceLevel">Research confidence preference</label>
+          <input id="confidenceLevel" type="number" min="0.4" max="0.95" step="0.05" value="0.6">
+          <div class="sparkie-muted">Sparkie reports this with the monthly range; it does not chase a fixed profit target.</div>
         </div>
 
         <label class="sparkie-status-banner" style="display:flex; gap:10px; align-items:flex-start; cursor:pointer;">
@@ -256,7 +247,7 @@
 
     <section class="sparkie-panel">
       <h2>Result</h2>
-      <div class="sparkie-result" id="sparkieResult">Enter equity and a minimum profit target, then run Sparkie once. Sparkie accepts candidates at or above that target and chooses the strongest risk-adjusted result.</div>
+      <div class="sparkie-result" id="sparkieResult">Enter cash and a maximum daily risk limit, then run Sparkie. Sparkie will estimate possible monthly returns and choose the strongest risk-adjusted result.</div>
     </section>
   </div>
 
@@ -270,7 +261,7 @@
     <div class="sparkie-row">
       <div class="sparkie-field">
         <label for="weeklyBaselineCash">Research baseline cash</label>
-        <input id="weeklyBaselineCash" type="number" min="5000" step="1000" value="10000">
+        <input id="weeklyBaselineCash" type="number" min="2000" step="1000" value="10000">
       </div>
       <div class="sparkie-field">
         <label>Automatic schedule</label>
@@ -290,7 +281,7 @@
 
     <div style="height:18px"></div>
     <h3>Use Saved Weekly Results</h3>
-    <p class="sparkie-muted">Uses the account equity, daily target, and confidence entered above. Maximum daily loss is fixed at 5× the target. A fresh finalist verification remains required.</p>
+    <p class="sparkie-muted">Uses the account equity, daily risk budget, and research confidence entered above. Sparkie stops new entries for the day after the loss budget is reached. A fresh finalist verification remains required.</p>
     <div class="sparkie-actions">
       <button class="btn btn-primary" id="weeklyRecommendBtn" type="button">Find Cash / Target Match</button>
     </div>
@@ -410,8 +401,7 @@
       .filter(Boolean);
     return {
       account_equity: Number(document.getElementById("accountEquity").value || 0),
-      target_profit: Number(document.getElementById("targetProfit").value || 0),
-      target_period: document.getElementById("targetPeriod").value,
+      risk_per_day_pct: Number(document.getElementById("riskPerDayPct").value || 0) / 100,
       confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
       symbol_source: symbolSource.value,
       acknowledged_full_cash_risk: fullCashRiskAcknowledged.checked,
@@ -483,6 +473,8 @@
     ].join(" · ");
 
     const periodLabel = data.target_period || "period";
+    const riskFirst = data.analysis_mode === "risk_first_monthly_v1";
+    const monthlyProjection = data.monthly_projection || {};
     const evidenceWindowText = `${Number(data.target_window_units || 0).toLocaleString()} ${periodLabel} unit(s), target total $${Number(data.target_profit_for_window || 0).toLocaleString()}`;
     const dayTradingPolicy = data.day_trading_policy || {};
     const targetMath = data.target_math || {};
@@ -533,20 +525,20 @@
         <div class="sparkie-summary-row"><span>Task id</span><strong>${escapeHtml(data.task_id || "Not queued")}</strong></div>
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.progress_pct || 0).toLocaleString()}% · ${escapeHtml(data.completed_steps || 0)} / ${escapeHtml(data.total_steps || 0)} steps</strong></div>
         <div class="sparkie-summary-row"><span>Time</span><strong>Elapsed ${secondsText(data.elapsed_seconds)} · ETA ${secondsText(data.eta_seconds)}</strong></div>
-        <div class="sparkie-summary-row"><span>Goal</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} ${escapeHtml(data.target_period || "")} on $${Number(data.account_equity || 0).toLocaleString()}</strong></div>
-        <div class="sparkie-summary-row"><span>Target return</span><strong>At least $${Number(data.target_profit || 0).toLocaleString()} per ${escapeHtml(periodLabel)}</strong></div>
-        <div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>
+        <div class="sparkie-summary-row"><span>Analysis</span><strong>${riskFirst ? "Risk-first monthly return selection" : `Target-first ${escapeHtml(data.target_period || "")} selection`}</strong></div>
+        <div class="sparkie-summary-row"><span>Daily risk budget</span><strong>${riskFirst ? `-$${Number(data.risk_per_day_usd || 0).toLocaleString()} (${(Number(data.risk_per_day_pct || 0) * 100).toFixed(1)}% of cash)` : `At least $${Number(data.target_profit || 0).toLocaleString()} per ${escapeHtml(periodLabel)}`}</strong></div>
+        ${riskFirst && monthlyProjection.conservative_monthly_pnl !== undefined ? `<div class="sparkie-summary-row"><span>Historical monthly range</span><strong>Conservative $${Number(monthlyProjection.conservative_monthly_pnl || 0).toLocaleString()} (${Number(monthlyProjection.conservative_monthly_return_pct || 0).toFixed(2)}%) · typical $${Number(monthlyProjection.typical_monthly_pnl || 0).toLocaleString()} (${Number(monthlyProjection.typical_monthly_return_pct || 0).toFixed(2)}%) · strong $${Number(monthlyProjection.strong_monthly_pnl || 0).toLocaleString()} (${Number(monthlyProjection.strong_monthly_return_pct || 0).toFixed(2)}%)</strong></div>` : `<div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>`}
         <div class="sparkie-summary-row"><span>Day-trading rule</span><strong>${dayTradingPolicy.eod_close === false ? "EOD close not enforced" : "End-of-day close required; no overnight positions"}</strong></div>
         <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${cashDeploymentText}</strong></div>
-        <div class="sparkie-summary-row"><span>Required return</span><strong>${targetMathText}</strong></div>
+        ${!riskFirst ? `<div class="sparkie-summary-row"><span>Required return</span><strong>${targetMathText}</strong></div>` : ""}
         ${dailyRisk.profit_target_usd ? `<div class="sparkie-summary-row"><span>Daily profit lock</span><strong>Close the position and stop trading at approximately +$${Number(dailyRisk.profit_target_usd).toLocaleString()}</strong></div>` : ""}
-        ${dailyRisk.loss_limit_usd ? `<div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(dailyRisk.loss_limit_usd).toLocaleString()} (${Number(dailyRisk.loss_multiplier || 5).toLocaleString()}× target); execution can exceed this threshold</strong></div>` : ""}
+        ${dailyRisk.loss_limit_usd ? `<div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(dailyRisk.loss_limit_usd).toLocaleString()}${riskFirst ? "; Sparkie closes an open position and blocks new entries until the next trading day; execution can exceed this threshold" : ` (${Number(dailyRisk.loss_multiplier || 5).toLocaleString()}× target); execution can exceed this threshold`}</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Policy</span><strong>${escapeHtml(policy)}</strong></div>
         <div class="sparkie-summary-row"><span>Candidates tested</span><strong>${Number(data.candidates_tested || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Backtest timing</span><strong>${timingText}</strong></div>
         ${best ? `<div class="sparkie-summary-row"><span>Actual daily P/L</span><strong>${dailyPnlText}</strong></div>` : ""}
         ${best ? `<div class="sparkie-summary-row"><span>Profitable-day rate</span><strong>${profitableDayText}</strong></div>` : ""}
-        ${best ? `<div class="sparkie-summary-row"><span>Daily target results</span><strong>${targetHitText}</strong></div>` : ""}
+        ${best && !riskFirst ? `<div class="sparkie-summary-row"><span>Daily target results</span><strong>${targetHitText}</strong></div>` : ""}
         ${best ? `<div class="sparkie-summary-row"><span>Historical live confidence</span><strong>${liveConfidenceText}</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Recommendation</span><strong>${escapeHtml(data.recommendation || "pending")}</strong></div>
         <div class="sparkie-summary-row"><span>Reason</span><strong>${escapeHtml(data.decision_reason || data.next_step || "")}</strong></div>
@@ -857,9 +849,9 @@
           <div class="sparkie-summary-row"><span>Combination</span><strong>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</strong></div>
           <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${Number(match.shares || 0).toLocaleString()} shares · about $${Number(match.estimated_notional || 0).toLocaleString()} (${Number(match.cash_deployment_pct || 0).toFixed(1)}% of cash)</strong></div>
           <div class="sparkie-summary-row"><span>Universe</span><strong>${escapeHtml(match.universe_sentiment || "unknown")} ranking</strong></div>
-          <div class="sparkie-summary-row"><span>Daily target evidence</span><strong>${Number(match.target_hit_days || 0)} / ${Number(match.days_tested || 0)} days · ${(Number(match.target_hit_rate || 0) * 100).toFixed(1)}% observed · ${(Number(match.target_hit_rate_95pct_low || 0) * 100).toFixed(1)}% 95% lower bound</strong></div>
-          <div class="sparkie-summary-row"><span>Actual historical daily P/L</span><strong>Average $${Number(match.average_daily_pnl || 0).toLocaleString()} · cumulative $${Number(match.cumulative_daily_pnl || 0).toLocaleString()} · worst day $${Number(match.worst_daily_pnl || 0).toLocaleString()}</strong></div>
-          <div class="sparkie-summary-row"><span>Loss trigger / drawdown</span><strong>-$${Number(match.daily_loss_limit || 0).toLocaleString()} daily trigger · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
+          <div class="sparkie-summary-row"><span>Daily risk evidence</span><strong>${Number(match.days_tested || 0)} daily observations · worst day $${Number(match.worst_daily_pnl || 0).toLocaleString()} · ${Number(match.max_loss_days || 0)} loss-budget breach days</strong></div>
+          <div class="sparkie-summary-row"><span>Historical monthly range</span><strong>Conservative $${Number(match.conservative_monthly_pnl || 0).toLocaleString()} (${Number(match.conservative_monthly_return_pct || 0).toFixed(2)}%) · typical $${Number(match.typical_monthly_pnl || 0).toLocaleString()} (${Number(match.typical_monthly_return_pct || 0).toFixed(2)}%) · strong $${Number(match.strong_monthly_pnl || 0).toLocaleString()} (${Number(match.strong_monthly_return_pct || 0).toFixed(2)}%)</strong></div>
+          <div class="sparkie-summary-row"><span>Daily loss budget / drawdown</span><strong>-$${Number(match.daily_risk_budget || 0).toLocaleString()} daily stop · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
           ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
         </div>
         ${match.qualified ? `<div class="sparkie-actions"><button class="btn btn-primary" type="button" data-weekly-verify="${escapeHtml(match.symbol)}" data-weekly-cash="${Number(match.account_equity || 0)}">Run Fresh Finalist Verification</button></div>` : ""}
@@ -878,8 +870,8 @@
         <div class="sparkie-muted">Catalog ${escapeHtml(data.run_id)} · ${Number(data.catalog_symbols || 0)} symbols · ${Number(data.catalog_results || 0)} saved results · ${Number(data.qualified_results_at_requested_cash || 0)} qualified at requested cash</div>
       </div>
       <div class="sparkie-summary">
-        <div class="sparkie-summary-row"><span>Client daily target</span><strong>+$${Number(data.daily_target || 0).toLocaleString()}</strong></div>
-        <div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(data.daily_loss_limit || 0).toLocaleString()} (${Number(data.daily_loss_multiplier || 5)}× target)</strong></div>
+        <div class="sparkie-summary-row"><span>Client daily risk budget</span><strong>-$${Number(data.daily_risk_budget || 0).toLocaleString()} (${(Number(data.risk_per_day_pct || 0) * 100).toFixed(1)}% of cash)</strong></div>
+        <div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(data.daily_risk_budget || 0).toLocaleString()} · Sparkie blocks new entries after this daily loss budget is reached</strong></div>
         <div class="sparkie-summary-row"><span>Risk</span><strong>Up to 100% of client cash is deployed; the loss threshold is not guaranteed.</strong></div>
         <div class="sparkie-summary-row"><span>Selection method</span><strong>${escapeHtml(data.recommendation_method || "Historical evidence ranking")}</strong></div>
         <div class="sparkie-summary-row"><span>Catalog gate analysis</span><strong>${Number(analysis.qualified_results || 0).toLocaleString()} qualified / ${Number(analysis.evaluated_results || 0).toLocaleString()} evaluated · minimum ${Number(analysis.minimum_daily_evidence_days || 0).toLocaleString()} daily observations</strong></div>
@@ -930,7 +922,7 @@
         method: "POST",
         body: JSON.stringify({
           account_equity: Number(document.getElementById("accountEquity").value || 0),
-          daily_target: Number(document.getElementById("targetProfit").value || 0),
+          risk_per_day_pct: Number(document.getElementById("riskPerDayPct").value || 0) / 100,
           confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
           acknowledged_full_cash_risk: true
         })

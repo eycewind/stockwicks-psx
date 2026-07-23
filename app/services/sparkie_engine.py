@@ -26,7 +26,7 @@ from app.services.stocktwits_symbols import stocktwits_ranked_symbols
 
 log = logging.getLogger(__name__)
 
-MIN_ACCOUNT_EQUITY = 5000.0
+MIN_ACCOUNT_EQUITY = 2000.0
 # Sparkie is intentionally an all-cash, one-position day-trading agent.
 # Share rounding can leave a small residual cash balance, but sizing always
 # starts from the entire client equity rather than a percentage allocation.
@@ -105,6 +105,7 @@ def create_sparkie_job(
     confidence_level: float,
     symbol_bucket: list[str] | None = None,
     symbol_source: str = "own_list",
+    risk_per_day_pct: float | None = None,
 ) -> SparkieJob:
     # A user may intentionally narrow or replace the configured universe for
     # one evaluation. An empty selection keeps the operator's default policy.
@@ -120,6 +121,20 @@ def create_sparkie_job(
         "symbol_source": symbol_source,
         "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
     }
+    if risk_per_day_pct is not None:
+        risk_pct = max(0.10, min(float(risk_per_day_pct), 1.0))
+        risk_budget = round(float(account_equity) * risk_pct, 2)
+        request.update(
+            {
+                "analysis_mode": "risk_first_monthly_v1",
+                "risk_per_day_pct": risk_pct,
+                "risk_per_day_usd": risk_budget,
+            }
+        )
+        # Legacy columns remain populated for compatibility; in risk-first
+        # jobs this value is a daily loss budget, never a profit target.
+        target_profit = risk_budget
+        target_period = "risk_profile"
     job = SparkieJob(
         id=job_id,
         user_id=user_id,
@@ -894,12 +909,15 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
     base_dir.mkdir(parents=True, exist_ok=True)
     path = base_dir / f"{job.id}_summary.json"
     request_payload = _json_dict(job.request_json)
+    risk_first = _is_risk_first_job(job)
     payload = {
         "job_id": job.id,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "account_equity": float(job.account_equity or 0.0),
-        "target_profit": float(job.target_profit or 0.0),
-        "target_period": job.target_period,
+        "analysis_mode": "risk_first_monthly_v1" if risk_first else "target_first_legacy",
+        "daily_risk_budget_usd": _risk_first_budget(job) if risk_first else None,
+        "target_profit": None if risk_first else float(job.target_profit or 0.0),
+        "target_period": None if risk_first else job.target_period,
         "symbol_bucket": _json_list(job.symbol_bucket_json),
         "symbol_source": request_payload.get("symbol_source", "legacy"),
         "interval_policy": _json_list(job.interval_policy_json),
@@ -913,11 +931,11 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
         "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
         "final_selection_criteria": {
             "minimum_daily_evidence_days": MIN_FINALIST_DAILY_EVIDENCE_DAYS,
-            "minimum_target_hit_confidence_lower_95pct": float(job.confidence_level or 0.0),
+            "research_confidence_preference": float(job.confidence_level or 0.0),
             "minimum_trades": 5,
             "minimum_win_rate": 0.50,
-            "maximum_drawdown_pct_of_equity": 5.0,
-            "daily_loss_limit_multiple": 5.0,
+            "daily_loss_budget_usd": _risk_first_budget(job) if risk_first else None,
+            "daily_loss_limit_multiple": None if risk_first else 5.0,
             "finalist_replay_minimum_calendar_days": MIN_FINALIST_REPLAY_CALENDAR_DAYS,
         },
         "candidate_count": len(ranked),
@@ -1030,6 +1048,8 @@ def _replace_candidates(db: Session, job: SparkieJob, rows: list[dict[str, Any]]
 
 
 def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
+    if _is_risk_first_job(job):
+        return _risk_first_decision(job, row)
     target_units = _target_window_units(job.target_period)
     profit = float(row.get("profit_loss") or 0.0)
     target_period = str(job.target_period or "daily")
@@ -1127,6 +1147,8 @@ def _daily_target_stats(raw_rows: Any, target_profit: float) -> dict[str, Any]:
 
 def _final_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tuple[float, ...]:
     """Prefer candidates that meet final daily-target criteria, not raw score."""
+    if _is_risk_first_job(job):
+        return _risk_first_selection_sort_key(job, row)
     daily = _daily_target_stats((row.get("params") or {}).get("daily_pnl"), float(job.target_profit or 0.0))
     max_drawdown = abs(float(row.get("max_drawdown") or 0.0))
     qualified = bool(
@@ -1157,6 +1179,105 @@ def _paper_only_decision(reason: str) -> dict[str, Any]:
         "message": "Sparkie did not find a finalist that meets the full selection criteria.",
         "reason": reason,
     }
+
+
+def _is_risk_first_job(job: SparkieJob) -> bool:
+    request = _json_dict(job.request_json)
+    return request.get("analysis_mode") == "risk_first_monthly_v1"
+
+
+def _risk_first_budget(job: SparkieJob) -> float:
+    request = _json_dict(job.request_json)
+    return max(0.0, float(request.get("risk_per_day_usd") or job.target_profit or 0.0))
+
+
+def _monthly_return_profile(raw_rows: Any, account_equity: float) -> dict[str, Any]:
+    profits = [float(row.get("profit_loss") or 0.0) for row in raw_rows if isinstance(row, dict) and row.get("date")]
+    if not profits:
+        return {"available": False}
+    window = min(21, len(profits))
+    monthly_windows = [sum(profits[index:index + window]) for index in range(max(len(profits) - window + 1, 1))]
+    monthly_windows.sort()
+
+    def percentile(fraction: float) -> float:
+        if len(monthly_windows) == 1:
+            return monthly_windows[0]
+        position = (len(monthly_windows) - 1) * fraction
+        lower = int(math.floor(position))
+        upper = int(math.ceil(position))
+        if lower == upper:
+            return monthly_windows[lower]
+        return monthly_windows[lower] + (monthly_windows[upper] - monthly_windows[lower]) * (position - lower)
+
+    conservative, typical, strong = percentile(0.25), percentile(0.50), percentile(0.75)
+    denominator = max(float(account_equity or 0.0), 1.0)
+    return {
+        "available": True,
+        "days_tested": len(profits),
+        "trading_days_per_month": window,
+        "conservative_monthly_pnl": round(conservative, 2),
+        "typical_monthly_pnl": round(typical, 2),
+        "strong_monthly_pnl": round(strong, 2),
+        "conservative_monthly_return_pct": round(conservative / denominator * 100.0, 2),
+        "typical_monthly_return_pct": round(typical / denominator * 100.0, 2),
+        "strong_monthly_return_pct": round(strong / denominator * 100.0, 2),
+        "worst_daily_pnl": round(min(profits), 2),
+        "positive_day_rate": round(sum(value > 0 for value in profits) / len(profits), 4),
+    }
+
+
+def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
+    raw_daily = (row.get("params") or {}).get("daily_pnl")
+    profile = _monthly_return_profile(raw_daily, float(job.account_equity or 0.0))
+    risk_budget = _risk_first_budget(job)
+    if not profile.get("available") or int(profile["days_tested"]) < MIN_FINALIST_DAILY_EVIDENCE_DAYS:
+        return _paper_only_decision(
+            f"Sparkie needs at least {MIN_FINALIST_DAILY_EVIDENCE_DAYS} daily observations to estimate a monthly return."
+        )
+    if float(profile["worst_daily_pnl"]) < -risk_budget:
+        return _paper_only_decision(
+            f"Historical worst day ${profile['worst_daily_pnl']:,.2f} exceeded the client's ${risk_budget:,.2f} daily risk budget."
+        )
+    if int(row.get("trades") or 0) < 5 or float(row.get("win_rate") or 0.0) < 0.50:
+        return _paper_only_decision("Trade count or win rate is below Sparkie's evidence threshold.")
+    if float(row.get("validation_profit_loss") or 0.0) <= 0 or int(row.get("validation_trades") or 0) < 3:
+        return _paper_only_decision("The holdout validation result is not positive enough.")
+    if float(profile["conservative_monthly_pnl"]) <= 0:
+        return _paper_only_decision("The conservative historical monthly P/L scenario is not positive.")
+    return {
+        "recommendation": "paper_candidate",
+        "run_replay": True,
+        "message": "Sparkie selected the strongest risk-adjusted monthly-return candidate and queued Replay verification.",
+        "reason": (
+            f"With a daily risk budget of ${risk_budget:,.2f}, historical monthly scenarios are "
+            f"${profile['conservative_monthly_pnl']:,.2f} conservative, ${profile['typical_monthly_pnl']:,.2f} typical, and "
+            f"${profile['strong_monthly_pnl']:,.2f} strong. A {MIN_FINALIST_REPLAY_CALENDAR_DAYS}-calendar-day Replay is required before Live Mirror."
+        ),
+        "monthly_return_profile": profile,
+    }
+
+
+def _risk_first_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tuple[float, ...]:
+    profile = _monthly_return_profile((row.get("params") or {}).get("daily_pnl"), float(job.account_equity or 0.0))
+    risk_budget = _risk_first_budget(job)
+    qualified = bool(
+        profile.get("available")
+        and int(profile.get("days_tested") or 0) >= MIN_FINALIST_DAILY_EVIDENCE_DAYS
+        and float(profile.get("worst_daily_pnl") or 0.0) >= -risk_budget
+        and float(profile.get("conservative_monthly_pnl") or 0.0) > 0
+        and float(row.get("validation_profit_loss") or 0.0) > 0
+        and int(row.get("validation_trades") or 0) >= 3
+        and int(row.get("trades") or 0) >= 5
+        and float(row.get("win_rate") or 0.0) >= 0.50
+    )
+    return (
+        float(qualified),
+        float(profile.get("conservative_monthly_pnl") or 0.0),
+        float(profile.get("typical_monthly_pnl") or 0.0),
+        float(profile.get("positive_day_rate") or 0.0),
+        -abs(float(row.get("max_drawdown") or 0.0)),
+        float(row.get("score") or 0.0),
+    )
 
 
 def _wilson_interval(successes: int, trials: int, z_score: float = 1.96) -> tuple[float, float]:
@@ -1208,7 +1329,9 @@ def _apply_best_candidate(db: Session, job: SparkieJob, row: dict[str, Any], dec
 def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]:
     params = dict(row.get("params") or {})
     allocation = _trade_allocation_usd(float(job.account_equity or 0.0))
-    daily_target = float(job.target_profit) if str(job.target_period or "").lower() == "daily" else 0.0
+    risk_first = _is_risk_first_job(job)
+    daily_target = 0.0 if risk_first else float(job.target_profit) if str(job.target_period or "").lower() == "daily" else 0.0
+    daily_loss_limit = _risk_first_budget(job) if risk_first else daily_target * 5.0
     cfg = _build_mm_replay_config(
         algo_name=str(row["algo_name"]),
         eod_auto_close="on",
@@ -1241,10 +1364,11 @@ def _replay_config_from_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[
             "sparkie_overnight_positions_allowed": False,
             "sparkie_fast_replay": True,
             "daily_profit_target_usd": daily_target,
-            "daily_loss_limit_usd": daily_target * 5.0,
-            "daily_loss_multiplier": 5.0,
+            "daily_loss_limit_usd": daily_loss_limit,
+            "daily_loss_multiplier": None if risk_first else 5.0,
             "stop_trading_after_daily_target": daily_target > 0,
-            "stop_trading_after_daily_loss": daily_target > 0,
+            "stop_trading_after_daily_loss": daily_loss_limit > 0,
+            "sparkie_analysis_mode": "risk_first_monthly_v1" if risk_first else "target_first_legacy",
             "full_cash_risk_acknowledged": True,
         }
     )

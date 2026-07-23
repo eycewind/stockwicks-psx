@@ -215,7 +215,7 @@ def weekly_recommendation(
     *,
     user_id: int,
     account_equity: float,
-    daily_target: float,
+    risk_per_day_pct: float,
     confidence_level: float,
 ) -> dict[str, Any]:
     run = (
@@ -233,10 +233,11 @@ def weekly_recommendation(
     if not usable_rows:
         raise ValueError("The latest weekly catalog has no usable strategy results.")
 
+    daily_risk_budget = round(float(account_equity) * float(risk_per_day_pct), 2)
     requested = _best_match(
         usable_rows,
         account_equity=float(account_equity),
-        daily_target=float(daily_target),
+        daily_risk_budget=daily_risk_budget,
         confidence_level=float(confidence_level),
     )
     evaluated_requested = [
@@ -245,7 +246,7 @@ def weekly_recommendation(
         if (match := _evaluate_result(
             row,
             account_equity=float(account_equity),
-            daily_target=float(daily_target),
+            daily_risk_budget=daily_risk_budget,
             confidence_level=float(confidence_level),
         ))
     ]
@@ -254,19 +255,6 @@ def weekly_recommendation(
         for gate, passed in (match.get("gates") or {}).items():
             if not passed:
                 gate_failures[gate] = gate_failures.get(gate, 0) + 1
-    ladder = _capital_ladder(float(account_equity))
-    minimum = None
-    for cash in ladder:
-        candidate = _best_match(
-            usable_rows,
-            account_equity=cash,
-            daily_target=float(daily_target),
-            confidence_level=float(confidence_level),
-        )
-        if candidate and candidate["qualified"]:
-            minimum = candidate
-            break
-
     return {
         "ok": True,
         "run_id": run.id,
@@ -281,23 +269,22 @@ def weekly_recommendation(
             "minimum_daily_evidence_days": MIN_RECOMMENDATION_DAYS,
         },
         "recommendation_method": (
-            "Ranks unmodified historical daily P/L by passed safety gates, 95% lower target-hit confidence, "
-            "target-hit rate, daily P/L, and drawdown. Historical profits and losses are not clipped."
+            "Ranks candidates within the client's daily loss budget by conservative, typical, and strong historical "
+            "monthly P/L scenarios. Historical profits and losses are not clipped."
         ),
         "account_equity": round(float(account_equity), 2),
-        "daily_target": round(float(daily_target), 2),
-        "daily_loss_limit": round(float(daily_target) * DAILY_LOSS_MULTIPLIER, 2),
-        "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
+        "risk_per_day_pct": float(risk_per_day_pct),
+        "daily_risk_budget": daily_risk_budget,
         "confidence_level": float(confidence_level),
         "all_cash_at_risk": True,
         "requested_cash_match": requested,
-        "minimum_cash_match": minimum,
+        "minimum_cash_match": None,
         "screening_only": True,
         "verification_required": True,
         "message": (
-            "A matching historical catalog result was found; run a fresh finalist verification before bot setup."
+            "A risk-budget-compatible historical result was found; run a fresh finalist verification before bot setup."
             if requested and requested["qualified"]
-            else "No saved result met every target, confidence, and drawdown gate at the requested cash level."
+            else "No saved result met every daily-risk, validation, and evidence gate at the requested cash level."
         ),
     }
 
@@ -513,7 +500,7 @@ def _best_match(
     rows: list[SparkieWeeklyResult],
     *,
     account_equity: float,
-    daily_target: float,
+    daily_risk_budget: float,
     confidence_level: float,
 ) -> dict[str, Any] | None:
     matches: list[dict[str, Any]] = []
@@ -521,7 +508,7 @@ def _best_match(
         match = _evaluate_result(
             row,
             account_equity=account_equity,
-            daily_target=daily_target,
+            daily_risk_budget=daily_risk_budget,
             confidence_level=confidence_level,
         )
         if match:
@@ -531,10 +518,9 @@ def _best_match(
     matches.sort(
         key=lambda item: (
             bool(item["qualified"]),
-            float(item.get("target_hit_rate_95pct_low") or 0.0),
-            float(item["target_hit_rate"]),
-            float(item["average_daily_pnl"]),
-            float(item["median_daily_pnl"]),
+            float(item.get("conservative_monthly_pnl") or 0.0),
+            float(item.get("typical_monthly_pnl") or 0.0),
+            float(item["positive_day_rate"]),
             float(item["score"]),
             -float(item["estimated_max_drawdown"]),
         ),
@@ -547,7 +533,7 @@ def _evaluate_result(
     row: SparkieWeeklyResult,
     *,
     account_equity: float,
-    daily_target: float,
+    daily_risk_budget: float,
     confidence_level: float,
 ) -> dict[str, Any] | None:
     reference_price = float(row.reference_price or 0.0)
@@ -559,13 +545,10 @@ def _evaluate_result(
     if shares < 1:
         return None
     scale = shares / baseline_shares
-    loss_limit = float(daily_target) * DAILY_LOSS_MULTIPLIER
     scaled = [float(item.get("profit_loss") or 0.0) * scale for item in daily_rows if isinstance(item, dict)]
     if not scaled:
         return None
-    target_hits = sum(1 for value in scaled if value >= float(daily_target))
-    loss_hits = sum(1 for value in scaled if value <= -loss_limit)
-    target_hit_interval = _wilson_interval(target_hits, len(scaled))
+    loss_hits = sum(1 for value in scaled if value <= -float(daily_risk_budget))
     equity_curve = []
     cumulative = 0.0
     for value in scaled:
@@ -576,18 +559,17 @@ def _evaluate_result(
     for value in equity_curve:
         peak = max(peak, value)
         max_drawdown = max(max_drawdown, peak - value)
-    hit_rate = target_hits / len(scaled)
     avg = sum(scaled) / len(scaled)
     estimated_strategy_drawdown = abs(float(row.max_drawdown or 0.0)) * scale
     effective_drawdown = max(max_drawdown, estimated_strategy_drawdown)
+    monthly = _monthly_profile(scaled, float(account_equity))
     gates = {
         "minimum_daily_evidence": len(scaled) >= MIN_RECOMMENDATION_DAYS,
         "positive_average": avg > 0,
-        "target_confidence_95pct": target_hit_interval[0] >= float(confidence_level),
         "validation_positive": float(row.validation_profit_loss or 0.0) > 0 and int(row.validation_trades or 0) >= 3,
         "trade_evidence": int(row.trades or 0) >= 5 and float(row.win_rate or 0.0) >= 0.50,
         "daily_loss_limit_respected": loss_hits == 0,
-        "drawdown_within_5pct": effective_drawdown <= float(account_equity) * 0.05,
+        "conservative_monthly_return_positive": float(monthly["conservative_monthly_pnl"]) > 0,
     }
     return {
         "qualified": all(gates.values()),
@@ -596,21 +578,17 @@ def _evaluate_result(
         "interval": row.interval,
         "algo_name": row.algo_name,
         "account_equity": round(float(account_equity), 2),
-        "daily_target": round(float(daily_target), 2),
-        "daily_loss_limit": round(loss_limit, 2),
+        "daily_risk_budget": round(float(daily_risk_budget), 2),
         "shares": shares,
         "estimated_notional": round(shares * reference_price, 2),
         "cash_deployment_pct": round((shares * reference_price / float(account_equity)) * 100.0, 2),
         "days_tested": len(scaled),
-        "target_hit_days": target_hits,
-        "target_hit_rate": round(hit_rate, 4),
-        "target_hit_rate_95pct_low": target_hit_interval[0],
-        "target_hit_rate_95pct_high": target_hit_interval[1],
         "max_loss_days": loss_hits,
         "average_daily_pnl": round(avg, 2),
         "median_daily_pnl": round(statistics.median(scaled), 2),
         "cumulative_daily_pnl": round(sum(scaled), 2),
         "worst_daily_pnl": round(min(scaled), 2),
+        **monthly,
         "estimated_max_drawdown": round(effective_drawdown, 2),
         "score": round(float(row.score or 0.0), 4),
         "win_rate": round(float(row.win_rate or 0.0), 4),
@@ -620,11 +598,33 @@ def _evaluate_result(
     }
 
 
+def _monthly_profile(profits: list[float], account_equity: float) -> dict[str, Any]:
+    window = min(21, len(profits))
+    monthly = sorted(sum(profits[index:index + window]) for index in range(max(len(profits) - window + 1, 1)))
+    def percentile(fraction: float) -> float:
+        if len(monthly) == 1:
+            return monthly[0]
+        position = (len(monthly) - 1) * fraction
+        low, high = int(math.floor(position)), int(math.ceil(position))
+        return monthly[low] if low == high else monthly[low] + (monthly[high] - monthly[low]) * (position - low)
+    denominator = max(float(account_equity), 1.0)
+    conservative, typical, strong = percentile(0.25), percentile(0.50), percentile(0.75)
+    return {
+        "conservative_monthly_pnl": round(conservative, 2),
+        "typical_monthly_pnl": round(typical, 2),
+        "strong_monthly_pnl": round(strong, 2),
+        "conservative_monthly_return_pct": round(conservative / denominator * 100.0, 2),
+        "typical_monthly_return_pct": round(typical / denominator * 100.0, 2),
+        "strong_monthly_return_pct": round(strong / denominator * 100.0, 2),
+        "positive_day_rate": round(sum(value > 0 for value in profits) / len(profits), 4),
+    }
+
+
 def _capital_ladder(requested_cash: float) -> list[float]:
     configured = os.getenv("SPARKIE_WEEKLY_CAPITAL_LADDER", "5000,10000,15000,25000,50000,75000,100000,150000,250000")
     values = {_float_or_none(value) for value in configured.split(",")}
     values.add(float(requested_cash))
-    return sorted(value for value in values if value and value >= 5000)
+    return sorted(value for value in values if value and value >= 2000)
 
 
 def _wilson_interval(successes: int, trials: int, z_score: float = 1.96) -> tuple[float, float]:

@@ -115,7 +115,13 @@ class SparkiePerformanceApiRequest(GoalFeasibilityRequest):
     acknowledged_full_cash_risk: bool = False
 
 
-class SparkieEvaluationRequest(SparkiePerformanceApiRequest):
+class SparkieEvaluationRequest(BaseModel):
+    account_equity: float = Field(..., ge=2000.0, le=100_000.0)
+    risk_per_day_pct: float = Field(..., ge=0.10, le=1.0)
+    confidence_level: float = Field(0.60, ge=0.40, le=0.95)
+    symbols: list[str] = Field(default_factory=list)
+    symbol_source: Literal["most_active", "trending", "watchers", "barchart_top", "own_list"] = "most_active"
+    acknowledged_full_cash_risk: bool = False
     max_sessions: int = Field(12, ge=1, le=30)
     use_backtest_prefilter: bool = True
     replay_finalists: int = Field(3, ge=1, le=12)
@@ -132,12 +138,12 @@ class SparkieLiveBotSetupRequest(BaseModel):
 
 
 class SparkieWeeklyRunRequest(BaseModel):
-    baseline_cash: float = Field(10000.0, ge=5000.0, le=1_000_000.0)
+    baseline_cash: float = Field(10000.0, ge=2000.0, le=1_000_000.0)
 
 
 class SparkieWeeklyRecommendationRequest(BaseModel):
-    account_equity: float = Field(..., ge=5000.0)
-    daily_target: float = Field(..., gt=0.0)
+    account_equity: float = Field(..., ge=2000.0)
+    risk_per_day_pct: float = Field(..., ge=0.10, le=1.0)
     confidence_level: float = Field(0.60, ge=0.40, le=0.95)
     acknowledged_full_cash_risk: bool = False
 
@@ -286,11 +292,12 @@ def run_evaluation(
         job_id=job_id,
         user_id=user.id,
         account_equity=payload.account_equity,
-        target_profit=payload.target_profit,
-        target_period=payload.target_period,
+        target_profit=float(payload.account_equity) * float(payload.risk_per_day_pct),
+        target_period="risk_profile",
         confidence_level=payload.confidence_level,
         symbol_bucket=selected_symbols,
         symbol_source=payload.symbol_source,
+        risk_per_day_pct=payload.risk_per_day_pct,
     )
     db.commit()
 
@@ -646,7 +653,7 @@ def saved_weekly_recommendation(
             db,
             user_id=int(user.id),
             account_equity=float(payload.account_equity),
-            daily_target=float(payload.daily_target),
+            risk_per_day_pct=float(payload.risk_per_day_pct),
             confidence_level=float(payload.confidence_level),
         )
     except ValueError as exc:
@@ -775,6 +782,9 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     updated_at = job.updated_at.isoformat() if job.updated_at else None
     result_payload = _parse_json_value(job.result_json, {})
     request_payload = _parse_json_value(job.request_json, {})
+    risk_first = isinstance(request_payload, dict) and request_payload.get("analysis_mode") == "risk_first_monthly_v1"
+    risk_per_day_pct = float(request_payload.get("risk_per_day_pct") or 0.0) if isinstance(request_payload, dict) else 0.0
+    risk_per_day_usd = float(request_payload.get("risk_per_day_usd") or 0.0) if isinstance(request_payload, dict) else 0.0
     full_cash_policy = (
         request_payload.get("cash_deployment_policy") == CASH_DEPLOYMENT_POLICY
         if isinstance(request_payload, dict)
@@ -801,6 +811,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     allocation = _sparkie_trade_allocation_usd(float(job.account_equity or 0.0))
     equity = float(job.account_equity or 0.0)
     target_profit = float(job.target_profit or 0.0)
+    monthly_projection = _sparkie_monthly_projection((best or {}).get("daily_pnl"), equity) if risk_first else None
     live_elapsed_seconds = _sparkie_elapsed_seconds(job) if str(job.status or "") in ACTIVE_STATUSES else int(job.elapsed_seconds or 0)
     replay_verification = _sparkie_replay_verification_payload(db, job)
     replay_completed = bool(replay_verification and str(replay_verification.get("status") or "").lower() == "completed")
@@ -827,6 +838,10 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "account_equity": float(job.account_equity or 0.0),
         "target_profit": float(job.target_profit or 0.0),
         "target_period": job.target_period,
+        "analysis_mode": "risk_first_monthly_v1" if risk_first else "target_first_legacy",
+        "risk_per_day_pct": risk_per_day_pct,
+        "risk_per_day_usd": risk_per_day_usd,
+        "monthly_projection": monthly_projection,
         "target_window_units": _sparkie_target_window_units(job.target_period),
         "target_profit_for_window": float(job.target_profit or 0.0) * _sparkie_target_window_units(job.target_period),
         "confidence_level": float(job.confidence_level or 0.0),
@@ -839,10 +854,10 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
             "allocation_share_of_equity_pct": (allocation / equity * 100.0) if equity else 0.0,
         },
         "daily_risk_policy": {
-            "profit_target_usd": target_profit if str(job.target_period or "daily") == "daily" else None,
-            "loss_limit_usd": target_profit * DAILY_LOSS_MULTIPLIER if str(job.target_period or "daily") == "daily" else None,
-            "loss_multiplier": DAILY_LOSS_MULTIPLIER,
-            "stop_after_target": True,
+            "profit_target_usd": None if risk_first else target_profit if str(job.target_period or "daily") == "daily" else None,
+            "loss_limit_usd": risk_per_day_usd if risk_first else target_profit * DAILY_LOSS_MULTIPLIER if str(job.target_period or "daily") == "daily" else None,
+            "loss_multiplier": None if risk_first else DAILY_LOSS_MULTIPLIER,
+            "stop_after_target": False if risk_first else True,
             "stop_after_loss_limit": True,
             "all_cash_at_risk": True,
             "loss_limit_is_not_guaranteed": True,
@@ -1168,6 +1183,33 @@ def _sparkie_daily_pnl_summary(raw_rows: Any, daily_target: float | None) -> dic
     }
 
 
+def _sparkie_monthly_projection(daily_pnl: Any, account_equity: float) -> dict[str, Any] | None:
+    if not isinstance(daily_pnl, dict) or not daily_pnl.get("available"):
+        return None
+    profits = [float(row.get("profit_loss") or 0.0) for row in daily_pnl.get("days") or [] if isinstance(row, dict)]
+    if not profits:
+        return None
+    window = min(21, len(profits))
+    values = sorted(sum(profits[index:index + window]) for index in range(max(len(profits) - window + 1, 1)))
+    def percentile(fraction: float) -> float:
+        if len(values) == 1:
+            return values[0]
+        position = (len(values) - 1) * fraction
+        lower, upper = int(math.floor(position)), int(math.ceil(position))
+        return values[lower] if lower == upper else values[lower] + (values[upper] - values[lower]) * (position - lower)
+    denominator = max(float(account_equity or 0.0), 1.0)
+    conservative, typical, strong = percentile(0.25), percentile(0.50), percentile(0.75)
+    return {
+        "trading_days_per_month": window,
+        "conservative_monthly_pnl": round(conservative, 2),
+        "typical_monthly_pnl": round(typical, 2),
+        "strong_monthly_pnl": round(strong, 2),
+        "conservative_monthly_return_pct": round(conservative / denominator * 100.0, 2),
+        "typical_monthly_return_pct": round(typical / denominator * 100.0, 2),
+        "strong_monthly_return_pct": round(strong / denominator * 100.0, 2),
+    }
+
+
 def _sparkie_live_readiness(best: dict[str, Any] | None, requested_confidence: float) -> dict[str, Any]:
     """Conservatively decide whether historical daily evidence can unlock live.
 
@@ -1181,6 +1223,11 @@ def _sparkie_live_readiness(best: dict[str, Any] | None, requested_confidence: f
     hit_rate = daily.get("target_hit_rate")
     readiness = daily.get("historical_live_readiness") or {}
     lower_bound = readiness.get("target_hit_rate_95pct_low")
+    if hit_rate is None:
+        profitable_days = int(daily.get("profitable_days") or 0)
+        hit_rate = round(profitable_days / days, 4) if days else 0.0
+        interval = _wilson_interval(profitable_days, days)
+        lower_bound = interval[0] if interval else None
     if days < SPARKIE_MIN_LIVE_EVIDENCE_DAYS:
         return {
             "eligible": False,
@@ -1192,7 +1239,7 @@ def _sparkie_live_readiness(best: dict[str, Any] | None, requested_confidence: f
     if lower_bound is None or float(lower_bound) < float(requested_confidence):
         return {
             "eligible": False,
-            "reason": f"Historical confidence is not strong enough for Live Mirror: 95% lower target-hit estimate is {float(lower_bound or 0.0) * 100:.1f}%, below the requested {float(requested_confidence) * 100:.1f}%.",
+            "reason": f"Historical confidence is not strong enough for Live Mirror: 95% lower profitable-day estimate is {float(lower_bound or 0.0) * 100:.1f}%, below the requested {float(requested_confidence) * 100:.1f}%.",
             "days_tested": days,
             "observed_target_hit_rate": hit_rate,
             "target_hit_rate_95pct_low": lower_bound,

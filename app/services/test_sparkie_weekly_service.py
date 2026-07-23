@@ -1,7 +1,7 @@
 import json
 from types import SimpleNamespace
 
-from app.services.sparkie_weekly_service import DAILY_LOSS_MULTIPLIER, _evaluate_result
+from app.services.sparkie_weekly_service import _evaluate_result
 
 
 def _result(daily_values):
@@ -27,11 +27,11 @@ def _result(daily_values):
     )
 
 
-def test_weekly_match_uses_full_cash_and_five_x_loss_cap():
+def test_weekly_match_uses_full_cash_and_daily_risk_budget():
     match = _evaluate_result(
         _result([125.0, 140.0, 130.0, 150.0, -50.0, -50.0]),
         account_equity=10_000.0,
-        daily_target=100.0,
+        daily_risk_budget=1_000.0,
         confidence_level=0.60,
     )
 
@@ -39,20 +39,20 @@ def test_weekly_match_uses_full_cash_and_five_x_loss_cap():
     assert match["qualified"] is True
     assert match["shares"] == 100
     assert match["estimated_notional"] == 10_000.0
-    assert match["daily_loss_limit"] == 100.0 * DAILY_LOSS_MULTIPLIER
-    assert match["target_hit_days"] == 4
-    assert match["target_hit_rate"] == 0.6667
+    assert match["daily_risk_budget"] == 1_000.0
+    assert match["max_loss_days"] == 0
+    assert match["conservative_monthly_pnl"] > 0
 
 
-def test_weekly_match_rejects_target_with_insufficient_hit_rate():
+def test_weekly_match_rejects_a_daily_risk_budget_breach():
     match = _evaluate_result(
         _result([125.0, 20.0, 10.0, -700.0, 0.0, 0.0]),
         account_equity=10_000.0,
-        daily_target=100.0,
+        daily_risk_budget=500.0,
         confidence_level=0.60,
     )
 
     assert match is not None
     assert match["qualified"] is False
-    assert match["daily_loss_limit"] == 500.0
-    assert match["gates"]["target_confidence"] is False
+    assert match["daily_risk_budget"] == 500.0
+    assert match["gates"]["daily_loss_limit_respected"] is False
