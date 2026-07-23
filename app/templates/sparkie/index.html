@@ -814,6 +814,10 @@
     const errorDetail = run.error_message
       ? `<div class="sparkie-bad"><strong>Failure detail</strong><br>${escapeHtml(run.error_message)}</div>`
       : "";
+    const exports = run.exports || {};
+    const exportDetail = exports.summary_json
+      ? `<div class="sparkie-muted">Exports: summary JSON ${escapeHtml(exports.summary_json)}<br>All strategy results: ${escapeHtml(exports.results_json || "")}, ${escapeHtml(exports.results_csv || "")}</div>`
+      : "";
     return `
       <div class="sparkie-status-banner">
         <strong>Weekly Sparkie ${escapeHtml(run.status || "unknown")}</strong>
@@ -830,6 +834,7 @@
       </div>
       ${heartbeatWarning}
       ${errorDetail}
+      ${exportDetail}
     `;
   }
 

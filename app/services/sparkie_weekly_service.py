@@ -174,6 +174,12 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
         run.current_symbol = None
         run.heartbeat_at = datetime.utcnow()
         run.finished_at = datetime.utcnow()
+        try:
+            export_files = _write_weekly_result_exports(db, run, universe)
+        except Exception as exc:
+            # Results remain safely stored in PostgreSQL even if an optional
+            # operator-facing export cannot be written.
+            export_files = {"error": f"Could not write weekly exports: {str(exc)[:500]}"}
         run.summary_json = _json(
             {
                 "result_count": result_count,
@@ -183,6 +189,7 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
                 "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
                 "cash_policy": "full_cash_v1",
                 "universe_policy": "barchart_top_100_plus_bottom_100",
+                "exports": export_files,
             }
         )
         _update_timing(run, started)
@@ -306,6 +313,7 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
     )
     now = datetime.utcnow()
     heartbeat_age = int((now - run.heartbeat_at).total_seconds()) if run.heartbeat_at else None
+    summary = _json_dict(run.summary_json)
     return {
         "run_id": run.id,
         "status": run.status,
@@ -327,6 +335,7 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
         "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
         "heartbeat_age_seconds": heartbeat_age,
         "error_message": run.error_message,
+        "exports": summary.get("exports", {}) if isinstance(summary, dict) else {},
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -686,6 +695,99 @@ def _write_universe_snapshot(run: SparkieWeeklyRun, rows: list[dict[str, Any]]) 
         writer = csv.DictWriter(csv_file, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _weekly_export_base(run: SparkieWeeklyRun) -> Path:
+    return Path(os.getenv("DATA_DIR", "data")) / str(run.user_id) / "sparkie" / "weekly" / run.id
+
+
+def _write_weekly_result_exports(
+    db: Session,
+    run: SparkieWeeklyRun,
+    universe: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Write portable final exports without replacing the database catalog."""
+    base = _weekly_export_base(run)
+    base.mkdir(parents=True, exist_ok=True)
+    rows = (
+        db.query(SparkieWeeklyResult)
+        .filter_by(run_id=run.id)
+        .filter(SparkieWeeklyResult.daily_pnl_json.isnot(None))
+        .order_by(SparkieWeeklyResult.score.desc().nullslast(), SparkieWeeklyResult.id.asc())
+        .all()
+    )
+    results = [_weekly_result_export_row(row) for row in rows]
+    sentiment_counts: dict[str, int] = {}
+    for universe_row in universe:
+        sentiment = str(universe_row.get("sparkieSentiment") or "unknown")
+        sentiment_counts[sentiment] = sentiment_counts.get(sentiment, 0) + 1
+
+    results_json = base / "results.json"
+    results_csv = base / "results.csv"
+    summary_json = base / "summary.json"
+    results_json.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+
+    csv_fields = (
+        "symbol", "universe_rank", "universe_sentiment", "weighted_alpha", "interval", "algo_name",
+        "reference_price", "baseline_cash", "baseline_shares", "score", "average_daily_pnl",
+        "median_daily_pnl", "profitable_day_rate", "max_daily_profit", "max_daily_loss",
+        "max_drawdown", "trades", "win_rate", "validation_profit_loss", "validation_trades",
+        "confidence", "daily_pnl_json", "params_json",
+    )
+    with results_csv.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=csv_fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(results)
+
+    summary = {
+        "run_id": run.id,
+        "generated_at": datetime.utcnow().isoformat(),
+        "baseline_cash": float(run.baseline_cash or 0.0),
+        "universe_symbols": len(universe),
+        "universe_by_sentiment": sentiment_counts,
+        "completed_symbols": int(run.completed_symbols or 0),
+        "failed_symbols": int(run.failed_symbols or 0),
+        "strategy_results": len(results),
+        "cash_policy": "full_cash_v1",
+        "day_trading_policy": "end-of-day close; no overnight positions",
+        "top_results_by_backtest_score": results[:20],
+        "result_files": {"json": str(results_json), "csv": str(results_csv)},
+    }
+    summary_json.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
+    return {
+        "summary_json": str(summary_json),
+        "results_json": str(results_json),
+        "results_csv": str(results_csv),
+    }
+
+
+def _weekly_result_export_row(row: SparkieWeeklyResult) -> dict[str, Any]:
+    params = _json_dict(row.params_json)
+    return {
+        "symbol": row.symbol,
+        "universe_rank": row.universe_rank,
+        "universe_sentiment": params.get("sparkie_universe_sentiment", "unknown"),
+        "weighted_alpha": row.weighted_alpha,
+        "interval": row.interval,
+        "algo_name": row.algo_name,
+        "reference_price": row.reference_price,
+        "baseline_cash": row.baseline_cash,
+        "baseline_shares": row.baseline_shares,
+        "score": row.score,
+        "average_daily_pnl": row.average_daily_pnl,
+        "median_daily_pnl": row.median_daily_pnl,
+        "profitable_day_rate": row.profitable_day_rate,
+        "max_daily_profit": row.max_daily_profit,
+        "max_daily_loss": row.max_daily_loss,
+        "max_drawdown": row.max_drawdown,
+        "trades": row.trades,
+        "win_rate": row.win_rate,
+        "validation_profit_loss": row.validation_profit_loss,
+        "validation_trades": row.validation_trades,
+        "confidence": row.confidence,
+        "daily_pnl_json": row.daily_pnl_json,
+        "params_json": row.params_json,
+    }
 
 
 def _confidence_value(value: Any) -> float | None:
