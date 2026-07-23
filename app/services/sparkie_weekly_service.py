@@ -356,12 +356,22 @@ def _process_weekly_symbol(
     symbol = str(universe_row.get("symbol") or "").upper().strip()
     run.error_message = None
     lookback_days = int(os.getenv("SPARKIE_WEEKLY_LOOKBACK_DAYS", "90"))
-    meta = refresh_symbol_data(
-        user_id=int(run.user_id),
-        symbol=symbol,
-        intervals=intervals,
-        lookback_days=lookback_days,
-    )
+    try:
+        meta = refresh_symbol_data(
+            user_id=int(run.user_id),
+            symbol=symbol,
+            intervals=intervals,
+            lookback_days=lookback_days,
+        )
+    except Exception as exc:
+        # A newly listed or illiquid symbol can lack enough intraday bars for
+        # one interval. It is a failed catalog member, not a failed 200-stock
+        # weekly run. The caller checkpoints it and moves to the next symbol.
+        run.error_message = f"{symbol}: data preparation skipped: {str(exc)[:850]}"
+        run.heartbeat_at = datetime.utcnow()
+        run.message = f"Batch {run.current_batch}: {symbol} skipped because data was insufficient."
+        db.commit()
+        return False
     frames = meta.get("frames") or {}
     stored = 0
     errors: list[str] = []
