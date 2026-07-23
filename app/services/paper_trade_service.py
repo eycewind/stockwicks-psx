@@ -1,6 +1,8 @@
 # /var/stockwicks/clients/ashakil/app/services/paper_trade_service.py
 # app/services/paper_trade_service.py
 from __future__ import annotations
+import json
+import math
 from sqlalchemy import inspect as sa_inspect
 import logging
 import os
@@ -27,6 +29,52 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s (TRADE
 log = logging.getLogger(__name__)
 
 email_service = EmailService()
+
+
+def _entry_quantity_for_bot(bot: PaperStockTradeBot, price: float) -> float:
+    """Return the quantity for an entry, recalculating Sparkie full-cash bots.
+
+    A Replay session is priced in the past, so its historical share count must
+    never be copied unchanged into a live order.  Sparkie specifies a dollar
+    allocation and derives whole shares from the live entry price instead.
+    """
+    default_qty = float(getattr(bot, "trade_size", 0.0) or 0.0)
+    raw_config = getattr(bot, "config_json", None) or "{}"
+    try:
+        config = json.loads(raw_config)
+    except (TypeError, ValueError):
+        config = {}
+
+    if config.get("sparkie_cash_deployment_policy") != "full_cash_v1":
+        return default_qty
+
+    allocation = float(config.get("sparkie_allocation_usd") or 0.0)
+    entry_price = float(price or 0.0)
+    if not math.isfinite(allocation) or allocation <= 0:
+        raise ValueError("Sparkie bot has no valid cash allocation.")
+    if not math.isfinite(entry_price) or entry_price <= 0:
+        raise ValueError("Sparkie bot received an invalid live entry price.")
+
+    quantity = int(allocation // entry_price)
+    if quantity < 1:
+        raise ValueError(
+            f"Sparkie allocation ${allocation:,.2f} cannot buy one share at ${entry_price:,.2f}."
+        )
+
+    # Persist the actual sizing decision for auditability and make the bot UI
+    # show the quantity used on the most recent live/paper entry.
+    config.update(
+        {
+            "sparkie_sizing_mode": "full_cash_at_entry_price",
+            "sparkie_last_entry_allocation_usd": round(allocation, 2),
+            "sparkie_last_entry_price": round(entry_price, 4),
+            "sparkie_last_entry_quantity": quantity,
+        }
+    )
+    bot.trade_size = float(quantity)
+    bot.quantity = int(quantity)
+    bot.config_json = json.dumps(config, separators=(",", ":"), sort_keys=True)
+    return float(quantity)
 
 
 # -----------------------------------------------------------------------------
@@ -202,7 +250,7 @@ def open_position(db: Session, bot: PaperStockTradeBot, side: str, price: float)
         if bot is None:
             raise ValueError("open_position: bot is required")
 
-        qty = float(getattr(bot, "trade_size", 0.0) or 0.0)
+        qty = _entry_quantity_for_bot(bot, float(price))
         if qty <= 0:
             raise ValueError("open_position: trade_size must be > 0")
 

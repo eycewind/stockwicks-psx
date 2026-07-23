@@ -520,9 +520,9 @@
           <button class="btn btn-primary" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', false)">Start Paper Bot</button>
           ${botSetup.live_mirror_allowed ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true)">Start Schwab Live Bot</button>` : ""}
         </div>
-        ${botSetup.live_mirror_allowed && !botSetup.live_mirror_recommended
-          ? `<div class="sparkie-warn">Caution: Sparkie recommends paper-only for this result. Live trading is still available by your explicit choice and can place real Schwab orders.</div>`
-          : ""}
+        ${!botSetup.live_mirror_allowed
+          ? `<div class="sparkie-warn">Live Mirror is blocked: ${escapeHtml(botSetup.live_mirror_block_reason || "the historical evidence or Replay verification does not meet Sparkie's safety gate.")} Paper mode remains available.</div>`
+          : `<div class="sparkie-warn">Live quantity is recalculated from the full cash allocation at each actual entry price; Replay's historical share count is never reused for a live order.</div>`}
       </div>
     ` : "";
 

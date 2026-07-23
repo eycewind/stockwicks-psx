@@ -87,6 +87,9 @@ SPARKIE_REPLAY_MAX_MINUTES = 30
 SPARKIE_OPTIMIZER_MAX_MINUTES = 60
 SPARKIE_JOB_PATTERN = re.compile(r"sparkie-\d+-\d{14}(?:-[a-f0-9]{8})?")
 SPARKIE_PROCESS_PREFIX = "sparkie-process:"
+# A live account must have enough independent historical days to evaluate a
+# daily-target claim.  Six days can look good by chance and is paper-only.
+SPARKIE_MIN_LIVE_EVIDENCE_DAYS = max(20, int(os.getenv("SPARKIE_MIN_LIVE_EVIDENCE_DAYS", "20")))
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -470,6 +473,20 @@ def setup_live_bot(
     if payload.mirror_live:
         if not payload.acknowledged_live_risk:
             raise HTTPException(status_code=400, detail="Explicit live-trading risk acknowledgement is required.")
+        candidate = (
+            db.query(SparkieCandidate)
+            .filter(SparkieCandidate.job_id == job.id)
+            .filter(SparkieCandidate.symbol == job.best_symbol)
+            .filter(SparkieCandidate.interval == job.best_interval)
+            .filter(SparkieCandidate.algo_name == job.best_algo_name)
+            .first()
+        )
+        best = _sparkie_candidate_payload(candidate, job.target_period, job.target_profit) if candidate else _sparkie_best_backtest_payload(job)
+        readiness = _sparkie_live_readiness(best, float(job.confidence_level or 0.0))
+        replay_pnl, _replay_trades = _replay_session_pnl(db, int(replay.id))
+        if not readiness["eligible"] or replay_pnl <= 0:
+            detail = readiness["reason"] if not readiness["eligible"] else "Replay verification was not profitable."
+            raise HTTPException(status_code=409, detail=f"Live Mirror is blocked: {detail} Start a paper bot instead.")
 
     bot = _create_live_bot_from_replay_session(
         db,
@@ -792,6 +809,14 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         and float(replay_verification.get("profit_loss") or 0.0) > 0
         and int(replay_verification.get("trades") or 0) > 0
     )
+    live_readiness = _sparkie_live_readiness(best, float(job.confidence_level or 0.0))
+    live_mirror_allowed = bool(
+        job.replay_session_id
+        and replay_completed
+        and replay_positive
+        and job.recommendation == "paper_candidate"
+        and live_readiness["eligible"]
+    )
     payload = {
         "ok": True,
         "job_id": job.id,
@@ -842,11 +867,10 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         "replay_verification": replay_verification,
         "bot_setup": {
             "paper_allowed": bool(job.replay_session_id and replay_completed),
-            # A completed Replay unlocks both user-selectable bot modes. The
-            # recommendation remains advisory and is surfaced as a warning in
-            # the UI instead of silently removing the live option.
-            "live_mirror_allowed": bool(job.replay_session_id and replay_completed),
-            "live_mirror_recommended": bool(replay_positive and job.recommendation == "paper_candidate"),
+            "live_mirror_allowed": live_mirror_allowed,
+            "live_mirror_recommended": live_mirror_allowed,
+            "live_mirror_block_reason": None if live_mirror_allowed else live_readiness["reason"],
+            "live_readiness": live_readiness,
         },
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,
@@ -1135,6 +1159,44 @@ def _sparkie_daily_pnl_summary(raw_rows: Any, daily_target: float | None) -> dic
             "evidence_level": "insufficient" if len(days) < 10 else "limited" if len(days) < 20 else "moderate",
             "message": "Historical evidence only; this is not a promise of live-trading profit.",
         },
+    }
+
+
+def _sparkie_live_readiness(best: dict[str, Any] | None, requested_confidence: float) -> dict[str, Any]:
+    """Conservatively decide whether historical daily evidence can unlock live.
+
+    The Wilson lower bound prevents a small sample such as 4 target hits in 6
+    days from being described as a 60% live expectation.
+    """
+    daily = (best or {}).get("daily_pnl") if isinstance(best, dict) else None
+    if not isinstance(daily, dict) or not daily.get("available"):
+        return {"eligible": False, "reason": "No daily P/L evidence is available for the selected candidate."}
+    days = int(daily.get("days_tested") or 0)
+    hit_rate = daily.get("target_hit_rate")
+    readiness = daily.get("historical_live_readiness") or {}
+    lower_bound = readiness.get("target_hit_rate_95pct_low")
+    if days < SPARKIE_MIN_LIVE_EVIDENCE_DAYS:
+        return {
+            "eligible": False,
+            "reason": f"Only {days} historical daily observations are available; Sparkie requires at least {SPARKIE_MIN_LIVE_EVIDENCE_DAYS} before Live Mirror.",
+            "days_tested": days,
+            "observed_target_hit_rate": hit_rate,
+            "target_hit_rate_95pct_low": lower_bound,
+        }
+    if lower_bound is None or float(lower_bound) < float(requested_confidence):
+        return {
+            "eligible": False,
+            "reason": f"Historical confidence is not strong enough for Live Mirror: 95% lower target-hit estimate is {float(lower_bound or 0.0) * 100:.1f}%, below the requested {float(requested_confidence) * 100:.1f}%.",
+            "days_tested": days,
+            "observed_target_hit_rate": hit_rate,
+            "target_hit_rate_95pct_low": lower_bound,
+        }
+    return {
+        "eligible": True,
+        "reason": "Historical daily evidence meets Sparkie's Live Mirror gate; it is still not a profit guarantee.",
+        "days_tested": days,
+        "observed_target_hit_rate": hit_rate,
+        "target_hit_rate_95pct_low": lower_bound,
     }
 
 

@@ -2190,6 +2190,12 @@ def _create_live_bot_from_replay_session(
             "force_retrain_each_tick": cfg.get("model_refresh_mode") == "every_bar",
         }
     )
+    if cfg.get("sparkie_cash_deployment_policy") == "full_cash_v1":
+        # sess.trade_size belongs to the historical Replay start price. Keep it
+        # only as an audit value; paper_trade_service recalculates whole shares
+        # from sparkie_allocation_usd at every live entry price.
+        cfg["sparkie_replay_reference_quantity"] = float(sess.trade_size or 0.0)
+        cfg["sparkie_sizing_mode"] = "full_cash_at_entry_price"
 
     bot = PaperStockTradeBot(
         user_id=user_id,
