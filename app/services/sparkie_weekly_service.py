@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.sparkie import SparkieWeeklyResult, SparkieWeeklyRun
-from app.services.barchart_symbols import barchart_bullish_rows_with_source
+from app.services.barchart_symbols import barchart_weekly_rows_with_source
 
 
 WEEKLY_ACTIVE_STATUSES = {"queued", "snapshotting", "running", "stopping"}
@@ -23,6 +23,7 @@ WEEKLY_PROCESS_PREFIX = "sparkie-weekly-process:"
 DEFAULT_BASELINE_CASH = 10_000.0
 DEFAULT_BATCH_SIZE = 5
 DAILY_LOSS_MULTIPLIER = 5.0
+MIN_RECOMMENDATION_DAYS = max(20, int(os.getenv("SPARKIE_WEEKLY_MIN_RECOMMENDATION_DAYS", "20")))
 
 
 def create_weekly_run(
@@ -92,14 +93,14 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
     run.error_message = None
     run.status = "snapshotting"
     run.stage = "snapshotting"
-    run.message = "Saving the current Stock Bullish Top 100 universe."
+    run.message = "Saving the current Barchart Top 100 and Bottom 100 universe."
     run.heartbeat_at = datetime.utcnow()
     db.commit()
 
     try:
         universe = _json_list(run.universe_json)
         if not universe:
-            universe, ranking_source = barchart_bullish_rows_with_source(force_refresh=True)
+            universe, ranking_source = barchart_weekly_rows_with_source(force_refresh=True)
             universe = [{**row, "sparkieRankingSource": ranking_source} for row in universe]
             run.universe_json = _json(universe)
             run.total_symbols = len(universe)
@@ -181,6 +182,7 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
                 "failed_symbols": int(run.failed_symbols or 0),
                 "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
                 "cash_policy": "full_cash_v1",
+                "universe_policy": "barchart_top_100_plus_bottom_100",
             }
         )
         _update_timing(run, started)
@@ -230,6 +232,21 @@ def weekly_recommendation(
         daily_target=float(daily_target),
         confidence_level=float(confidence_level),
     )
+    evaluated_requested = [
+        match
+        for row in usable_rows
+        if (match := _evaluate_result(
+            row,
+            account_equity=float(account_equity),
+            daily_target=float(daily_target),
+            confidence_level=float(confidence_level),
+        ))
+    ]
+    gate_failures: dict[str, int] = {}
+    for match in evaluated_requested:
+        for gate, passed in (match.get("gates") or {}).items():
+            if not passed:
+                gate_failures[gate] = gate_failures.get(gate, 0) + 1
     ladder = _capital_ladder(float(account_equity))
     minimum = None
     for cash in ladder:
@@ -249,6 +266,17 @@ def weekly_recommendation(
         "catalog_completed_at": run.finished_at.isoformat() if run.finished_at else None,
         "catalog_symbols": int(run.completed_symbols or 0),
         "catalog_results": len(usable_rows),
+        "qualified_results_at_requested_cash": sum(1 for row in evaluated_requested if row["qualified"]),
+        "catalog_analysis": {
+            "evaluated_results": len(evaluated_requested),
+            "qualified_results": sum(1 for row in evaluated_requested if row["qualified"]),
+            "gate_failures": gate_failures,
+            "minimum_daily_evidence_days": MIN_RECOMMENDATION_DAYS,
+        },
+        "recommendation_method": (
+            "Ranks unmodified historical daily P/L by passed safety gates, 95% lower target-hit confidence, "
+            "target-hit rate, daily P/L, and drawdown. Historical profits and losses are not clipped."
+        ),
         "account_equity": round(float(account_equity), 2),
         "daily_target": round(float(daily_target), 2),
         "daily_loss_limit": round(float(daily_target) * DAILY_LOSS_MULTIPLIER, 2),
@@ -302,7 +330,7 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
-        "can_resume": str(run.status or "").lower() in {"stopped", "error"} and int(run.completed_symbols or 0) < int(run.total_symbols or 100),
+        "can_resume": str(run.status or "").lower() in {"stopped", "error"} and int(run.completed_symbols or 0) < int(run.total_symbols or 200),
     }
 
 
@@ -382,7 +410,7 @@ def _process_weekly_symbol(
                         run_id=run.id,
                         user_id=int(run.user_id),
                         symbol=symbol,
-                        universe_rank=_int_or_none(universe_row.get("currentRankUsTop100")),
+                        universe_rank=_universe_rank(universe_row),
                         weighted_alpha=_float_or_none(universe_row.get("weightedAlpha")),
                         interval=str(interval),
                         algo_name=str(row.get("algo_name") or ""),
@@ -402,7 +430,11 @@ def _process_weekly_symbol(
                         validation_trades=int(row.get("validation_num_trades") or 0),
                         confidence=_confidence_value(row.get("confidence")),
                         daily_pnl_json=_json(daily_rows),
-                        params_json=_json(row),
+                        params_json=_json({
+                            **row,
+                            "sparkie_universe_sentiment": universe_row.get("sparkieSentiment"),
+                            "sparkie_universe_rank": _universe_rank(universe_row),
+                        }),
                     )
                 )
                 stored += 1
@@ -442,7 +474,7 @@ def _store_symbol_checkpoint(
             run_id=run.id,
             user_id=int(run.user_id),
             symbol=symbol,
-            universe_rank=_int_or_none(universe_row.get("currentRankUsTop100")),
+            universe_rank=_universe_rank(universe_row),
             weighted_alpha=_float_or_none(universe_row.get("weightedAlpha")),
             interval="__checkpoint__",
             algo_name="failed" if failed else "completed",
@@ -479,8 +511,10 @@ def _best_match(
     matches.sort(
         key=lambda item: (
             bool(item["qualified"]),
+            float(item.get("target_hit_rate_95pct_low") or 0.0),
             float(item["target_hit_rate"]),
             float(item["average_daily_pnl"]),
+            float(item["median_daily_pnl"]),
             float(item["score"]),
             -float(item["estimated_max_drawdown"]),
         ),
@@ -509,12 +543,12 @@ def _evaluate_result(
     scaled = [float(item.get("profit_loss") or 0.0) * scale for item in daily_rows if isinstance(item, dict)]
     if not scaled:
         return None
-    controlled = [min(float(daily_target), max(-loss_limit, value)) for value in scaled]
     target_hits = sum(1 for value in scaled if value >= float(daily_target))
     loss_hits = sum(1 for value in scaled if value <= -loss_limit)
+    target_hit_interval = _wilson_interval(target_hits, len(scaled))
     equity_curve = []
     cumulative = 0.0
-    for value in controlled:
+    for value in scaled:
         cumulative += value
         equity_curve.append(cumulative)
     peak = -math.inf
@@ -523,14 +557,16 @@ def _evaluate_result(
         peak = max(peak, value)
         max_drawdown = max(max_drawdown, peak - value)
     hit_rate = target_hits / len(scaled)
-    avg = sum(controlled) / len(controlled)
+    avg = sum(scaled) / len(scaled)
     estimated_strategy_drawdown = abs(float(row.max_drawdown or 0.0)) * scale
     effective_drawdown = max(max_drawdown, estimated_strategy_drawdown)
     gates = {
+        "minimum_daily_evidence": len(scaled) >= MIN_RECOMMENDATION_DAYS,
         "positive_average": avg > 0,
-        "target_confidence": hit_rate >= float(confidence_level),
+        "target_confidence_95pct": target_hit_interval[0] >= float(confidence_level),
         "validation_positive": float(row.validation_profit_loss or 0.0) > 0 and int(row.validation_trades or 0) >= 3,
         "trade_evidence": int(row.trades or 0) >= 5 and float(row.win_rate or 0.0) >= 0.50,
+        "daily_loss_limit_respected": loss_hits == 0,
         "drawdown_within_5pct": effective_drawdown <= float(account_equity) * 0.05,
     }
     return {
@@ -548,14 +584,19 @@ def _evaluate_result(
         "days_tested": len(scaled),
         "target_hit_days": target_hits,
         "target_hit_rate": round(hit_rate, 4),
+        "target_hit_rate_95pct_low": target_hit_interval[0],
+        "target_hit_rate_95pct_high": target_hit_interval[1],
         "max_loss_days": loss_hits,
         "average_daily_pnl": round(avg, 2),
-        "median_daily_pnl": round(statistics.median(controlled), 2),
+        "median_daily_pnl": round(statistics.median(scaled), 2),
+        "cumulative_daily_pnl": round(sum(scaled), 2),
+        "worst_daily_pnl": round(min(scaled), 2),
         "estimated_max_drawdown": round(effective_drawdown, 2),
         "score": round(float(row.score or 0.0), 4),
         "win_rate": round(float(row.win_rate or 0.0), 4),
         "trades": int(row.trades or 0),
         "params": _json_dict(row.params_json),
+        "universe_sentiment": _json_dict(row.params_json).get("sparkie_universe_sentiment"),
     }
 
 
@@ -564,6 +605,23 @@ def _capital_ladder(requested_cash: float) -> list[float]:
     values = {_float_or_none(value) for value in configured.split(",")}
     values.add(float(requested_cash))
     return sorted(value for value in values if value and value >= 5000)
+
+
+def _wilson_interval(successes: int, trials: int, z_score: float = 1.96) -> tuple[float, float]:
+    if trials <= 0:
+        return 0.0, 0.0
+    observed = max(0.0, min(1.0, float(successes) / float(trials)))
+    z_squared = z_score * z_score
+    denominator = 1.0 + z_squared / trials
+    center = (observed + z_squared / (2.0 * trials)) / denominator
+    spread = z_score * math.sqrt((observed * (1.0 - observed) + z_squared / (4.0 * trials)) / trials) / denominator
+    return round(max(0.0, center - spread), 4), round(min(1.0, center + spread), 4)
+
+
+def _universe_rank(row: dict[str, Any]) -> int | None:
+    if str(row.get("sparkieSentiment") or "").lower() == "bearish":
+        return _int_or_none(row.get("currentRankUsBottom100"))
+    return _int_or_none(row.get("currentRankUsTop100"))
 
 
 def _completed_symbols(db: Session, run_id: str) -> set[str]:
@@ -610,7 +668,7 @@ def _write_universe_snapshot(run: SparkieWeeklyRun, rows: list[dict[str, Any]]) 
     base.mkdir(parents=True, exist_ok=True)
     (base / "universe.json").write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
     fields = (
-        "symbol", "symbolName", "weightedAlpha", "currentRankUsTop100", "previousRank",
+        "symbol", "symbolName", "weightedAlpha", "currentRankUsTop100", "currentRankUsBottom100", "sparkieSentiment", "previousRank",
         "lastPrice", "priceChange", "percentChange", "highPrice1y", "lowPrice1y",
         "percentChange1y", "tradeTime",
     )

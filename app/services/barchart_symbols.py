@@ -106,6 +106,37 @@ def barchart_bullish_rows_with_source(*, force_refresh: bool = False) -> tuple[l
         return rows, "snapshot"
 
 
+def barchart_bearish_rows_with_source(*, force_refresh: bool = False) -> tuple[list[dict[str, Any]], str]:
+    """Return Barchart's Bottom 100 Weighted Alpha table.
+
+    We deliberately do not substitute the bullish snapshot here: a partial
+    weekly universe must be visible to the caller rather than silently
+    pretending the Bottom 100 was scanned.
+    """
+    try:
+        return barchart_ranked_rows("bearish", force_refresh=force_refresh), "live"
+    except Exception as exc:
+        raise RuntimeError("Stock Bearish Bottom 100 was unavailable.") from exc
+
+
+def barchart_weekly_rows_with_source(*, force_refresh: bool = False) -> tuple[list[dict[str, Any]], str]:
+    """Build the weekly 200-symbol universe from bullish and bearish leaders."""
+    bullish, bullish_source = barchart_bullish_rows_with_source(force_refresh=force_refresh)
+    bearish, bearish_source = barchart_bearish_rows_with_source(force_refresh=force_refresh)
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for sentiment, ranked_rows in (("bullish", bullish), ("bearish", bearish)):
+        for row in ranked_rows:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            rows.append({**row, "sparkieSentiment": sentiment})
+    if len(rows) < 200:
+        raise RuntimeError(f"Barchart weekly universe contained only {len(rows)} unique symbols; expected 200.")
+    return rows, f"bullish:{bullish_source},bearish:{bearish_source}"
+
+
 def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:
     """Return Barchart's public Top 100 table ordered by Weighted Alpha."""
 

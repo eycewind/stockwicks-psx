@@ -264,7 +264,7 @@
     <div class="sparkie-header" style="margin-bottom:12px;">
       <div>
         <h2>Weekly Sparkie Research</h2>
-        <p class="sparkie-muted">Save the Stock Bullish Top 100, process five symbols at a time, and reuse the completed catalog for fast cash/target matching. This runner does not use Celery.</p>
+        <p class="sparkie-muted">Save Barchart's Top 100 and Bottom 100 (200 symbols), process five symbols at a time, and reuse the completed catalog for fast cash/target matching. This runner does not use Celery.</p>
       </div>
     </div>
     <div class="sparkie-row">
@@ -842,8 +842,9 @@
         <div class="sparkie-summary">
           <div class="sparkie-summary-row"><span>Combination</span><strong>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</strong></div>
           <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${Number(match.shares || 0).toLocaleString()} shares · about $${Number(match.estimated_notional || 0).toLocaleString()} (${Number(match.cash_deployment_pct || 0).toFixed(1)}% of cash)</strong></div>
-          <div class="sparkie-summary-row"><span>Daily target evidence</span><strong>${Number(match.target_hit_days || 0)} / ${Number(match.days_tested || 0)} days · ${(Number(match.target_hit_rate || 0) * 100).toFixed(1)}%</strong></div>
-          <div class="sparkie-summary-row"><span>Controlled average daily P/L</span><strong>$${Number(match.average_daily_pnl || 0).toLocaleString()}</strong></div>
+          <div class="sparkie-summary-row"><span>Universe</span><strong>${escapeHtml(match.universe_sentiment || "unknown")} ranking</strong></div>
+          <div class="sparkie-summary-row"><span>Daily target evidence</span><strong>${Number(match.target_hit_days || 0)} / ${Number(match.days_tested || 0)} days · ${(Number(match.target_hit_rate || 0) * 100).toFixed(1)}% observed · ${(Number(match.target_hit_rate_95pct_low || 0) * 100).toFixed(1)}% 95% lower bound</strong></div>
+          <div class="sparkie-summary-row"><span>Actual historical daily P/L</span><strong>Average $${Number(match.average_daily_pnl || 0).toLocaleString()} · cumulative $${Number(match.cumulative_daily_pnl || 0).toLocaleString()} · worst day $${Number(match.worst_daily_pnl || 0).toLocaleString()}</strong></div>
           <div class="sparkie-summary-row"><span>Loss trigger / drawdown</span><strong>-$${Number(match.daily_loss_limit || 0).toLocaleString()} daily trigger · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
           ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
         </div>
@@ -853,15 +854,22 @@
   }
 
   function renderWeeklyRecommendation(data) {
+    const analysis = data.catalog_analysis || {};
+    const failureText = Object.entries(analysis.gate_failures || {})
+      .map(([gate, count]) => `${gate.replaceAll("_", " ")}: ${Number(count).toLocaleString()}`)
+      .join(" · ");
     return `
       <div class="sparkie-status-banner">
         <strong>${escapeHtml(data.message || "Weekly catalog result")}</strong>
-        <div class="sparkie-muted">Catalog ${escapeHtml(data.run_id)} · ${Number(data.catalog_symbols || 0)} symbols · ${Number(data.catalog_results || 0)} saved results</div>
+        <div class="sparkie-muted">Catalog ${escapeHtml(data.run_id)} · ${Number(data.catalog_symbols || 0)} symbols · ${Number(data.catalog_results || 0)} saved results · ${Number(data.qualified_results_at_requested_cash || 0)} qualified at requested cash</div>
       </div>
       <div class="sparkie-summary">
         <div class="sparkie-summary-row"><span>Client daily target</span><strong>+$${Number(data.daily_target || 0).toLocaleString()}</strong></div>
         <div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(data.daily_loss_limit || 0).toLocaleString()} (${Number(data.daily_loss_multiplier || 5)}× target)</strong></div>
         <div class="sparkie-summary-row"><span>Risk</span><strong>Up to 100% of client cash is deployed; the loss threshold is not guaranteed.</strong></div>
+        <div class="sparkie-summary-row"><span>Selection method</span><strong>${escapeHtml(data.recommendation_method || "Historical evidence ranking")}</strong></div>
+        <div class="sparkie-summary-row"><span>Catalog gate analysis</span><strong>${Number(analysis.qualified_results || 0).toLocaleString()} qualified / ${Number(analysis.evaluated_results || 0).toLocaleString()} evaluated · minimum ${Number(analysis.minimum_daily_evidence_days || 0).toLocaleString()} daily observations</strong></div>
+        ${failureText ? `<div class="sparkie-summary-row"><span>Failed-gate counts</span><strong>${escapeHtml(failureText)}</strong></div>` : ""}
       </div>
       ${matchCard(`Requested cash $${Number(data.account_equity || 0).toLocaleString()}`, data.requested_cash_match)}
       ${matchCard("Estimated minimum cash from configured ladder", data.minimum_cash_match)}
@@ -888,7 +896,7 @@
     weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
   });
   document.getElementById("weeklyRestartBtn").addEventListener("click", async () => {
-    if (!window.confirm("Restart Weekly Sparkie from a fresh Top 100 snapshot? Existing run history will remain saved.")) return;
+    if (!window.confirm("Restart Weekly Sparkie from fresh Top 100 and Bottom 100 snapshots? Existing run history will remain saved.")) return;
     const data = await requestJson("/api/sparkie/weekly/restart", {
       method: "POST",
       body: JSON.stringify({baseline_cash: Number(document.getElementById("weeklyBaselineCash").value || 10000)})
