@@ -878,7 +878,6 @@
         ${failureText ? `<div class="sparkie-summary-row"><span>Failed-gate counts</span><strong>${escapeHtml(failureText)}</strong></div>` : ""}
       </div>
       ${matchCard(`Requested cash $${Number(data.account_equity || 0).toLocaleString()}`, data.requested_cash_match)}
-      ${matchCard("Estimated minimum cash from configured ladder", data.minimum_cash_match)}
     `;
   }
 

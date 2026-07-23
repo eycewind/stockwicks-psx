@@ -179,7 +179,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             db,
             job,
             status="rejected",
-            message="Sparkie requires at least $5,000 account equity.",
+            message=f"Sparkie requires at least ${MIN_ACCOUNT_EQUITY:,.0f} account equity.",
             recommendation="blocked",
             decision_reason="Account equity is below Sparkie's minimum gate.",
         )

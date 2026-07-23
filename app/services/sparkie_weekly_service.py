@@ -250,6 +250,10 @@ def weekly_recommendation(
             confidence_level=float(confidence_level),
         ))
     ]
+    evidence_ready_count = sum(
+        1 for match in evaluated_requested
+        if int(match.get("days_tested") or 0) >= MIN_RECOMMENDATION_DAYS
+    )
     gate_failures: dict[str, int] = {}
     for match in evaluated_requested:
         for gate, passed in (match.get("gates") or {}).items():
@@ -261,6 +265,7 @@ def weekly_recommendation(
         "catalog_completed_at": run.finished_at.isoformat() if run.finished_at else None,
         "catalog_symbols": int(run.completed_symbols or 0),
         "catalog_results": len(usable_rows),
+        "evidence_ready_results": evidence_ready_count,
         "qualified_results_at_requested_cash": sum(1 for row in evaluated_requested if row["qualified"]),
         "catalog_analysis": {
             "evaluated_results": len(evaluated_requested),
@@ -284,7 +289,12 @@ def weekly_recommendation(
         "message": (
             "A risk-budget-compatible historical result was found; run a fresh finalist verification before bot setup."
             if requested and requested["qualified"]
-            else "No saved result met every daily-risk, validation, and evidence gate at the requested cash level."
+            else (
+                "The saved catalog does not yet contain enough independent daily observations to make a recommendation. "
+                "This is an evidence-data gap, not a finding that no profitable bot exists."
+                if evidence_ready_count == 0
+                else "No saved result met every daily-risk, validation, and evidence gate at the requested cash level."
+            )
         ),
     }
 
@@ -569,7 +579,7 @@ def _evaluate_result(
         "validation_positive": float(row.validation_profit_loss or 0.0) > 0 and int(row.validation_trades or 0) >= 3,
         "trade_evidence": int(row.trades or 0) >= 5 and float(row.win_rate or 0.0) >= 0.50,
         "daily_loss_limit_respected": loss_hits == 0,
-        "conservative_monthly_return_positive": float(monthly["conservative_monthly_pnl"]) > 0,
+        "conservative_monthly_return_positive": bool(monthly.get("monthly_estimate_available")) and float(monthly["conservative_monthly_pnl"] or 0.0) > 0,
     }
     return {
         "qualified": all(gates.values()),
@@ -599,6 +609,17 @@ def _evaluate_result(
 
 
 def _monthly_profile(profits: list[float], account_equity: float) -> dict[str, Any]:
+    if len(profits) < MIN_RECOMMENDATION_DAYS:
+        return {
+            "monthly_estimate_available": False,
+            "conservative_monthly_pnl": None,
+            "typical_monthly_pnl": None,
+            "strong_monthly_pnl": None,
+            "conservative_monthly_return_pct": None,
+            "typical_monthly_return_pct": None,
+            "strong_monthly_return_pct": None,
+            "positive_day_rate": round(sum(value > 0 for value in profits) / len(profits), 4) if profits else 0.0,
+        }
     window = min(21, len(profits))
     monthly = sorted(sum(profits[index:index + window]) for index in range(max(len(profits) - window + 1, 1)))
     def percentile(fraction: float) -> float:
@@ -610,6 +631,7 @@ def _monthly_profile(profits: list[float], account_equity: float) -> dict[str, A
     denominator = max(float(account_equity), 1.0)
     conservative, typical, strong = percentile(0.25), percentile(0.50), percentile(0.75)
     return {
+        "monthly_estimate_available": True,
         "conservative_monthly_pnl": round(conservative, 2),
         "typical_monthly_pnl": round(typical, 2),
         "strong_monthly_pnl": round(strong, 2),
