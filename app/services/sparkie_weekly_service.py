@@ -364,7 +364,7 @@ def _process_weekly_symbol(
 
     symbol = str(universe_row.get("symbol") or "").upper().strip()
     run.error_message = None
-    lookback_days = int(os.getenv("SPARKIE_WEEKLY_LOOKBACK_DAYS", "90"))
+    lookback_days = max(90, int(os.getenv("SPARKIE_WEEKLY_LOOKBACK_DAYS", "90")))
     try:
         meta = refresh_symbol_data(
             user_id=int(run.user_id),
@@ -404,6 +404,7 @@ def _process_weekly_symbol(
                 int(run.user_id),
                 float(run.baseline_cash),
                 None,
+                builder_days=lookback_days,
             )
             candidates = [
                 row for row in (result.get("top") or [])

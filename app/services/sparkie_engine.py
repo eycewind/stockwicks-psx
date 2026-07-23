@@ -173,7 +173,9 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
     symbols = _json_list(job.symbol_bucket_json) or list(DEFAULT_SYMBOL_BUCKET)
     intervals = _json_list(job.interval_policy_json) or list(DEFAULT_INTERVAL_POLICY)
     algos = set(_json_list(job.algo_policy_json) or list(DEFAULT_ALGO_POLICY))
-    lookback_days = int(os.getenv("SPARKIE_DATA_LOOKBACK_DAYS", "45"))
+    # A 90-calendar-day cache leaves enough out-of-sample days to judge a
+    # daily target; the old 45-day default produced only ~6 holdout days.
+    lookback_days = max(90, int(os.getenv("SPARKIE_DATA_LOOKBACK_DAYS", "90")))
     workers = max(1, min(int(os.getenv("SPARKIE_BACKTEST_WORKERS", "4")), 8))
 
     total_steps = max(len(symbols) + 2, 1)
@@ -732,6 +734,7 @@ def _backtest_symbol_interval(
     user_id: int,
     account_equity: float,
     job_id: str | None = None,
+    builder_days: int | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     log.info(
@@ -761,7 +764,7 @@ def _backtest_symbol_interval(
         intervals=(interval,),
         user_id=user_id,
         trade_size=trade_size,
-        builder_days=int(os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "45")),
+        builder_days=max(90, int(builder_days or os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "90"))),
         k_forward=int(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
         profile=os.getenv("SPARKIE_BACKTEST_PROFILE", "sparkie_probe"),
         allow_short=True,
