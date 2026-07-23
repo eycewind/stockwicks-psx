@@ -933,6 +933,12 @@ def _sparkie_replay_verification_payload(db: Session, job: SparkieJob) -> dict[s
     return {
         "session_id": int(replay.id),
         "status": str(replay.status or "").lower(),
+        "start_date": replay.start_date,
+        "end_date": replay.end_date,
+        "calendar_days": (
+            (datetime.fromisoformat(str(replay.end_date)).date() - datetime.fromisoformat(str(replay.start_date)).date()).days
+            if replay.start_date and replay.end_date else None
+        ),
         "profit_loss": pnl,
         "trades": trades,
         "error_message": replay.error_message,

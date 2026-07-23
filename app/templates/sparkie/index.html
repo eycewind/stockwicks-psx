@@ -181,7 +181,7 @@
   <div class="sparkie-header">
     <div>
       <h1>Sparkie Agent</h1>
-      <p class="sparkie-muted">Give Sparkie the account and minimum profit goal. Sparkie updates data, backtests the bucket, picks the best candidate at or above the target, then verifies one finalist in Replay.</p>
+      <p class="sparkie-muted">Give Sparkie the account and minimum profit goal. Sparkie updates data, backtests the bucket, applies daily evidence and risk gates, then verifies one finalist over at least three weeks in Replay.</p>
     </div>
     <div class="sparkie-pill">Minimum account equity: $5,000</div>
   </div>
@@ -508,7 +508,7 @@
       : "Legacy partial-cash result. It is not valid for a full-cash decision; start a fresh evaluation.";
     const targetMathText = `Target is ${Number(targetMath.account_return_pct || 0).toFixed(2)}% of the account per ${escapeHtml(periodLabel)} and ${Number(targetMath.position_return_pct || 0).toFixed(2)}% of the $${Number(data.trade_allocation_usd || 0).toLocaleString()} trade allocation.`;
     const replayText = replay
-      ? `${escapeHtml(replay.status || "unknown")} &middot; P/L $${Number(replay.profit_loss || 0).toLocaleString()} &middot; ${Number(replay.trades || 0).toLocaleString()} trades${replay.error_message ? ` &middot; ${escapeHtml(replay.error_message)}` : ""}`
+      ? `${escapeHtml(replay.status || "unknown")} &middot; ${Number(replay.calendar_days || 0)}-calendar-day window (${escapeHtml(replay.start_date || "?")} to ${escapeHtml(replay.end_date || "?")}) &middot; P/L $${Number(replay.profit_loss || 0).toLocaleString()} &middot; ${Number(replay.trades || 0).toLocaleString()} trades${replay.error_message ? ` &middot; ${escapeHtml(replay.error_message)}` : ""}`
       : "Not queued yet";
     const botSetup = data.bot_setup || {};
     const setupBotActions = botSetup.paper_allowed ? `

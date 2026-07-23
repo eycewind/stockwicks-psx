@@ -38,6 +38,10 @@ TERMINAL_STATUSES = {"completed", "rejected", "error", "stopped"}
 ACTIVE_STATUSES = {"queued", "preparing_data", "backtesting", "scoring", "verifying_replay"}
 MIN_BACKTEST_BARS_PER_INTERVAL = 80
 MIN_BACKTEST_TRADING_DAYS = 5
+# Finalist Replay is a separate recent validation window. Twenty-one calendar
+# days gives approximately three complete US trading weeks.
+MIN_FINALIST_REPLAY_CALENDAR_DAYS = 21
+MIN_FINALIST_DAILY_EVIDENCE_DAYS = 20
 
 
 def sparkie_symbol_bucket_with_source() -> tuple[list[str], str]:
@@ -353,6 +357,9 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
         pool.shutdown(wait=False, cancel_futures=True)
 
     ranked = _rank_candidates(rows)
+    # Raw strategy score is useful for exploration, but not sufficient for a
+    # final choice. Prefer candidates with strong daily target and risk evidence.
+    ranked.sort(key=lambda row: _final_selection_sort_key(job, row), reverse=True)
     _replace_candidates(db, job, ranked[:50], errors[:20])
     timing_summary = _backtest_timing_summary(unit_timings)
     summary_path = _write_summary_file(job, ranked[:50], errors[:50], timing_summary)
@@ -397,8 +404,8 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
                 db,
                 job,
                 "verifying_replay",
-                f"Replay verification queued for {best['symbol']} {best['interval']} {best['algo_name']}.",
-                {"replay_session_id": replay_session_id},
+                f"{MIN_FINALIST_REPLAY_CALENDAR_DAYS}-calendar-day Replay verification queued for {best['symbol']} {best['interval']} {best['algo_name']}.",
+                {"replay_session_id": replay_session_id, "minimum_calendar_days": MIN_FINALIST_REPLAY_CALENDAR_DAYS},
             )
         except Exception as exc:
             add_event(db, job, "verifying_replay", f"Replay verification could not be queued: {exc}", level="warning")
@@ -545,7 +552,9 @@ def _normalize_backtest_frame(frame: Any) -> pd.DataFrame:
 
 def queue_replay_verification(db: Session, job: SparkieJob, best: dict[str, Any]) -> int:
     end_date = datetime.utcnow().date()
-    start_date = end_date - timedelta(days=int(os.getenv("SPARKIE_REPLAY_LOOKBACK_DAYS", "10")))
+    configured_days = int(os.getenv("SPARKIE_REPLAY_LOOKBACK_DAYS", str(MIN_FINALIST_REPLAY_CALENDAR_DAYS)))
+    replay_days = max(MIN_FINALIST_REPLAY_CALENDAR_DAYS, configured_days)
+    start_date = end_date - timedelta(days=replay_days)
     trade_size = _trade_quantity(
         user_id=int(job.user_id),
         symbol=str(best["symbol"]),
@@ -555,6 +564,7 @@ def queue_replay_verification(db: Session, job: SparkieJob, best: dict[str, Any]
         account_equity=float(job.account_equity),
     )
     cfg = _replay_config_from_candidate(job, best)
+    cfg["sparkie_finalist_replay_calendar_days"] = replay_days
     session = ReplaySession(
         user_id=int(job.user_id),
         symbol=str(best["symbol"]),
@@ -898,6 +908,15 @@ def _write_summary_file(job: SparkieJob, ranked: list[dict[str, Any]], errors: l
         },
         "trade_allocation_usd": _trade_allocation_usd(float(job.account_equity or 0.0)),
         "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
+        "final_selection_criteria": {
+            "minimum_daily_evidence_days": MIN_FINALIST_DAILY_EVIDENCE_DAYS,
+            "minimum_target_hit_confidence_lower_95pct": float(job.confidence_level or 0.0),
+            "minimum_trades": 5,
+            "minimum_win_rate": 0.50,
+            "maximum_drawdown_pct_of_equity": 5.0,
+            "daily_loss_limit_multiple": 5.0,
+            "finalist_replay_minimum_calendar_days": MIN_FINALIST_REPLAY_CALENDAR_DAYS,
+        },
         "candidate_count": len(ranked),
         "top": ranked,
         "errors": errors,
@@ -1023,10 +1042,16 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
     trades = int(row.get("trades") or 0)
     win_rate = float(row.get("win_rate") or 0.0)
     max_drawdown = abs(float(row.get("max_drawdown") or 0.0))
+    if target_period == "daily" and (not daily_stats or not daily_stats.get("available")):
+        return _paper_only_decision("Sparkie has no usable daily P/L evidence for this finalist.")
+    if daily_stats and int(daily_stats["days_tested"]) < MIN_FINALIST_DAILY_EVIDENCE_DAYS:
+        return _paper_only_decision(
+            f"Only {daily_stats['days_tested']} daily observations are available; Sparkie requires at least {MIN_FINALIST_DAILY_EVIDENCE_DAYS} before final Replay verification."
+        )
     if estimated_period_profit < float(job.target_profit or 0.0):
         return {
             "recommendation": "paper_only",
-            "run_replay": True,
+            "run_replay": False,
             "message": "Sparkie found a positive candidate, but it did not meet the minimum target.",
             "reason": (
                 f"Average {target_period} backtest P/L ${estimated_period_profit:,.2f} "
@@ -1034,28 +1059,32 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
                 f"({_daily_target_evidence_text(daily_stats, target_units, target_period, profit)})."
             ),
         }
-    if daily_stats and daily_stats.get("target_hit_rate", 0.0) < float(job.confidence_level or 0.0):
+    if daily_stats and daily_stats.get("target_hit_rate_95pct_low", 0.0) < float(job.confidence_level or 0.0):
         return {
             "recommendation": "paper_only",
-            "run_replay": True,
-            "message": "Sparkie averaged the target, but did not hit it often enough.",
+            "run_replay": False,
+            "message": "Sparkie averaged the target, but historical confidence is not strong enough.",
             "reason": (
-                f"Daily target was met on {daily_stats['target_hit_days']} of {daily_stats['days_tested']} trading days "
-                f"({daily_stats['target_hit_rate'] * 100:,.1f}%), below the requested "
+                f"95% lower target-hit estimate is {daily_stats['target_hit_rate_95pct_low'] * 100:,.1f}% "
+                f"from {daily_stats['target_hit_days']} of {daily_stats['days_tested']} daily target hits, below the requested "
                 f"{float(job.confidence_level or 0.0) * 100:,.1f}% confidence level."
             ),
         }
+    if daily_stats and float(daily_stats["worst_daily_profit_loss"]) < -float(job.target_profit or 0.0) * 5.0:
+        return _paper_only_decision(
+            f"Historical worst daily P/L ${daily_stats['worst_daily_profit_loss']:,.2f} exceeded Sparkie's daily loss limit."
+        )
     if trades < 5 or win_rate < 0.50:
         return {
             "recommendation": "paper_only",
-            "run_replay": True,
+            "run_replay": False,
             "message": "Sparkie found a candidate, but evidence is not strong enough for Live Mirror.",
             "reason": "Trade count or win rate is below Sparkie's evidence threshold.",
         }
     if max_drawdown > float(job.account_equity) * 0.05:
         return {
             "recommendation": "paper_only",
-            "run_replay": True,
+            "run_replay": False,
             "message": "Sparkie found profit, but drawdown is too large for Live Mirror.",
             "reason": "Backtest drawdown exceeds Sparkie's 5% account risk rail.",
         }
@@ -1068,7 +1097,7 @@ def _decision_for_candidate(job: SparkieJob, row: dict[str, Any]) -> dict[str, A
             f"is greater than or equal to the user target ${float(job.target_profit or 0.0):,.2f}, "
             f"with {_daily_target_evidence_text(daily_stats, target_units, target_period, profit)}, "
             f"trade count, win-rate, and drawdown gates met. "
-            f"Replay verification is still required before Live Mirror."
+            f"A {MIN_FINALIST_REPLAY_CALENDAR_DAYS}-calendar-day finalist Replay verification is now required before Live Mirror."
         ),
     }
 
@@ -1080,13 +1109,62 @@ def _daily_target_stats(raw_rows: Any, target_profit: float) -> dict[str, Any]:
     if not profits:
         return {"available": False}
     hit_days = sum(1 for profit in profits if profit >= target_profit)
+    hit_interval = _wilson_interval(hit_days, len(profits))
     return {
         "available": True,
         "days_tested": len(profits),
         "target_hit_days": hit_days,
         "target_hit_rate": hit_days / len(profits),
+        "target_hit_rate_95pct_low": hit_interval[0],
+        "target_hit_rate_95pct_high": hit_interval[1],
         "average_daily_profit_loss": sum(profits) / len(profits),
+        "worst_daily_profit_loss": min(profits),
     }
+
+
+def _final_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tuple[float, ...]:
+    """Prefer candidates that meet final daily-target criteria, not raw score."""
+    daily = _daily_target_stats((row.get("params") or {}).get("daily_pnl"), float(job.target_profit or 0.0))
+    max_drawdown = abs(float(row.get("max_drawdown") or 0.0))
+    qualified = bool(
+        daily.get("available")
+        and int(daily.get("days_tested") or 0) >= MIN_FINALIST_DAILY_EVIDENCE_DAYS
+        and float(daily.get("average_daily_profit_loss") or 0.0) >= float(job.target_profit or 0.0)
+        and float(daily.get("target_hit_rate_95pct_low") or 0.0) >= float(job.confidence_level or 0.0)
+        and float(daily.get("worst_daily_profit_loss") or 0.0) >= -float(job.target_profit or 0.0) * 5.0
+        and int(row.get("trades") or 0) >= 5
+        and float(row.get("win_rate") or 0.0) >= 0.50
+        and max_drawdown <= float(job.account_equity or 0.0) * 0.05
+    )
+    return (
+        float(qualified),
+        float(daily.get("target_hit_rate_95pct_low") or 0.0),
+        float(daily.get("target_hit_rate") or 0.0),
+        float(daily.get("average_daily_profit_loss") or 0.0),
+        float(row.get("validation_profit_loss") or 0.0),
+        -max_drawdown,
+        float(row.get("score") or 0.0),
+    )
+
+
+def _paper_only_decision(reason: str) -> dict[str, Any]:
+    return {
+        "recommendation": "paper_only",
+        "run_replay": False,
+        "message": "Sparkie did not find a finalist that meets the full selection criteria.",
+        "reason": reason,
+    }
+
+
+def _wilson_interval(successes: int, trials: int, z_score: float = 1.96) -> tuple[float, float]:
+    if trials <= 0:
+        return 0.0, 0.0
+    observed = max(0.0, min(1.0, float(successes) / float(trials)))
+    z_squared = z_score * z_score
+    denominator = 1.0 + z_squared / trials
+    center = (observed + z_squared / (2.0 * trials)) / denominator
+    spread = z_score * math.sqrt((observed * (1.0 - observed) + z_squared / (4.0 * trials)) / trials) / denominator
+    return round(max(0.0, center - spread), 4), round(min(1.0, center + spread), 4)
 
 
 def _daily_target_evidence_text(
