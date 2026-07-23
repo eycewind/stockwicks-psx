@@ -798,6 +798,11 @@
       return '<div class="sparkie-muted">No Weekly Sparkie run yet.</div>';
     }
     const status = String(run.status || "").toLowerCase();
+    if (!Number(run.total_symbols || 0) && status === "snapshotting") {
+      // The database count is populated after both Barchart lists download.
+      // Show the planned universe while that snapshot is being created.
+      run.total_symbols = 200;
+    }
     const active = ["queued", "snapshotting", "running", "stopping"].includes(status);
     runBtn.disabled = active;
     stopButton.disabled = !active;
