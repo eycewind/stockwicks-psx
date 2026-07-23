@@ -811,6 +811,9 @@
     const heartbeatWarning = active && Number(run.heartbeat_age_seconds || 0) > 120
       ? `<div class="sparkie-bad">Heartbeat is stale (${secondsText(run.heartbeat_age_seconds)}). Stop or Resume may be required.</div>`
       : "";
+    const errorDetail = run.error_message
+      ? `<div class="sparkie-bad"><strong>Failure detail</strong><br>${escapeHtml(run.error_message)}</div>`
+      : "";
     return `
       <div class="sparkie-status-banner">
         <strong>Weekly Sparkie ${escapeHtml(run.status || "unknown")}</strong>
@@ -826,6 +829,7 @@
         <div class="sparkie-summary-row"><span>Heartbeat</span><strong>${run.heartbeat_at ? new Date(run.heartbeat_at + "Z").toLocaleString() : "Not started"}</strong></div>
       </div>
       ${heartbeatWarning}
+      ${errorDetail}
     `;
   }
 
