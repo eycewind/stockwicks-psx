@@ -4,6 +4,9 @@ import math
 from typing import Any, Iterable
 
 
+SPARKIE_ANALYSIS_MODEL_VERSION = "success_risk_liquidity_v2"
+
+
 def wilson_lower_bound(successes: int, trials: int, z_score: float = 1.96) -> float:
     """Return the conservative 95% lower bound for a binomial success rate."""
     if trials <= 0:

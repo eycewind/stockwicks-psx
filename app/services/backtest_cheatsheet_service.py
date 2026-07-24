@@ -56,6 +56,9 @@ class CheatSheetRequest:
     model_max_age_minutes: float = DEFAULT_MODEL_MAX_AGE_MINUTES
     min_new_bars_before_retrain: int = DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN
     daily_loss_limit_usd: float = 0.0
+    execution_slippage_bps: float = 0.0
+    commission_per_share: float = 0.0
+    trade_allocation_usd: float = 0.0
 
 
 def _safe_float(value: Any, default: float) -> float:
@@ -365,6 +368,35 @@ def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
     }
 
 
+def _apply_execution_friction(
+    trades: list[dict[str, Any]],
+    *,
+    quantity: float,
+    slippage_bps: float,
+    commission_per_share: float,
+) -> list[dict[str, Any]]:
+    """Deduct round-trip slippage/spread and per-share commissions per trade."""
+    bps = max(_safe_float(slippage_bps, 0.0), 0.0) / 10_000.0
+    commission = max(_safe_float(commission_per_share, 0.0), 0.0)
+    shares = max(_safe_float(quantity, 0.0), 0.0)
+    if bps <= 0 and commission <= 0:
+        return trades
+
+    adjusted: list[dict[str, Any]] = []
+    for trade in trades:
+        item = dict(trade)
+        trade_shares = max(_safe_float(item.get("quantity"), shares), 0.0)
+        entry_notional = abs(_safe_float(item.get("entry_price"), 0.0) * trade_shares)
+        exit_notional = abs(_safe_float(item.get("exit_price"), 0.0) * trade_shares)
+        execution_cost = (entry_notional + exit_notional) * bps + (2.0 * trade_shares * commission)
+        gross_profit = _safe_float(item.get("profit"), 0.0)
+        item["gross_profit"] = float(gross_profit)
+        item["execution_cost"] = float(execution_cost)
+        item["profit"] = float(gross_profit - execution_cost)
+        adjusted.append(item)
+    return adjusted
+
+
 def _daily_pnl(trades: list[dict[str, Any]], price_index: pd.Index) -> list[dict[str, Any]]:
     """Return true EOD P/L by trading date, including no-trade sessions.
 
@@ -458,6 +490,7 @@ def _simulate_combo(
     trade_size: float,
     allow_short: bool,
     eod_close: bool,
+    allocation_usd: float = 0.0,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     is_algo4 = str(algo_name or "") == "Algo4_MM"
     smoothing = max(1, int(params.get("prob_smoothing_bars", 3)))
@@ -469,17 +502,23 @@ def _simulate_combo(
 
     position_side: str | None = None
     entry_price = 0.0
+    position_quantity = 0.0
     entry_time = None
     core_state = MMCoreState()
     trades: list[dict[str, Any]] = []
     core_cfg = config_from_obj(type("ScanConfig", (), params)(), allow_short=allow_short)
     core_cfg.eod_close = bool(eod_close)
 
+    def entry_quantity(price: float) -> float:
+        if allocation_usd > 0:
+            return float(max(int(float(allocation_usd) // price), 0))
+        return max(float(trade_size), 0.0)
+
     def close_trade(ts, price: float, reason: str):
-        nonlocal position_side, entry_price, entry_time, core_state
+        nonlocal position_side, entry_price, position_quantity, entry_time, core_state
         if not position_side:
             return
-        profit = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
+        profit = (price - entry_price) * position_quantity if position_side == "long" else (entry_price - price) * position_quantity
         trades.append(
             {
                 "side": position_side,
@@ -487,12 +526,14 @@ def _simulate_combo(
                 "exit_time": ts,
                 "entry_price": entry_price,
                 "exit_price": price,
+                "quantity": float(position_quantity),
                 "profit": float(profit),
                 "exit_reason": reason,
             }
         )
         position_side = None
         entry_price = 0.0
+        position_quantity = 0.0
         entry_time = None
         core_state = MMCoreState()
 
@@ -543,7 +584,7 @@ def _simulate_combo(
         just_closed = False
         if position_side:
             exit_decision = evaluate_exit(
-                MMCorePosition(side=position_side, entry_price=entry_price, quantity=trade_size),
+                MMCorePosition(side=position_side, entry_price=entry_price, quantity=position_quantity),
                 price,
                 current_prob,
                 core_cfg,
@@ -565,13 +606,21 @@ def _simulate_combo(
             )
 
             if enter_decision.should_act and enter_decision.action == "LONG":
+                quantity = entry_quantity(price)
+                if quantity < 1:
+                    continue
                 position_side = "long"
                 entry_price = price
+                position_quantity = quantity
                 entry_time = ts
                 core_state = MMCoreState(prob_peak=current_prob, profit_peak=0.0)
             elif enter_decision.should_act and enter_decision.action == "SHORT":
+                quantity = entry_quantity(price)
+                if quantity < 1:
+                    continue
                 position_side = "short"
                 entry_price = price
+                position_quantity = quantity
                 entry_time = ts
                 core_state = MMCoreState(prob_peak=1.0 - current_prob, profit_peak=0.0)
         previous_ts = ts
@@ -591,6 +640,7 @@ def _simulate_indicator_algo(
     allow_short: bool,
     eod_close: bool,
     params: dict[str, Any] | None = None,
+    allocation_usd: float = 0.0,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     if str(algo_name or "") == "Algo_SMI":
         from app.scripts.stocks.bots.algo3_logic import determine_signals
@@ -604,6 +654,7 @@ def _simulate_indicator_algo(
     signals_df = determine_signals(price_df)
     position_side: str | None = None
     entry_price = 0.0
+    position_quantity = 0.0
     entry_time = None
     profit_peak = 0.0
     trades: list[dict[str, Any]] = []
@@ -614,11 +665,16 @@ def _simulate_indicator_algo(
         _safe_float(params.get("trailing_profit_pct", params.get("per_share_trailing_profit_pct", 0.0)), 0.0),
     )
 
+    def entry_quantity(price: float) -> float:
+        if allocation_usd > 0:
+            return float(max(int(float(allocation_usd) // price), 0))
+        return max(float(trade_size), 0.0)
+
     def close_trade(ts, price: float, reason: str):
-        nonlocal position_side, entry_price, entry_time, profit_peak
+        nonlocal position_side, entry_price, position_quantity, entry_time, profit_peak
         if not position_side:
             return
-        profit = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
+        profit = (price - entry_price) * position_quantity if position_side == "long" else (entry_price - price) * position_quantity
         trades.append(
             {
                 "side": position_side,
@@ -626,12 +682,14 @@ def _simulate_indicator_algo(
                 "exit_time": ts,
                 "entry_price": entry_price,
                 "exit_price": price,
+                "quantity": float(position_quantity),
                 "profit": float(profit),
                 "exit_reason": reason,
             }
         )
         position_side = None
         entry_price = 0.0
+        position_quantity = 0.0
         entry_time = None
         profit_peak = 0.0
 
@@ -647,9 +705,9 @@ def _simulate_indicator_algo(
         sell_signal = bool(prev.get("Sell_Signal", False))
         just_closed = False
         if position_side:
-            pnl = (price - entry_price) * trade_size if position_side == "long" else (entry_price - price) * trade_size
+            pnl = (price - entry_price) * position_quantity if position_side == "long" else (entry_price - price) * position_quantity
             profit_peak = max(profit_peak, pnl)
-            basis = abs(entry_price * trade_size)
+            basis = abs(entry_price * position_quantity)
             stop_loss_usd = basis * stop_loss_pct
             trailing_profit_usd = basis * trailing_profit_pct
 
@@ -675,13 +733,21 @@ def _simulate_indicator_algo(
 
         if position_side is None and not just_closed:
             if buy_signal:
+                quantity = entry_quantity(price)
+                if quantity < 1:
+                    continue
                 position_side = "long"
                 entry_price = price
+                position_quantity = quantity
                 entry_time = ts
                 profit_peak = 0.0
             elif sell_signal and allow_short:
+                quantity = entry_quantity(price)
+                if quantity < 1:
+                    continue
                 position_side = "short"
                 entry_price = price
+                position_quantity = quantity
                 entry_time = ts
                 profit_peak = 0.0
 
@@ -810,6 +876,13 @@ def run_cheatsheet(
                         allow_short=req.allow_short,
                         eod_close=req.eod_close,
                         params=params,
+                        allocation_usd=req.trade_allocation_usd,
+                    )
+                    trades = _apply_execution_friction(
+                        trades,
+                        quantity=req.trade_size,
+                        slippage_bps=req.execution_slippage_bps,
+                        commission_per_share=req.commission_per_share,
                     )
                     trades = _apply_daily_loss_lock(trades, req.daily_loss_limit_usd)
                     metrics = _trade_metrics(trades)
@@ -958,6 +1031,13 @@ def run_cheatsheet(
                     trade_size=req.trade_size,
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
+                    allocation_usd=req.trade_allocation_usd,
+                )
+                validation_trades = _apply_execution_friction(
+                    validation_trades,
+                    quantity=req.trade_size,
+                    slippage_bps=req.execution_slippage_bps,
+                    commission_per_share=req.commission_per_share,
                 )
                 validation_trades = _apply_daily_loss_lock(validation_trades, req.daily_loss_limit_usd)
                 validation_metrics = _trade_metrics(validation_trades)
@@ -1017,6 +1097,13 @@ def run_cheatsheet(
                     trade_size=req.trade_size,
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
+                    allocation_usd=req.trade_allocation_usd,
+                )
+                holdout_trades = _apply_execution_friction(
+                    holdout_trades,
+                    quantity=req.trade_size,
+                    slippage_bps=req.execution_slippage_bps,
+                    commission_per_share=req.commission_per_share,
                 )
                 holdout_trades = _apply_daily_loss_lock(holdout_trades, req.daily_loss_limit_usd)
                 holdout_metrics = _trade_metrics(holdout_trades)

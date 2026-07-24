@@ -21,7 +21,10 @@ from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 from app.services.barchart_symbols import barchart_top_symbols
-from app.services.sparkie_risk_scoring import risk_adjusted_selection_metrics
+from app.services.sparkie_risk_scoring import (
+    SPARKIE_ANALYSIS_MODEL_VERSION,
+    risk_adjusted_selection_metrics,
+)
 from app.services.stocktwits_symbols import stocktwits_ranked_symbols
 
 
@@ -47,6 +50,8 @@ MIN_NATIVE_RESEARCH_TRADING_DAYS = 60
 # days gives approximately three complete US trading weeks.
 MIN_FINALIST_REPLAY_CALENDAR_DAYS = 21
 MIN_FINALIST_DAILY_EVIDENCE_DAYS = 20
+DEFAULT_EXECUTION_SLIPPAGE_BPS = 10.0
+DEFAULT_MAX_POSITION_PCT_DAILY_DOLLAR_VOLUME = 0.01
 
 
 def sparkie_symbol_bucket_with_source() -> tuple[list[str], str]:
@@ -860,6 +865,20 @@ def _backtest_symbol_interval(
         frame,
         account_equity=account_equity,
     )
+    median_daily_dollar_volume = _median_daily_dollar_volume(frame)
+    execution_slippage_bps = max(
+        0.0,
+        float(os.getenv("SPARKIE_BACKTEST_SLIPPAGE_BPS", str(DEFAULT_EXECUTION_SLIPPAGE_BPS))),
+    )
+    max_position_pct_adv = max(
+        0.0001,
+        float(
+            os.getenv(
+                "SPARKIE_MAX_POSITION_PCT_DAILY_DOLLAR_VOLUME",
+                str(DEFAULT_MAX_POSITION_PCT_DAILY_DOLLAR_VOLUME),
+            )
+        ),
+    )
     req = CheatSheetRequest(
         symbol=symbol,
         intervals=(interval,),
@@ -878,6 +897,12 @@ def _backtest_symbol_interval(
         model_max_age_minutes=float(os.getenv("SPARKIE_MODEL_MAX_AGE_MINUTES", "0")),
         min_new_bars_before_retrain=int(os.getenv("SPARKIE_MIN_NEW_BARS_BEFORE_RETRAIN", "0")),
         daily_loss_limit_usd=max(float(daily_loss_limit_usd or 0.0), 0.0),
+        execution_slippage_bps=execution_slippage_bps,
+        commission_per_share=max(
+            0.0,
+            float(os.getenv("SPARKIE_BACKTEST_COMMISSION_PER_SHARE", "0")),
+        ),
+        trade_allocation_usd=float(account_equity),
     )
     result = run_cheatsheet(req, price_frames={interval: frame})
     elapsed = max(time.monotonic() - started, 0.001)
@@ -893,12 +918,18 @@ def _backtest_symbol_interval(
         "trade_size": float(trade_size),
         "allocation_usd": round(float(allocation_usd), 2),
         "reference_price": round(float(reference_price), 4),
+        "median_daily_dollar_volume": round(float(median_daily_dollar_volume), 2),
+        "execution_slippage_bps": execution_slippage_bps,
     }
     for row in result.get("top") or []:
         row["sparkie_trade_size"] = float(trade_size)
         row["sparkie_allocation_usd"] = round(float(allocation_usd), 2)
         row["sparkie_cash_deployment_policy"] = CASH_DEPLOYMENT_POLICY
         row["sparkie_reference_price"] = round(float(reference_price), 4)
+        row["sparkie_analysis_model_version"] = SPARKIE_ANALYSIS_MODEL_VERSION
+        row["sparkie_execution_slippage_bps"] = execution_slippage_bps
+        row["sparkie_median_daily_dollar_volume"] = round(float(median_daily_dollar_volume), 2)
+        row["sparkie_max_position_pct_daily_dollar_volume"] = max_position_pct_adv
         row["sparkie_eod_close"] = True
         row["sparkie_overnight_positions_allowed"] = False
     log.info(
@@ -1089,6 +1120,10 @@ def _candidate_row(row: dict[str, Any]) -> dict[str, Any]:
         "sparkie_allocation_usd",
         "sparkie_cash_deployment_policy",
         "sparkie_reference_price",
+        "sparkie_analysis_model_version",
+        "sparkie_execution_slippage_bps",
+        "sparkie_median_daily_dollar_volume",
+        "sparkie_max_position_pct_daily_dollar_volume",
         "sparkie_eod_close",
         "sparkie_overnight_positions_allowed",
     )
@@ -1333,7 +1368,21 @@ def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]
         return _paper_only_decision("The holdout validation result is not positive enough.")
     if float(profile["conservative_monthly_pnl"]) <= 0:
         return _paper_only_decision("The conservative historical monthly P/L scenario is not positive.")
+    execution = _execution_evidence(row)
+    if not execution["execution_cost_model_present"]:
+        return _paper_only_decision("The backtest does not include Sparkie's required execution-cost model.")
+    if not execution["liquidity_capacity_passed"]:
+        return _paper_only_decision(
+            "The proposed full-cash position exceeds Sparkie's configured share of median daily dollar volume."
+        )
     selection_metrics = _risk_first_selection_metrics(job, row, profile)
+    confidence_low = float(selection_metrics.get("positive_day_rate_95pct_low") or 0.0)
+    requested_confidence = float(job.confidence_level or 0.0)
+    if confidence_low < requested_confidence:
+        return _paper_only_decision(
+            f"The conservative profitable-day estimate is {confidence_low:.1%}, below the requested "
+            f"{requested_confidence:.1%} confidence."
+        )
     return {
         "recommendation": "paper_candidate",
         "run_replay": True,
@@ -1351,6 +1400,8 @@ def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]
 def _risk_first_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tuple[float, ...]:
     profile = _monthly_return_profile((row.get("params") or {}).get("daily_pnl"), float(job.account_equity or 0.0))
     risk_budget = _risk_first_budget(job)
+    metrics = _risk_first_selection_metrics(job, row, profile)
+    execution = _execution_evidence(row)
     qualified = bool(
         profile.get("available")
         and int(profile.get("days_tested") or 0) >= MIN_FINALIST_DAILY_EVIDENCE_DAYS
@@ -1359,17 +1410,43 @@ def _risk_first_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tupl
         and float(row.get("validation_profit_loss") or 0.0) > 0
         and int(row.get("validation_trades") or 0) >= 3
         and int(row.get("trades") or 0) >= 5
+        and float(metrics.get("positive_day_rate_95pct_low") or 0.0) >= float(job.confidence_level or 0.0)
+        and execution["execution_cost_model_present"]
+        and execution["liquidity_capacity_passed"]
     )
-    metrics = _risk_first_selection_metrics(job, row, profile)
     return (
         float(qualified),
-        float(metrics.get("selection_score") or 0.0),
         float(metrics.get("positive_day_rate_95pct_low") or 0.0),
+        float(metrics.get("positive_day_rate") or 0.0),
+        float(metrics.get("selection_score") or 0.0),
         float(metrics.get("return_to_risk") or 0.0),
+        float(metrics.get("validation_return_pct") or 0.0),
         float(profile.get("conservative_monthly_pnl") or 0.0),
         -abs(float(row.get("max_drawdown") or 0.0)),
         float(row.get("score") or 0.0),
     )
+
+
+def _execution_evidence(row: dict[str, Any]) -> dict[str, Any]:
+    params = row.get("params") or {}
+    model_version = str(params.get("sparkie_analysis_model_version") or "")
+    allocation = float(params.get("sparkie_allocation_usd") or 0.0)
+    median_dollar_volume = float(params.get("sparkie_median_daily_dollar_volume") or 0.0)
+    max_position_pct = float(
+        params.get("sparkie_max_position_pct_daily_dollar_volume")
+        or DEFAULT_MAX_POSITION_PCT_DAILY_DOLLAR_VOLUME
+    )
+    capacity = median_dollar_volume * max_position_pct
+    return {
+        "execution_cost_model_present": model_version == SPARKIE_ANALYSIS_MODEL_VERSION,
+        "analysis_model_version": model_version,
+        "execution_slippage_bps": float(params.get("sparkie_execution_slippage_bps") or 0.0),
+        "median_daily_dollar_volume": median_dollar_volume,
+        "liquidity_capacity_usd": capacity,
+        "liquidity_capacity_passed": bool(
+            median_dollar_volume > 0.0 and allocation > 0.0 and allocation <= capacity
+        ),
+    }
 
 
 def _risk_first_selection_metrics(
@@ -1543,6 +1620,28 @@ def _trade_quantity_from_frame(frame: Any, *, account_equity: float) -> tuple[fl
     if quantity < 1:
         raise ValueError("Sparkie account allocation cannot buy one share for this symbol.")
     return float(quantity), float(quantity) * price, price
+
+
+def _median_daily_dollar_volume(frame: Any) -> float:
+    df = pd.DataFrame(frame).copy()
+    if df.empty:
+        return 0.0
+    close_col = "close" if "close" in df.columns else "Close" if "Close" in df.columns else None
+    volume_col = "volume" if "volume" in df.columns else "Volume" if "Volume" in df.columns else None
+    if not close_col or not volume_col:
+        return 0.0
+    close = pd.to_numeric(df[close_col], errors="coerce").fillna(0.0)
+    volume = pd.to_numeric(df[volume_col], errors="coerce").fillna(0.0)
+    index = pd.to_datetime(df.index, errors="coerce")
+    valid = ~index.isna()
+    if not valid.any():
+        return 0.0
+    daily = pd.Series((close * volume).to_numpy()[valid], index=index[valid]).groupby(
+        index[valid].date
+    ).sum()
+    if daily.empty:
+        return 0.0
+    return float(daily.tail(20).median())
 
 
 def _set_job(db: Session, job: SparkieJob, **updates: Any) -> None:

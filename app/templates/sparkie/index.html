@@ -868,6 +868,8 @@
           <div class="sparkie-summary-row"><span>Daily risk evidence</span><strong>${Number(match.days_tested || 0)} daily observations · worst day $${Number(match.worst_daily_pnl || 0).toLocaleString()} · ${Number(match.max_loss_days || 0)} loss-budget breach days</strong></div>
           <div class="sparkie-summary-row"><span>Risk-adjusted selection</span><strong>Score ${Number(match.selection_score || 0).toFixed(1)} / 100 · return/risk ${Number(match.return_to_risk || 0).toFixed(2)} · worst-day budget used ${Number(match.risk_budget_utilization_pct || 0).toFixed(1)}%</strong></div>
           <div class="sparkie-summary-row"><span>Profitable-day confidence</span><strong>${(Number(match.positive_day_rate || 0) * 100).toFixed(1)}% observed · ${(Number(match.positive_day_rate_95pct_low || 0) * 100).toFixed(1)}% conservative 95% lower estimate · requested ${(Number(match.confidence_preference || 0) * 100).toFixed(1)}%</strong></div>
+          <div class="sparkie-summary-row"><span>Execution assumptions</span><strong>${Number(match.execution_slippage_bps || 0).toFixed(1)} bps slippage/spread per side · model ${escapeHtml(match.analysis_model_version || "legacy / unavailable")}</strong></div>
+          <div class="sparkie-summary-row"><span>Liquidity capacity</span><strong>Median daily dollar volume $${Number(match.median_daily_dollar_volume || 0).toLocaleString()} · position uses ${Number(match.position_pct_daily_dollar_volume || 0).toFixed(3)}% · configured capacity $${Number(match.liquidity_capacity_usd || 0).toLocaleString()}</strong></div>
           <div class="sparkie-summary-row"><span>Historical monthly range</span><strong>Conservative $${Number(match.conservative_monthly_pnl || 0).toLocaleString()} (${Number(match.conservative_monthly_return_pct || 0).toFixed(2)}%) · typical $${Number(match.typical_monthly_pnl || 0).toLocaleString()} (${Number(match.typical_monthly_return_pct || 0).toFixed(2)}%) · strong $${Number(match.strong_monthly_pnl || 0).toLocaleString()} (${Number(match.strong_monthly_return_pct || 0).toFixed(2)}%)</strong></div>
           <div class="sparkie-summary-row"><span>Daily loss budget / drawdown</span><strong>-$${Number(match.daily_risk_budget || 0).toLocaleString()} daily stop · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
           ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
@@ -892,10 +894,35 @@
       </tr>
     `).join("");
     return `
-      <h3 style="margin-top:18px;">Risk-adjusted runner-ups</h3>
+      <h3 style="margin-top:18px;">Different-symbol alternatives</h3>
       <div style="overflow-x:auto;">
         <table class="sparkie-table">
           <thead><tr><th>Rank</th><th>Combination</th><th>Score</th><th>95% day confidence</th><th>Conservative month</th><th>Worst day</th><th>Drawdown</th><th>Action</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function rankingAuditTable(matches) {
+    if (!Array.isArray(matches) || matches.length === 0) return "";
+    const rows = matches.map((match) => `
+      <tr>
+        <td>${Number(match.catalog_rank || 0)}</td>
+        <td>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</td>
+        <td>${match.qualified ? "Yes" : "No"}</td>
+        <td>${(Number(match.positive_day_rate_95pct_low || 0) * 100).toFixed(1)}%</td>
+        <td>${(Number(match.positive_day_rate || 0) * 100).toFixed(1)}%</td>
+        <td>${Number(match.selection_score || 0).toFixed(1)}</td>
+        <td>$${Number(match.worst_daily_pnl || 0).toLocaleString()}</td>
+        <td>$${Number(match.conservative_monthly_pnl || 0).toLocaleString()}</td>
+      </tr>
+    `).join("");
+    return `
+      <h3 style="margin-top:18px;">Ranking audit — top 10 combinations</h3>
+      <div style="overflow-x:auto;">
+        <table class="sparkie-table">
+          <thead><tr><th>Rank</th><th>Symbol / interval / algo</th><th>Passed gates</th><th>95% success floor</th><th>Observed success</th><th>Risk score</th><th>Worst day</th><th>Conservative month</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -939,13 +966,17 @@
         <div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(data.daily_risk_budget || 0).toLocaleString()} · Sparkie blocks new entries after this daily loss budget is reached</strong></div>
         <div class="sparkie-summary-row"><span>Risk</span><strong>Up to 100% of client cash is deployed; the loss threshold is not guaranteed.</strong></div>
         <div class="sparkie-summary-row"><span>Selection method</span><strong>${escapeHtml(data.recommendation_method || "Historical evidence ranking")}</strong></div>
+        <div class="sparkie-summary-row"><span>Ranking order</span><strong>${escapeHtml(data.ranking_priority || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Catalog scope</span><strong>${escapeHtml(data.catalog_scope_note || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Weekly risk-model limitation</span><strong>${escapeHtml(data.weekly_risk_model_note || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Why cash may not change the winner</span><strong>${escapeHtml(data.cash_scaling_note || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Selection diagnostic</span><strong>${escapeHtml(data.selection_diagnostic || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Catalog gate analysis</span><strong>${Number(analysis.qualified_results || 0).toLocaleString()} qualified / ${Number(analysis.evaluated_results || 0).toLocaleString()} evaluated · minimum ${Number(analysis.minimum_daily_evidence_days || 0).toLocaleString()} daily observations</strong></div>
+        <div class="sparkie-summary-row"><span>Execution-model coverage</span><strong>${Number(analysis.execution_model_ready_results || 0).toLocaleString()} / ${Number(analysis.evaluated_results || 0).toLocaleString()} results include the required slippage and liquidity evidence</strong></div>
         ${failureText ? `<div class="sparkie-summary-row"><span>Failed-gate counts</span><strong>${escapeHtml(failureText)}</strong></div>` : ""}
       </div>
       ${matchCard(`Requested cash $${Number(data.account_equity || 0).toLocaleString()}`, data.requested_cash_match)}
+      ${rankingAuditTable(data.top_combinations)}
       ${alternativeMatchesTable(data.alternative_matches)}
       ${riskSensitivityTable(data.risk_sensitivity)}
     `;

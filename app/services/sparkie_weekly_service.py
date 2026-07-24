@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.models.sparkie import SparkieWeeklyResult, SparkieWeeklyRun
 from app.services.barchart_symbols import barchart_weekly_rows_with_source
-from app.services.sparkie_risk_scoring import risk_adjusted_selection_metrics
+from app.services.sparkie_risk_scoring import (
+    SPARKIE_ANALYSIS_MODEL_VERSION,
+    risk_adjusted_selection_metrics,
+)
 
 
 WEEKLY_ACTIVE_STATUSES = {"queued", "snapshotting", "running", "stopping"}
@@ -55,6 +58,11 @@ def create_weekly_run(
         "batch_size": DEFAULT_BATCH_SIZE,
         "cash_policy": "full_cash_v1",
         "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
+        "analysis_model_version": SPARKIE_ANALYSIS_MODEL_VERSION,
+        "execution_slippage_bps": float(os.getenv("SPARKIE_BACKTEST_SLIPPAGE_BPS", "10")),
+        "max_position_pct_daily_dollar_volume": float(
+            os.getenv("SPARKIE_MAX_POSITION_PCT_DAILY_DOLLAR_VOLUME", "0.01")
+        ),
     }
     config_hash = hashlib.sha256(
         json.dumps(config_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -246,11 +254,13 @@ def weekly_recommendation(
         ))
     ]
     ranked_requested = _rank_matches(evaluated_requested)
+    for rank, match in enumerate(ranked_requested, start=1):
+        match["catalog_rank"] = rank
     requested = ranked_requested[0] if ranked_requested else None
     alternative_matches = _unique_symbol_alternatives(
         ranked_requested,
         exclude_symbol=str((requested or {}).get("symbol") or ""),
-        limit=4,
+        limit=9,
     )
     risk_sensitivity = _risk_sensitivity(
         usable_rows,
@@ -266,6 +276,11 @@ def weekly_recommendation(
     evidence_ready_count = sum(
         1 for match in evaluated_requested
         if int(match.get("days_tested") or 0) >= MIN_RECOMMENDATION_DAYS
+    )
+    modern_evidence_count = sum(
+        1
+        for match in evaluated_requested
+        if bool((match.get("gates") or {}).get("execution_cost_model_present"))
     )
     gate_failures: dict[str, int] = {}
     for match in evaluated_requested:
@@ -285,11 +300,16 @@ def weekly_recommendation(
             "qualified_results": sum(1 for row in evaluated_requested if row["qualified"]),
             "gate_failures": gate_failures,
             "minimum_daily_evidence_days": MIN_RECOMMENDATION_DAYS,
+            "execution_model_ready_results": modern_evidence_count,
         },
         "recommendation_method": (
-            "Ranks candidates within the client's daily loss budget using bounded return evidence, profitable-day "
-            "confidence, drawdown, worst-day loss, downside deviation, and holdout validation. Raw historical P/L "
-            "is shown but cannot dominate the score by itself."
+            "Applies the client's maximum daily loss and requested confidence as hard gates, then ranks qualified "
+            "candidates by the conservative 95% lower profitable-day rate. Observed success, risk-adjusted evidence, "
+            "holdout validation, and conservative monthly P/L are tiebreakers."
+        ),
+        "ranking_priority": (
+            "1) daily-loss gate; 2) requested-confidence gate; 3) highest conservative profitable-day success; "
+            "4) observed profitable-day rate; 5) risk-adjusted score; 6) conservative monthly P/L."
         ),
         "account_equity": round(float(account_equity), 2),
         "risk_per_day_pct": float(risk_per_day_pct),
@@ -297,6 +317,7 @@ def weekly_recommendation(
         "confidence_level": float(confidence_level),
         "all_cash_at_risk": True,
         "requested_cash_match": requested,
+        "top_combinations": ranked_requested[:10],
         "alternative_matches": alternative_matches,
         "risk_sensitivity": risk_sensitivity,
         "same_winner_across_risk_levels": same_winner_across_risk_levels,
@@ -308,6 +329,11 @@ def weekly_recommendation(
         "catalog_scope_note": (
             "This saved-result search compares the completed 200-symbol weekly catalog. The stock-source and ticker "
             "fields above apply to a fresh Sparkie Evaluation, not to this catalog search."
+        ),
+        "weekly_risk_model_note": (
+            "This catalog was backtested with a fixed 10% daily-loss lock. Risk requests above 10% can change "
+            "eligibility and score weights, but they do not reconstruct a different intraday trade path from the "
+            "saved summary. Fresh finalist verification reruns the selected symbol using the client's requested risk."
         ),
         "selection_diagnostic": (
             f"{next(iter(sensitivity_winners))} remains the top risk-adjusted candidate at every tested risk level."
@@ -321,6 +347,10 @@ def weekly_recommendation(
             "A risk-budget-compatible historical result was found; run a fresh finalist verification before bot setup."
             if requested and requested["qualified"]
             else (
+                "The latest weekly catalog predates Sparkie's execution-cost and liquidity-capacity model. "
+                "Run Weekly Sparkie again before using saved recommendations."
+                if modern_evidence_count == 0
+                else
                 "The saved catalog does not yet contain enough independent daily observations to make a recommendation. "
                 "This is an evidence-data gap, not a finding that no profitable bot exists."
                 if evidence_ready_count == 0
@@ -566,9 +596,11 @@ def _rank_matches(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         matches,
         key=lambda item: (
             bool(item["qualified"]),
-            float(item.get("selection_score") or 0.0),
             float(item.get("positive_day_rate_95pct_low") or 0.0),
+            float(item.get("positive_day_rate") or 0.0),
+            float(item.get("selection_score") or 0.0),
             float(item.get("return_to_risk") or 0.0),
+            float(item.get("validation_return_pct") or 0.0),
             float(item.get("conservative_monthly_pnl") or 0.0),
             -float(item.get("estimated_max_drawdown") or 0.0),
         ),
@@ -658,6 +690,15 @@ def _evaluate_result(
     estimated_strategy_drawdown = abs(float(row.max_drawdown or 0.0)) * scale
     effective_drawdown = max(max_drawdown, estimated_strategy_drawdown)
     monthly = _monthly_profile(scaled, float(account_equity))
+    params = _json_dict(row.params_json)
+    analysis_model_version = str(params.get("sparkie_analysis_model_version") or "")
+    execution_slippage_bps = float(params.get("sparkie_execution_slippage_bps") or 0.0)
+    median_daily_dollar_volume = float(params.get("sparkie_median_daily_dollar_volume") or 0.0)
+    max_position_pct_adv = float(
+        params.get("sparkie_max_position_pct_daily_dollar_volume") or 0.01
+    )
+    liquidity_capacity_usd = median_daily_dollar_volume * max_position_pct_adv
+    estimated_notional = shares * reference_price
     scaled_validation_pnl = float(row.validation_profit_loss or 0.0) * scale
     selection_metrics = risk_adjusted_selection_metrics(
         daily_profits=scaled,
@@ -679,6 +720,15 @@ def _evaluate_result(
         # relevant safety gates for Sparkie's risk-first selection.
         "trade_evidence": int(row.trades or 0) >= 5,
         "daily_loss_limit_respected": loss_hits == 0,
+        "execution_cost_model_present": analysis_model_version == SPARKIE_ANALYSIS_MODEL_VERSION,
+        "liquidity_capacity": bool(
+            median_daily_dollar_volume > 0.0
+            and estimated_notional <= liquidity_capacity_usd
+        ),
+        "profitable_day_confidence": (
+            float(selection_metrics.get("positive_day_rate_95pct_low") or 0.0)
+            >= float(confidence_level)
+        ),
         "conservative_monthly_return_positive": bool(monthly.get("monthly_estimate_available")) and float(monthly["conservative_monthly_pnl"] or 0.0) > 0,
     }
     return {
@@ -690,8 +740,8 @@ def _evaluate_result(
         "account_equity": round(float(account_equity), 2),
         "daily_risk_budget": round(float(daily_risk_budget), 2),
         "shares": shares,
-        "estimated_notional": round(shares * reference_price, 2),
-        "cash_deployment_pct": round((shares * reference_price / float(account_equity)) * 100.0, 2),
+        "estimated_notional": round(estimated_notional, 2),
+        "cash_deployment_pct": round((estimated_notional / float(account_equity)) * 100.0, 2),
         "days_tested": len(scaled),
         "max_loss_days": loss_hits,
         "average_daily_pnl": round(avg, 2),
@@ -704,8 +754,16 @@ def _evaluate_result(
         "win_rate": round(float(row.win_rate or 0.0), 4),
         "trades": int(row.trades or 0),
         "validation_profit_loss": round(scaled_validation_pnl, 2),
-        "params": _json_dict(row.params_json),
-        "universe_sentiment": _json_dict(row.params_json).get("sparkie_universe_sentiment"),
+        "analysis_model_version": analysis_model_version,
+        "execution_slippage_bps": round(execution_slippage_bps, 2),
+        "median_daily_dollar_volume": round(median_daily_dollar_volume, 2),
+        "liquidity_capacity_usd": round(liquidity_capacity_usd, 2),
+        "position_pct_daily_dollar_volume": round(
+            estimated_notional / median_daily_dollar_volume * 100.0,
+            4,
+        ) if median_daily_dollar_volume > 0 else None,
+        "params": params,
+        "universe_sentiment": params.get("sparkie_universe_sentiment"),
         **selection_metrics,
     }
 
