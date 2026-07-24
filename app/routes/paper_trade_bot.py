@@ -508,6 +508,7 @@ def paper_trade_bot_dashboard(
             "user": user,
             "all_bots": all_bots,
             "open_trades": open_trades,     # each row now has .live_price and .live_pl (in-memory)
+            "open_bot_ids": {int(t.bot_id) for t in open_trades if t.bot_id is not None},
             "closed_trades": closed_trades,
             "paper_account": paper_account,
             "total_pl": total_pl,
@@ -1048,6 +1049,22 @@ def save_paper_trade_bot_size(
     if trade_size <= 0:
         raise HTTPException(status_code=400, detail="Trade size must be greater than zero")
 
+    # A size change must never alter the intended allocation while this bot has
+    # an open position. The open trade retains its own quantity, but blocking
+    # the update avoids a confusing mid-position change for the next entry.
+    size_changed = abs(float(trade_size) - float(bot.trade_size or 0)) > 1e-9
+    has_open_position = (
+        db.query(PaperStockBotOpenTrade.id)
+        .filter_by(bot_id=bot.id, user_id=user.id)
+        .first()
+        is not None
+    )
+    if size_changed and has_open_position:
+        raise HTTPException(
+            status_code=409,
+            detail="Close the open position for this bot before changing its trade size.",
+        )
+
     bot.trade_size = float(trade_size)
 
     # Keep the legacy quantity column aligned for older code paths. Open
@@ -1096,6 +1113,19 @@ def save_size_and_restart_paper_trade_bot(
 
     if trade_size <= 0:
         raise HTTPException(status_code=400, detail="Trade size must be greater than zero")
+
+    size_changed = abs(float(trade_size) - float(bot.trade_size or 0)) > 1e-9
+    has_open_position = (
+        db.query(PaperStockBotOpenTrade.id)
+        .filter_by(bot_id=bot.id, user_id=user.id)
+        .first()
+        is not None
+    )
+    if size_changed and has_open_position:
+        raise HTTPException(
+            status_code=409,
+            detail="Close the open position for this bot before changing its trade size.",
+        )
 
     bot.trade_size = float(trade_size)
 

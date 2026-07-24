@@ -90,10 +90,13 @@
   .btn-restart{ background:#4fd1c5; color:#000; }
   .btn-restart:hover{ background:#38b2ac; }
   .btn-small{ min-width:auto; padding:5px 9px; font-size:12px; }
-  .param-details{ text-align:left; max-width:260px; color:#d7d7f0; }
+  .param-details{ text-align:left; color:#d7d7f0; }
   .param-details summary{ cursor:pointer; color:#4fd1c5; font-weight:700; }
-  .param-grid{ display:grid; grid-template-columns:1fr 1fr; gap:4px 10px; margin-top:8px; font-size:12px; }
-  .param-grid span:nth-child(odd){ color:#a7a7c7; }
+  .param-table-wrap{ max-width:420px; margin-top:8px; overflow-x:auto; }
+  .param-table{ width:max-content; border-collapse:collapse; font-size:12px; white-space:nowrap; }
+  .param-table th, .param-table td{ padding:4px 7px; border:1px solid #343460; }
+  .param-table th{ color:#a7a7c7; font-weight:600; background:#151533; }
+  .param-table td{ color:#f3f4ff; font-weight:700; }
   .history-actions{ width:90%; margin:10px auto -8px; display:flex; gap:10px; justify-content:flex-end; align-items:center; }
   .mirror-pill{ color:#5eead4; font-weight:700; font-size:12px; }
   /* 📊 Summary card */
@@ -417,13 +420,16 @@
           <form id="size-form-{{ b.id }}"
                 method="post"
                 action="{{ url_prefix }}/auth/papertradebot/{% if b.is_active and b.status == 'RUNNING' %}save-size{% else %}save-size-restart{% endif %}/{{ b.id }}"
+                data-size-form
+                data-open-position="{{ 'true' if b.id in open_bot_ids else 'false' }}"
+                data-current-size="{{ b.trade_size }}"
                 style="display:flex;gap:6px;align-items:center;">
             <input type="number"
                    name="trade_size"
                    value="{{ b.trade_size }}"
                    min="1"
                    step="1"
-                   title="Applies to future entries only; open positions keep their original quantity."
+                   title="{% if b.id in open_bot_ids %}Close this bot's open position before changing its trade size.{% else %}Applies to future entries only.{% endif %}"
                    style="width:72px;background:#111532;color:white;border:1px solid #3b3b70;border-radius:6px;padding:4px;">
           </form>
         </td>
@@ -444,22 +450,34 @@
         </td>
         <td>
           {% set cfg = b.runtime_config if b.runtime_config is defined else {} %}
-          <details class="param-details" {% if b.is_active and b.status == "RUNNING" %}open{% endif %}>
+          <details class="param-details">
             <summary>View</summary>
-            <div class="param-grid">
-              <span>Qty</span><strong>{{ b.trade_size }}</strong>
-              <span>Stop $</span><strong>{{ cfg.get("stop_loss_usd", b.stop_loss_usd or "N/A") }}</strong>
-              <span>Trail $</span><strong>{{ cfg.get("trailing_profit_usd", "N/A") }}</strong>
-              <span>Stop %</span><strong>{{ cfg.get("stop_loss_pct", "N/A") }}</strong>
-              <span>Trail %</span><strong>{{ cfg.get("trailing_profit_pct", "N/A") }}</strong>
-              <span>Prob mode</span><strong>{{ cfg.get("prob_exit_mode", "N/A") }}</strong>
-              <span>Prob drop</span><strong>{{ cfg.get("prob_trail_drop", "N/A") }}</strong>
-              <span>Long entry</span><strong>{{ cfg.get("long_entry_prob", "N/A") }}</strong>
-              <span>Short entry</span><strong>{{ cfg.get("short_entry_prob", "N/A") }}</strong>
-              <span>Long exit</span><strong>{{ cfg.get("long_fixed_exit_prob", "N/A") }}</strong>
-              <span>Short exit</span><strong>{{ cfg.get("short_fixed_exit_prob", "N/A") }}</strong>
-              <span>Email</span><strong>{{ "On" if b.notify_email else "Off" }}</strong>
-              <span>Shorts</span><strong>{{ "On" if b.allow_short_selling else "Off" }}</strong>
+            <div class="param-table-wrap">
+              <table class="param-table">
+                <tbody>
+                  <tr>
+                    <th>Qty</th><td>{{ b.trade_size }}</td>
+                    <th>Stop $</th><td>{{ cfg.get("stop_loss_usd", b.stop_loss_usd or "N/A") }}</td>
+                    <th>Trail $</th><td>{{ cfg.get("trailing_profit_usd", "N/A") }}</td>
+                    <th>Stop %</th><td>{{ cfg.get("stop_loss_pct", "N/A") }}</td>
+                  </tr>
+                  <tr>
+                    <th>Trail %</th><td>{{ cfg.get("trailing_profit_pct", "N/A") }}</td>
+                    <th>Prob mode</th><td>{{ cfg.get("prob_exit_mode", "N/A") }}</td>
+                    <th>Prob drop</th><td>{{ cfg.get("prob_trail_drop", "N/A") }}</td>
+                    <th>Long entry</th><td>{{ cfg.get("long_entry_prob", "N/A") }}</td>
+                  </tr>
+                  <tr>
+                    <th>Short entry</th><td>{{ cfg.get("short_entry_prob", "N/A") }}</td>
+                    <th>Long exit</th><td>{{ cfg.get("long_fixed_exit_prob", "N/A") }}</td>
+                    <th>Short exit</th><td>{{ cfg.get("short_fixed_exit_prob", "N/A") }}</td>
+                    <th>Email</th><td>{{ "On" if b.notify_email else "Off" }}</td>
+                  </tr>
+                  <tr>
+                    <th>Shorts</th><td>{{ "On" if b.allow_short_selling else "Off" }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </details>
         </td>
@@ -1909,6 +1927,21 @@ async function closeTrade(evt, tradeId) {
     btn.textContent = origText;
   }
 }
+
+// Client-side feedback makes the safety rule clear immediately. The server
+// also enforces this guard, so it remains safe if JavaScript is unavailable.
+document.querySelectorAll('form[data-size-form]').forEach((form) => {
+  form.addEventListener('submit', (event) => {
+    if (form.dataset.openPosition !== 'true') return;
+    const sizeInput = form.querySelector('input[name="trade_size"]');
+    const requestedSize = Number(sizeInput?.value);
+    const currentSize = Number(form.dataset.currentSize);
+    if (Number.isFinite(requestedSize) && Number.isFinite(currentSize) && requestedSize !== currentSize) {
+      event.preventDefault();
+      alert('Close the open position for this bot before changing its trade size.');
+    }
+  });
+});
 </script>
 
 
