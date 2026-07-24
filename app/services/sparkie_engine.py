@@ -124,6 +124,7 @@ def create_sparkie_job(
     finalist_verification: bool = False,
     replay_gate_override: bool = False,
     override_failed_gates: list[str] | None = None,
+    requested_bot_mode: str | None = None,
 ) -> SparkieJob:
     # A user may intentionally narrow or replace the configured universe for
     # one evaluation. An empty selection keeps the operator's default policy.
@@ -142,6 +143,11 @@ def create_sparkie_job(
         "replay_gate_override": bool(replay_gate_override),
         "override_failed_gates": sorted(
             {str(gate).strip() for gate in (override_failed_gates or []) if str(gate).strip()}
+        ),
+        "requested_bot_mode": (
+            str(requested_bot_mode)
+            if str(requested_bot_mode or "") in {"paper", "live_mirror"}
+            else None
         ),
     }
     if risk_per_day_pct is not None:

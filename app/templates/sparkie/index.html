@@ -425,11 +425,12 @@
       acknowledged_full_cash_risk: fullCashRiskAcknowledged.checked,
       symbols,
       finalist_verification: Boolean(verification),
-      replay_gate_override: Boolean(verification && !verification.qualified),
-      acknowledged_gate_override: Boolean(verification && !verification.qualified),
+      replay_gate_override: Boolean(verification),
+      acknowledged_gate_override: Boolean(verification),
       override_failed_gates: verification ? verification.failedGates : [],
       forced_interval: verification ? verification.interval : null,
-      forced_algo_name: verification ? verification.algoName : null
+      forced_algo_name: verification ? verification.algoName : null,
+      requested_bot_mode: verification ? verification.requestedMode : null
     };
   }
 
@@ -537,7 +538,7 @@
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', false)">Start Paper Bot</button>
           ${botSetup.live_mirror_allowed ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true)">Start Schwab Live Bot</button>` : ""}
-          ${botSetup.live_override_available ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true, true, '${escapeHtml(liveOverrideGates.join(","))}')">Start Schwab Live Bot With Override</button>` : ""}
+          ${botSetup.live_override_available ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true, true, '${escapeHtml(liveOverrideGates.join(","))}', ${Number(replay && replay.profit_loss || 0)}, ${Number(replay && replay.trades || 0)})">Start Schwab Live Bot With Override</button>` : ""}
         </div>
         ${!botSetup.live_mirror_allowed
           ? `<div class="sparkie-warn">Live Mirror standard approval is blocked: ${escapeHtml(botSetup.live_mirror_block_reason || "the historical evidence or Replay verification does not meet Sparkie's safety gate.")} ${botSetup.live_override_available ? `User override is available for: ${escapeHtml(liveOverrideGateText)}.` : "Paper mode remains available."}</div>`
@@ -553,6 +554,7 @@
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(data.progress_pct || 0).toLocaleString()}% · ${escapeHtml(data.completed_steps || 0)} / ${escapeHtml(data.total_steps || 0)} steps</strong></div>
         <div class="sparkie-summary-row"><span>Time</span><strong>Elapsed ${secondsText(data.elapsed_seconds)} · ETA ${secondsText(data.eta_seconds)}</strong></div>
         <div class="sparkie-summary-row"><span>Analysis</span><strong>${riskFirst ? "Risk-first monthly return selection" : `Target-first ${escapeHtml(data.target_period || "")} selection`}</strong></div>
+        ${data.requested_bot_mode ? `<div class="sparkie-summary-row"><span>User-selected setup</span><strong>${data.requested_bot_mode === "live_mirror" ? "Live Mirror after Replay and final confirmation" : "Paper bot after Replay and final confirmation"}</strong></div>` : ""}
         <div class="sparkie-summary-row"><span>Daily risk budget</span><strong>${riskFirst ? `-$${Number(data.risk_per_day_usd || 0).toLocaleString()} (${(Number(data.risk_per_day_pct || 0) * 100).toFixed(1)}% of cash)` : `At least $${Number(data.target_profit || 0).toLocaleString()} per ${escapeHtml(periodLabel)}`}</strong></div>
         ${riskFirst && monthlyProjection.conservative_monthly_pnl !== undefined ? `<div class="sparkie-summary-row"><span>Historical monthly range</span><strong>Conservative $${Number(monthlyProjection.conservative_monthly_pnl || 0).toLocaleString()} (${Number(monthlyProjection.conservative_monthly_return_pct || 0).toFixed(2)}%) · typical $${Number(monthlyProjection.typical_monthly_pnl || 0).toLocaleString()} (${Number(monthlyProjection.typical_monthly_return_pct || 0).toFixed(2)}%) · strong $${Number(monthlyProjection.strong_monthly_pnl || 0).toLocaleString()} (${Number(monthlyProjection.strong_monthly_return_pct || 0).toFixed(2)}%)</strong></div>` : `<div class="sparkie-summary-row"><span>Evidence window</span><strong>${escapeHtml(evidenceWindowText)}</strong></div>`}
         <div class="sparkie-summary-row"><span>Day-trading rule</span><strong>${dayTradingPolicy.eod_close === false ? "EOD close not enforced" : "End-of-day close required; no overnight positions"}</strong></div>
@@ -609,7 +611,7 @@
     `;
   }
 
-  async function setupSparkieBot(jobId, mirrorLive, gateOverride = false, overrideGatesCsv = "") {
+  async function setupSparkieBot(jobId, mirrorLive, gateOverride = false, overrideGatesCsv = "", replayPnl = 0, replayTrades = 0) {
     if (!fullCashRiskAcknowledged.checked) {
       window.alert("Acknowledge the full-cash risk before setting up a bot.");
       return;
@@ -619,7 +621,7 @@
     } else {
       const accepted = window.prompt(
         gateOverride
-          ? "HIGH-RISK OVERRIDE: This starts a live bot despite failed research gates. It can submit real Schwab orders using full-cash sizing, and historical results are not a guarantee. Type LIVE OVERRIDE to acknowledge and start."
+          ? `HIGH-RISK OVERRIDE: This starts a live bot regardless of Sparkie's failed gates or standard recommendation.\n\nFailed gates: ${String(overrideGatesCsv || "none recorded").replaceAll("_", " ")}\nReplay result: $${Number(replayPnl || 0).toLocaleString()} across ${Number(replayTrades || 0).toLocaleString()} trades.\n\nThe bot can submit real Schwab orders using full-cash sizing, and historical results are not a guarantee. Type LIVE OVERRIDE to acknowledge and start.`
           : "WARNING: This starts a live bot that can submit real Schwab orders using the configured full-cash sizing. Sparkie's recommendation is guidance, not a guarantee. Type LIVE to acknowledge and start."
       );
       if (accepted !== (gateOverride ? "LIVE OVERRIDE" : "LIVE")) return;
@@ -883,9 +885,6 @@
     if (!match) return `<div class="sparkie-status-banner"><strong>${escapeHtml(title)}</strong><div class="sparkie-muted">No calculable saved match.</div></div>`;
     const failedGateNames = Object.entries(match.gates || {}).filter(([, passed]) => !passed).map(([name]) => name);
     const failedGates = failedGateNames.map((name) => name.replaceAll("_", " ")).join(", ");
-    const verificationLabel = match.qualified
-      ? "Run Fresh Finalist Verification"
-      : "Run Replay With Gate Override";
     return `
       <div class="sparkie-status-banner" style="border-color:${match.qualified ? "rgba(94,234,212,.6)" : "rgba(251,191,36,.6)"}">
         <strong>${escapeHtml(title)} · ${match.qualified ? "Qualified for fresh verification" : "Did not pass every gate"}</strong>
@@ -903,15 +902,24 @@
           ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
         </div>
         <div class="sparkie-actions">
-          <button class="${match.qualified ? "btn btn-primary" : "btn btn-secondary"}" type="button"
+          <button class="btn btn-primary" type="button"
             data-weekly-verify="${escapeHtml(match.symbol)}"
             data-weekly-cash="${Number(match.account_equity || 0)}"
             data-weekly-interval="${escapeHtml(match.interval)}"
             data-weekly-algo="${escapeHtml(match.algo_name)}"
             data-weekly-qualified="${match.qualified ? "true" : "false"}"
-            data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}">${verificationLabel}</button>
+            data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}"
+            data-weekly-mode="paper">Replay → Paper</button>
+          <button class="btn btn-danger" type="button"
+            data-weekly-verify="${escapeHtml(match.symbol)}"
+            data-weekly-cash="${Number(match.account_equity || 0)}"
+            data-weekly-interval="${escapeHtml(match.interval)}"
+            data-weekly-algo="${escapeHtml(match.algo_name)}"
+            data-weekly-qualified="${match.qualified ? "true" : "false"}"
+            data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}"
+            data-weekly-mode="live_mirror">Replay → Live</button>
         </div>
-        ${!match.qualified ? `<div class="sparkie-warn">This permits historical Replay and then a paper bot. Live Mirror still requires a profitable Replay and a separate acknowledgement; structural evidence gates cannot be overridden for live trading.</div>` : ""}
+        <div class="sparkie-warn">Both choices run the exact combination through historical Replay first. Live trading is never started automatically; it requires a second explicit confirmation after Replay and displays every failed gate and the Replay outcome.</div>
       </div>
     `;
   }
@@ -929,13 +937,22 @@
         <td>$${Number(match.conservative_monthly_pnl || 0).toLocaleString()}</td>
         <td>$${Number(match.worst_daily_pnl || 0).toLocaleString()}</td>
         <td>$${Number(match.estimated_max_drawdown || 0).toLocaleString()}</td>
-        <td><button class="btn btn-secondary" type="button"
+        <td><button class="btn btn-primary" type="button"
           data-weekly-verify="${escapeHtml(match.symbol)}"
           data-weekly-cash="${Number(match.account_equity || 0)}"
           data-weekly-interval="${escapeHtml(match.interval)}"
           data-weekly-algo="${escapeHtml(match.algo_name)}"
           data-weekly-qualified="${match.qualified ? "true" : "false"}"
-          data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}">${match.qualified ? "Verify" : "Replay override"}</button></td>
+          data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}"
+          data-weekly-mode="paper">Paper</button>
+          <button class="btn btn-danger" type="button"
+          data-weekly-verify="${escapeHtml(match.symbol)}"
+          data-weekly-cash="${Number(match.account_equity || 0)}"
+          data-weekly-interval="${escapeHtml(match.interval)}"
+          data-weekly-algo="${escapeHtml(match.algo_name)}"
+          data-weekly-qualified="${match.qualified ? "true" : "false"}"
+          data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}"
+          data-weekly-mode="live_mirror">Live</button></td>
       </tr>
     `;
     }).join("");
@@ -953,10 +970,10 @@
   function rankingAuditTable(matches) {
     if (!Array.isArray(matches) || matches.length === 0) return "";
     const rows = matches.map((match) => {
-      const failedGates = Object.entries(match.gates || {})
+      const failedGateNames = Object.entries(match.gates || {})
         .filter(([, passed]) => !passed)
-        .map(([name]) => name.replaceAll("_", " "))
-        .join(", ");
+        .map(([name]) => name);
+      const failedGates = failedGateNames.map((name) => name.replaceAll("_", " ")).join(", ");
       return `
       <tr>
         <td>${Number(match.catalog_rank || 0)}</td>
@@ -968,6 +985,24 @@
         <td>$${Number(match.worst_daily_pnl || 0).toLocaleString()}</td>
         <td>$${Number(match.conservative_monthly_pnl || 0).toLocaleString()}</td>
         <td>${escapeHtml(failedGates || "None")}</td>
+        <td>
+          <button class="btn btn-primary" type="button"
+            data-weekly-verify="${escapeHtml(match.symbol)}"
+            data-weekly-cash="${Number(match.account_equity || 0)}"
+            data-weekly-interval="${escapeHtml(match.interval)}"
+            data-weekly-algo="${escapeHtml(match.algo_name)}"
+            data-weekly-qualified="${match.qualified ? "true" : "false"}"
+            data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}"
+            data-weekly-mode="paper">Paper</button>
+          <button class="btn btn-danger" type="button"
+            data-weekly-verify="${escapeHtml(match.symbol)}"
+            data-weekly-cash="${Number(match.account_equity || 0)}"
+            data-weekly-interval="${escapeHtml(match.interval)}"
+            data-weekly-algo="${escapeHtml(match.algo_name)}"
+            data-weekly-qualified="${match.qualified ? "true" : "false"}"
+            data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}"
+            data-weekly-mode="live_mirror">Live</button>
+        </td>
       </tr>
     `;
     }).join("");
@@ -975,7 +1010,7 @@
       <h3 style="margin-top:18px;">Ranking audit — top 10 combinations</h3>
       <div style="overflow-x:auto;">
         <table class="sparkie-table">
-          <thead><tr><th>Rank</th><th>Symbol / interval / algo</th><th>Passed gates</th><th>95% success floor</th><th>Observed success</th><th>Composite score</th><th>Worst day</th><th>Conservative month</th><th>Failed gates</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Symbol / interval / algo</th><th>Passed gates</th><th>95% success floor</th><th>Observed success</th><th>Composite score</th><th>Worst day</th><th>Conservative month</th><th>Failed gates</th><th>Run</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1094,12 +1129,16 @@
       .filter(Boolean);
     const interval = button.getAttribute("data-weekly-interval");
     const algoName = button.getAttribute("data-weekly-algo");
-    if (!qualified) {
-      const readableGates = failedGates.map((gate) => gate.replaceAll("_", " ")).join(", ");
+    const requestedMode = button.getAttribute("data-weekly-mode") === "live_mirror" ? "live_mirror" : "paper";
+    if (!qualified || requestedMode === "live_mirror") {
+      const readableGates = failedGates.map((gate) => gate.replaceAll("_", " ")).join(", ") || "none";
       const accepted = window.confirm(
-        `This candidate did not pass: ${readableGates || "one or more research gates"}.\n\n` +
-        "Continue with a historical Replay override? Replay sends no broker orders. " +
-        "Paper setup remains available afterward; Live Mirror requires a profitable Replay and a separate explicit override."
+        `Selected mode: ${requestedMode === "live_mirror" ? "Live Mirror" : "Paper"}.\n` +
+        `Failed research gates: ${readableGates}.\n\n` +
+        "Sparkie will first run the exact combination through historical Replay; this step sends no broker orders. " +
+        (requestedMode === "live_mirror"
+          ? "After Replay, starting Live Mirror requires a separate LIVE OVERRIDE confirmation."
+          : "After Replay, you can confirm paper-bot setup.")
       );
       if (!accepted) return;
     }
@@ -1107,16 +1146,18 @@
       qualified,
       failedGates,
       interval,
-      algoName
+      algoName,
+      requestedMode
     };
     document.getElementById("accountEquity").value = button.getAttribute("data-weekly-cash");
     symbolSource.value = "own_list";
     await loadSymbolSource();
     symbolBucket.value = button.getAttribute("data-weekly-verify");
     symbolBucket.readOnly = false;
-    resultBox.textContent = qualified
-      ? "Weekly match loaded. Starting an exact finalist backtest and Replay verification..."
-      : "Weekly match loaded. Starting an exact finalist backtest and user-authorized Replay override...";
+    resultBox.textContent = (
+      `Weekly combination loaded for ${requestedMode === "live_mirror" ? "Live Mirror" : "paper"} setup. ` +
+      "Starting an exact finalist backtest and historical Replay verification..."
+    );
     runBtn.click();
   });
 

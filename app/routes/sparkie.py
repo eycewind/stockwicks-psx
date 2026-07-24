@@ -101,12 +101,10 @@ SPARKIE_RESEARCH_GATES = {
     "profitable_day_confidence",
     "conservative_monthly_return_positive",
 }
-# These gates express client risk preference or market-capacity conservatism.
-# Structural evidence/model gates remain non-overridable for live brokerage.
-SPARKIE_LIVE_OVERRIDABLE_GATES = {
-    "liquidity_capacity",
-    "profitable_day_confidence",
-}
+# Sparkie displays and records every failed gate, but the client may make the
+# final live-trading decision after an exact completed Replay and a second
+# explicit live-override acknowledgement.
+SPARKIE_LIVE_OVERRIDABLE_GATES = set(SPARKIE_RESEARCH_GATES)
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -148,6 +146,7 @@ class SparkieEvaluationRequest(BaseModel):
     override_failed_gates: list[str] = Field(default_factory=list)
     forced_interval: str | None = None
     forced_algo_name: str | None = None
+    requested_bot_mode: Literal["paper", "live_mirror"] | None = None
 
 
 class SparkieClearHistoryRequest(BaseModel):
@@ -355,6 +354,7 @@ def run_evaluation(
         finalist_verification=payload.finalist_verification,
         replay_gate_override=payload.replay_gate_override,
         override_failed_gates=override_failed_gates,
+        requested_bot_mode=payload.requested_bot_mode,
     )
     db.commit()
 
@@ -533,6 +533,7 @@ def setup_live_bot(
         raise HTTPException(status_code=404, detail="Sparkie Replay verification session was not found.")
     if str(replay.status or "").upper() != "COMPLETED":
         raise HTTPException(status_code=409, detail="Replay verification must be completed before setting up a bot.")
+    replay_pnl, replay_trades = _replay_session_pnl(db, int(replay.id))
 
     if payload.mirror_live:
         if not payload.acknowledged_live_risk:
@@ -580,22 +581,20 @@ def setup_live_bot(
         )
         best = _sparkie_candidate_payload(candidate, job.target_period, job.target_profit) if candidate else _sparkie_best_backtest_payload(job)
         readiness = _sparkie_live_readiness(best, float(job.confidence_level or 0.0))
-        replay_pnl, _replay_trades = _replay_session_pnl(db, int(replay.id))
-        confidence_overridden = bool(
-            "profitable_day_confidence" in job_override_gates
-            and "confidence" in str(readiness.get("reason") or "").lower()
-        )
-        readiness_eligible = bool(readiness["eligible"] or confidence_overridden)
-        if not readiness_eligible:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Live Mirror is blocked: {readiness['reason']} Start a paper bot instead.",
-            )
-        if replay_pnl <= 0:
-            raise HTTPException(
-                status_code=409,
-                detail="Live Mirror is blocked: Replay verification was not profitable. Start a paper bot instead.",
-            )
+        if not payload.acknowledged_gate_override:
+            if not readiness["eligible"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Live Mirror is blocked: {readiness['reason']} Start a paper bot or use the explicit live override.",
+                )
+            if replay_pnl <= 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Live Mirror is blocked: Replay verification was not profitable. "
+                        "Start a paper bot or use the explicit live override."
+                    ),
+                )
 
     bot = _create_live_bot_from_replay_session(
         db,
@@ -619,6 +618,8 @@ def setup_live_bot(
             "override_failed_gates": sorted(
                 {str(gate).strip() for gate in payload.override_failed_gates if str(gate).strip()}
             ),
+            "replay_profit_loss": round(float(replay_pnl), 2),
+            "replay_trades": int(replay_trades),
         },
     )
     db.commit()
@@ -943,10 +944,6 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     non_overridable_live_gates = sorted(
         set(replay_override_gates) - SPARKIE_LIVE_OVERRIDABLE_GATES
     )
-    confidence_live_override = bool(
-        "profitable_day_confidence" in replay_override_gates
-        and "confidence" in str(live_readiness.get("reason") or "").lower()
-    )
     live_mirror_allowed = bool(
         job.replay_session_id
         and replay_completed
@@ -957,11 +954,7 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
     live_override_available = bool(
         job.replay_session_id
         and replay_completed
-        and replay_positive
-        and job.recommendation == "paper_override_candidate"
-        and replay_override_gates
-        and not non_overridable_live_gates
-        and (live_readiness["eligible"] or confidence_live_override)
+        and not live_mirror_allowed
     )
     if non_overridable_live_gates:
         live_block_reason = (
@@ -970,8 +963,8 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         )
     elif live_override_available:
         live_block_reason = (
-            "Standard Live Mirror approval was not granted. A positive Replay allows an explicit user override "
-            f"for: {', '.join(replay_override_gates)}."
+            "Standard Live Mirror approval was not granted. The client may make the final decision using the "
+            f"explicit live override. Failed gates: {', '.join(replay_override_gates) or 'none; review the Replay result'}."
         )
     else:
         live_block_reason = live_readiness["reason"]
@@ -1040,6 +1033,11 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
             isinstance(request_payload, dict) and request_payload.get("replay_gate_override")
         ),
         "override_failed_gates": replay_override_gates,
+        "requested_bot_mode": (
+            request_payload.get("requested_bot_mode")
+            if isinstance(request_payload, dict)
+            else None
+        ),
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,
         "error_message": job.error_message,
