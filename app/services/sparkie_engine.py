@@ -32,12 +32,16 @@ MIN_ACCOUNT_EQUITY = 2000.0
 # starts from the entire client equity rather than a percentage allocation.
 CASH_DEPLOYMENT_POLICY = "full_cash_v1"
 DEFAULT_SYMBOL_BUCKET = ("AAPL", "NVDA", "AMD", "PLTR", "INTC")
-DEFAULT_INTERVAL_POLICY = ("15min", "10min", "5min", "1min")
+DEFAULT_INTERVAL_POLICY = ("15min", "10min", "5min")
 DEFAULT_ALGO_POLICY = ("Algo1_MM", "Algo2_MM", "Algo3_MM")
 TERMINAL_STATUSES = {"completed", "rejected", "error", "stopped"}
 ACTIVE_STATUSES = {"queued", "preparing_data", "backtesting", "scoring", "verifying_replay"}
 MIN_BACKTEST_BARS_PER_INTERVAL = 80
 MIN_BACKTEST_TRADING_DAYS = 5
+# A 5-minute research series needs enough independent sessions for a
+# validation window plus a 20-day holdout.  The 1-minute replay cache is kept
+# short and is never used as the sole monthly-return evidence source.
+MIN_NATIVE_RESEARCH_TRADING_DAYS = 60
 # Finalist Replay is a separate recent validation window. Twenty-one calendar
 # days gives approximately three complete US trading weeks.
 MIN_FINALIST_REPLAY_CALENDAR_DAYS = 21
@@ -79,7 +83,10 @@ def sparkie_interval_policy() -> list[str]:
     intervals: list[str] = []
     for value in raw.split(","):
         interval = value.lower().strip()
-        if interval in allowed and interval not in intervals:
+        # 1-minute Schwab history is intentionally reserved for the final
+        # three-week Replay. It is too short for a credible monthly research
+        # comparison and would otherwise poison the catalog evidence.
+        if interval in allowed and interval != "1min" and interval not in intervals:
             intervals.append(interval)
     return intervals or list(DEFAULT_INTERVAL_POLICY)
 
@@ -188,9 +195,9 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
     symbols = _json_list(job.symbol_bucket_json) or list(DEFAULT_SYMBOL_BUCKET)
     intervals = _json_list(job.interval_policy_json) or list(DEFAULT_INTERVAL_POLICY)
     algos = set(_json_list(job.algo_policy_json) or list(DEFAULT_ALGO_POLICY))
-    # A 90-calendar-day cache leaves enough out-of-sample days to judge a
-    # daily target; the old 45-day default produced only ~6 holdout days.
-    lookback_days = max(90, int(os.getenv("SPARKIE_DATA_LOOKBACK_DAYS", "90")))
+    # Native 5-minute history supports a genuine multi-week holdout.  The
+    # short Schwab 1-minute cache remains available only for final Replay.
+    lookback_days = max(120, int(os.getenv("SPARKIE_DATA_LOOKBACK_DAYS", "120")))
     workers = max(1, min(int(os.getenv("SPARKIE_BACKTEST_WORKERS", "4")), 8))
 
     total_steps = max(len(symbols) + 2, 1)
@@ -301,6 +308,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
     db.refresh(job)
 
     pool = ThreadPoolExecutor(max_workers=workers)
+    daily_loss_limit = _risk_first_budget(job) if _is_risk_first_job(job) else float(job.account_equity or 0.0) * 0.10
     futures = {
         pool.submit(
             _backtest_symbol_interval,
@@ -310,6 +318,7 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
             int(job.user_id),
             float(job.account_equity),
             str(job.id),
+            daily_loss_limit,
         ): (symbol, interval)
         for symbol, interval, frame in pending_units
     }
@@ -485,22 +494,58 @@ def _refresh_symbol_data_once(
     lookback_days: int,
     force: bool,
 ) -> dict[str, Any]:
-    _path, meta = fetch_and_save(user_id=user_id, symbol=symbol, days=lookback_days, force=force)
-    _validate_ingest_meta(symbol=symbol, meta=meta)
+    # Retain a 1-minute cache for the final Replay.  Schwab can provide a
+    # shorter 1-minute history, so it must not determine monthly research
+    # evidence for 5/10/15-minute candidates.
+    replay_meta = None
+    if "1min" in intervals:
+        _path, replay_meta = fetch_and_save(
+            user_id=user_id,
+            symbol=symbol,
+            days=lookback_days,
+            force=force,
+            interval="1min",
+        )
+        _validate_ingest_meta(symbol=symbol, meta=replay_meta)
     end_date = datetime.utcnow().date()
     start_date = end_date - timedelta(days=max(lookback_days, 10))
     frames: dict[str, Any] = {}
     row_count = 0
     interval_rows: dict[str, int] = {}
-    for interval in intervals:
-        provider = ReplayDataProvider(
+    native_5min_frame: pd.DataFrame | None = None
+    native_5min_meta: Any = None
+
+    if any(interval in {"5min", "10min", "15min", "30min"} for interval in intervals):
+        native_path, native_5min_meta = fetch_and_save(
             user_id=user_id,
             symbol=symbol,
-            start_date=start_date.isoformat(),
-            end_date=end_date.isoformat(),
-            interval=interval,
+            days=lookback_days,
+            force=force,
+            interval="5min",
         )
-        frame = provider.bars.copy()
+        _validate_ingest_meta(
+            symbol=symbol,
+            meta=native_5min_meta,
+            minimum_trading_days=MIN_NATIVE_RESEARCH_TRADING_DAYS,
+        )
+        native_5min_frame = _load_native_research_frame(
+            native_path,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    for interval in intervals:
+        if interval == "1min":
+            provider = ReplayDataProvider(
+                user_id=user_id,
+                symbol=symbol,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                interval=interval,
+            )
+            frame = _normalize_backtest_frame(provider.bars.copy())
+        else:
+            frame = _resample_native_research_frame(native_5min_frame, interval)
         if frame is None or frame.empty:
             raise RuntimeError(f"No cached bars for {symbol} {interval}.")
         normalized = _normalize_backtest_frame(frame)
@@ -517,21 +562,21 @@ def _refresh_symbol_data_once(
         "frames": frames,
         "rows": row_count,
         "interval_rows": interval_rows,
-        "last_bar": getattr(meta, "last_bar", None),
-        "unique_dates": list(getattr(meta, "unique_dates", []) or []),
+        "last_bar": getattr(native_5min_meta or replay_meta, "last_bar", None),
+        "unique_dates": list(getattr(native_5min_meta or replay_meta, "unique_dates", []) or []),
     }
 
 
-def _validate_ingest_meta(*, symbol: str, meta: Any) -> None:
+def _validate_ingest_meta(*, symbol: str, meta: Any, minimum_trading_days: int = MIN_BACKTEST_TRADING_DAYS) -> None:
     total_rows = int(getattr(meta, "total_rows", 0) or 0)
     unique_dates = list(getattr(meta, "unique_dates", []) or [])
     last_bar_text = str(getattr(meta, "last_bar", "") or "")
     if total_rows <= 0:
         raise RuntimeError(f"Downloaded data for {symbol} is empty.")
-    if len(unique_dates) < MIN_BACKTEST_TRADING_DAYS:
+    if len(unique_dates) < minimum_trading_days:
         raise RuntimeError(
             f"Downloaded data for {symbol} has only {len(unique_dates)} trading day(s); "
-            f"Sparkie needs at least {MIN_BACKTEST_TRADING_DAYS}."
+            f"Sparkie needs at least {minimum_trading_days}."
         )
     if last_bar_text:
         try:
@@ -567,11 +612,50 @@ def _normalize_backtest_frame(frame: Any) -> pd.DataFrame:
     return df
 
 
+def _load_native_research_frame(path: Path, *, start_date: Any, end_date: Any) -> pd.DataFrame:
+    """Load longer native 5-minute research history without Replay resampling."""
+    frame = pd.read_csv(path, parse_dates=["timestamp"], index_col="timestamp")
+    frame.index = pd.to_datetime(frame.index, errors="coerce")
+    frame = frame[frame.index.notna()]
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    frame = frame[(frame.index >= start) & (frame.index <= end)]
+    frame = frame.between_time("09:30", "16:00")
+    if frame.empty:
+        raise RuntimeError(f"Native 5-minute research cache has no RTH bars in the requested window: {path}")
+    return _normalize_backtest_frame(frame)
+
+
+def _resample_native_research_frame(frame: pd.DataFrame | None, interval: str) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    if interval == "5min":
+        return frame.copy()
+    rules = {"10min": "10min", "15min": "15min", "30min": "30min"}
+    rule = rules.get(interval)
+    if not rule:
+        raise ValueError(f"Unsupported native research interval: {interval}")
+    return (
+        frame.resample(rule, label="left", closed="left")
+        .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+        .dropna(subset=["open"])
+    )
+
+
 def queue_replay_verification(db: Session, job: SparkieJob, best: dict[str, Any]) -> int:
     end_date = datetime.utcnow().date()
     configured_days = int(os.getenv("SPARKIE_REPLAY_LOOKBACK_DAYS", str(MIN_FINALIST_REPLAY_CALENDAR_DAYS)))
     replay_days = max(MIN_FINALIST_REPLAY_CALENDAR_DAYS, configured_days)
     start_date = end_date - timedelta(days=replay_days)
+    # The finalist alone receives a fresh short 1-minute cache for Replay;
+    # this is deliberately separate from longer native research history.
+    fetch_and_save(
+        user_id=int(job.user_id),
+        symbol=str(best["symbol"]),
+        days=replay_days,
+        force=False,
+        interval="1min",
+    )
     trade_size = _trade_quantity(
         user_id=int(job.user_id),
         symbol=str(best["symbol"]),
@@ -749,6 +833,7 @@ def _backtest_symbol_interval(
     user_id: int,
     account_equity: float,
     job_id: str | None = None,
+    daily_loss_limit_usd: float = 0.0,
     builder_days: int | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
@@ -779,16 +864,19 @@ def _backtest_symbol_interval(
         intervals=(interval,),
         user_id=user_id,
         trade_size=trade_size,
-        builder_days=max(90, int(builder_days or os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "90"))),
+        builder_days=max(120, int(builder_days or os.getenv("SPARKIE_BACKTEST_LOOKBACK_DAYS", "120"))),
         k_forward=int(DEFAULT_REPLAY_MM_CONFIG["k_forward"]),
         profile=os.getenv("SPARKIE_BACKTEST_PROFILE", "sparkie_probe"),
         allow_short=True,
         eod_close=True,
-        oos_fraction=0.35,
+        # Keep enough independent post-selection sessions for a monthly
+        # return estimate; the native research cache is at least 60 days.
+        oos_fraction=0.65,
         algo_names=tuple(sparkie_algo_policy()),
         model_refresh_mode=os.getenv("SPARKIE_MODEL_REFRESH_MODE", "fixed"),
         model_max_age_minutes=float(os.getenv("SPARKIE_MODEL_MAX_AGE_MINUTES", "0")),
         min_new_bars_before_retrain=int(os.getenv("SPARKIE_MIN_NEW_BARS_BEFORE_RETRAIN", "0")),
+        daily_loss_limit_usd=max(float(daily_loss_limit_usd or 0.0), 0.0),
     )
     result = run_cheatsheet(req, price_frames={interval: frame})
     elapsed = max(time.monotonic() - started, 0.001)

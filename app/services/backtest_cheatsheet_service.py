@@ -55,6 +55,7 @@ class CheatSheetRequest:
     model_refresh_mode: str = DEFAULT_MODEL_REFRESH_MODE
     model_max_age_minutes: float = DEFAULT_MODEL_MAX_AGE_MINUTES
     min_new_bars_before_retrain: int = DEFAULT_MIN_NEW_BARS_BEFORE_RETRAIN
+    daily_loss_limit_usd: float = 0.0
 
 
 def _safe_float(value: Any, default: float) -> float:
@@ -405,6 +406,40 @@ def _daily_pnl(trades: list[dict[str, Any]], price_index: pd.Index) -> list[dict
     return rows
 
 
+def _apply_daily_loss_lock(trades: list[dict[str, Any]], daily_loss_limit_usd: float) -> list[dict[str, Any]]:
+    """Keep trades only until the configured daily loss budget is reached.
+
+    The triggering exit remains in the record because real execution can cross
+    a stop level; every later entry/exit on that same session is excluded.
+    This matches Sparkie's live runner, which blocks new entries after a daily
+    lock.  The live runner additionally closes any still-open position.
+    """
+    limit = abs(_safe_float(daily_loss_limit_usd, 0.0))
+    if limit <= 0:
+        return trades
+
+    def date_key(value: Any) -> str:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize(_ET)
+        else:
+            timestamp = timestamp.tz_convert(_ET)
+        return timestamp.date().isoformat()
+
+    kept: list[dict[str, Any]] = []
+    totals: dict[str, float] = {}
+    locked_dates: set[str] = set()
+    for trade in trades:
+        key = date_key(trade.get("exit_time"))
+        if key in locked_dates:
+            continue
+        kept.append(trade)
+        totals[key] = totals.get(key, 0.0) + float(trade.get("profit") or 0.0)
+        if totals[key] <= -limit:
+            locked_dates.add(key)
+    return kept
+
+
 def _ts_iso(index: pd.Index, pos: int) -> str | None:
     if len(index) == 0:
         return None
@@ -462,10 +497,22 @@ def _simulate_combo(
         core_state = MMCoreState()
 
     aligned = prob_avg.reindex(price_df.index).ffill()
+    previous_ts = price_df.index[0]
+    previous_price = float(price_df["close"].iloc[0])
+
+    def trading_day(value: Any):
+        stamp = pd.Timestamp(value)
+        if stamp.tzinfo is None:
+            stamp = stamp.tz_localize(_ET)
+        else:
+            stamp = stamp.tz_convert(_ET)
+        return stamp.date()
 
     for i in range(1, len(price_df)):
         ts = price_df.index[i]
         price = float(price_df["close"].iloc[i])
+        if eod_close and trading_day(ts) != trading_day(previous_ts) and position_side:
+            close_trade(previous_ts, previous_price, "EOD_CLOSE")
         # Algo4 avoids using the current candle's own probability for the
         # decision. This mirrors algoMM_replay_runner's prev_prob behavior.
         prob_pos = i - 1 if is_algo4 else i
@@ -527,6 +574,8 @@ def _simulate_combo(
                 entry_price = price
                 entry_time = ts
                 core_state = MMCoreState(prob_peak=1.0 - current_prob, profit_peak=0.0)
+        previous_ts = ts
+        previous_price = price
 
     if position_side:
         close_trade(price_df.index[-1], float(price_df["close"].iloc[-1]), "FINAL_BAR_CLOSE")
@@ -762,6 +811,8 @@ def run_cheatsheet(
                         eod_close=req.eod_close,
                         params=params,
                     )
+                    trades = _apply_daily_loss_lock(trades, req.daily_loss_limit_usd)
+                    metrics = _trade_metrics(trades)
                     tested_combinations += 1
                     validation_score = _score(metrics)
                     deployment_score = _deployment_score(
@@ -908,6 +959,8 @@ def run_cheatsheet(
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
                 )
+                validation_trades = _apply_daily_loss_lock(validation_trades, req.daily_loss_limit_usd)
+                validation_metrics = _trade_metrics(validation_trades)
                 tested_combinations += 1
                 validation_score = _score(validation_metrics)
                 selection_score = _selection_score(validation_metrics)
@@ -965,6 +1018,8 @@ def run_cheatsheet(
                     allow_short=req.allow_short,
                     eod_close=req.eod_close,
                 )
+                holdout_trades = _apply_daily_loss_lock(holdout_trades, req.daily_loss_limit_usd)
+                holdout_metrics = _trade_metrics(holdout_trades)
                 holdout_score = _score(holdout_metrics)
                 deployment_score = _deployment_score(
                     validation_score=candidate["validation_score"],

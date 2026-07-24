@@ -44,7 +44,7 @@ ET = pytz.timezone("US/Eastern")
 UTC = pytz.UTC
 
 DATA_DIR = os.getenv("DATA_DIR", "/var/www/stockwicks/data")
-MAX_DAYS = 45
+MAX_DAYS = 120
 DEFAULT_DAYS = 30
 FRESH_HOURS = 6            # reuse cache if younger than this
 
@@ -74,13 +74,14 @@ def safe_symbol_for_files(symbol: str) -> str:
     return str(symbol or "").upper().strip().replace("/", "_").replace(" ", "_")
 
 
-def get_data_paths(user_id: int, symbol: str) -> tuple[Path, Path]:
+def get_data_paths(user_id: int, symbol: str, interval: str = "1min") -> tuple[Path, Path]:
     """
     Returns (csv_path, meta_path) for a given user+symbol.
     """
     d = get_replay_dir(user_id)
     sym = safe_symbol_for_files(symbol)
-    return d / f"{sym}_1min.csv", d / f"{sym}_1min.meta.json"
+    interval = str(interval or "1min").lower().strip()
+    return d / f"{sym}_{interval}.csv", d / f"{sym}_{interval}.meta.json"
 
 
 # =============================================================================
@@ -113,14 +114,21 @@ def _load_meta(meta_path: Path) -> Optional[IngestMeta]:
         return None
 
 
-def is_fresh(meta: Optional[IngestMeta], max_age_hours: int = FRESH_HOURS) -> bool:
+def is_fresh(
+    meta: Optional[IngestMeta],
+    max_age_hours: int = FRESH_HOURS,
+    minimum_days: int = 1,
+) -> bool:
     if meta is None:
         return False
     if getattr(meta, "source_mode", "legacy") != "live_rth_v1":
         return False
     try:
         dl_at = datetime.fromisoformat(meta.downloaded_at)
-        return (datetime.utcnow() - dl_at) < timedelta(hours=max_age_hours)
+        return (
+            int(getattr(meta, "days_requested", 0) or 0) >= int(minimum_days)
+            and (datetime.utcnow() - dl_at) < timedelta(hours=max_age_hours)
+        )
     except Exception:
         return False
 
@@ -133,6 +141,7 @@ def fetch_and_save(
     symbol: str,
     days: int = DEFAULT_DAYS,
     force: bool = False,
+    interval: str = "1min",
 ) -> tuple[Path, IngestMeta]:
     """
     Download `days` days of 1-min bars and cache to disk.
@@ -141,24 +150,27 @@ def fetch_and_save(
     Raises on empty/failed download.
     """
     symbol = symbol.upper().strip()
+    interval = str(interval or "1min").lower().strip()
+    if interval not in {"1min", "5min", "10min", "15min", "30min"}:
+        raise ValueError(f"Unsupported replay ingest interval: {interval}")
     days = max(1, min(int(days), MAX_DAYS))
 
-    csv_path, meta_path = get_data_paths(user_id, symbol)
+    csv_path, meta_path = get_data_paths(user_id, symbol, interval)
     existing = _load_meta(meta_path)
 
-    if not force and is_fresh(existing) and csv_path.exists():
+    if not force and is_fresh(existing, minimum_days=days) and csv_path.exists():
         logger.info(
             f"[{symbol}] Using cached data "
             f"({existing.total_rows} rows, downloaded {existing.downloaded_at}Z)"
         )
         return csv_path, existing
 
-    logger.info(f"[{symbol}] Fetching {days} trading sessions of 1-min bars from Schwab...")
+    logger.info(f"[{symbol}] Fetching {days} trading sessions of {interval} bars from Schwab...")
     # Use the same source fetch path as live AlgoMM bots. This keeps replay
     # candles aligned with live candles before the replay engine evaluates them.
     df = get_schwab_history(
         symbol=symbol,
-        interval="1min",
+        interval=interval,
         lookback_days=days,
         need_extended_hours=False,
     )
