@@ -21,6 +21,7 @@ from app.scripts.replay.data_ingest import fetch_and_save
 from app.scripts.replay.replay_data_provider import ReplayDataProvider
 from app.services.backtest_cheatsheet_service import CheatSheetRequest, run_cheatsheet
 from app.services.barchart_symbols import barchart_top_symbols
+from app.services.sparkie_risk_scoring import risk_adjusted_selection_metrics
 from app.services.stocktwits_symbols import stocktwits_ranked_symbols
 
 
@@ -1332,6 +1333,7 @@ def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]
         return _paper_only_decision("The holdout validation result is not positive enough.")
     if float(profile["conservative_monthly_pnl"]) <= 0:
         return _paper_only_decision("The conservative historical monthly P/L scenario is not positive.")
+    selection_metrics = _risk_first_selection_metrics(job, row, profile)
     return {
         "recommendation": "paper_candidate",
         "run_replay": True,
@@ -1342,6 +1344,7 @@ def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]
             f"${profile['strong_monthly_pnl']:,.2f} strong. A {MIN_FINALIST_REPLAY_CALENDAR_DAYS}-calendar-day Replay is required before Live Mirror."
         ),
         "monthly_return_profile": profile,
+        "selection_metrics": selection_metrics,
     }
 
 
@@ -1357,13 +1360,42 @@ def _risk_first_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tupl
         and int(row.get("validation_trades") or 0) >= 3
         and int(row.get("trades") or 0) >= 5
     )
+    metrics = _risk_first_selection_metrics(job, row, profile)
     return (
         float(qualified),
+        float(metrics.get("selection_score") or 0.0),
+        float(metrics.get("positive_day_rate_95pct_low") or 0.0),
+        float(metrics.get("return_to_risk") or 0.0),
         float(profile.get("conservative_monthly_pnl") or 0.0),
-        float(profile.get("typical_monthly_pnl") or 0.0),
-        float(profile.get("positive_day_rate") or 0.0),
         -abs(float(row.get("max_drawdown") or 0.0)),
         float(row.get("score") or 0.0),
+    )
+
+
+def _risk_first_selection_metrics(
+    job: SparkieJob,
+    row: dict[str, Any],
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolved_profile = profile or _monthly_return_profile(
+        (row.get("params") or {}).get("daily_pnl"),
+        float(job.account_equity or 0.0),
+    )
+    daily_rows = (row.get("params") or {}).get("daily_pnl")
+    profits = [
+        float(item.get("profit_loss") or 0.0)
+        for item in (daily_rows if isinstance(daily_rows, list) else [])
+        if isinstance(item, dict) and item.get("date")
+    ]
+    return risk_adjusted_selection_metrics(
+        daily_profits=profits,
+        account_equity=float(job.account_equity or 0.0),
+        daily_risk_budget=_risk_first_budget(job),
+        conservative_monthly_pnl=float(resolved_profile.get("conservative_monthly_pnl") or 0.0),
+        typical_monthly_pnl=float(resolved_profile.get("typical_monthly_pnl") or 0.0),
+        max_drawdown=abs(float(row.get("max_drawdown") or 0.0)),
+        validation_profit_loss=float(row.get("validation_profit_loss") or 0.0),
+        confidence_preference=float(job.confidence_level or 0.0),
     )
 
 

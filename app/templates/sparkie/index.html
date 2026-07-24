@@ -160,6 +160,22 @@
     border-left: 3px solid rgba(125, 211, 252, 0.75);
     padding-left: 10px;
   }
+  .sparkie-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 13px;
+  }
+  .sparkie-table th,
+  .sparkie-table td {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    padding: 8px 10px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .sparkie-table th {
+    color: #aeb8cf;
+  }
   .sparkie-link {
     color: #7dd3fc;
     text-decoration: none;
@@ -281,7 +297,7 @@
 
     <div style="height:18px"></div>
     <h3>Use Saved Weekly Results</h3>
-    <p class="sparkie-muted">Uses the account equity, daily risk budget, and research confidence entered above. Sparkie stops new entries for the day after the loss budget is reached. A fresh finalist verification remains required.</p>
+    <p class="sparkie-muted">Searches the completed 200-symbol weekly catalog using the account equity, daily risk budget, and research confidence entered above. The stock-source and ticker fields apply only to a fresh Sparkie Evaluation. A fresh finalist verification remains required.</p>
     <div class="sparkie-actions">
       <button class="btn btn-primary" id="weeklyRecommendBtn" type="button">Find Cash / Target Match</button>
     </div>
@@ -850,11 +866,60 @@
           <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${Number(match.shares || 0).toLocaleString()} shares · about $${Number(match.estimated_notional || 0).toLocaleString()} (${Number(match.cash_deployment_pct || 0).toFixed(1)}% of cash)</strong></div>
           <div class="sparkie-summary-row"><span>Universe</span><strong>${escapeHtml(match.universe_sentiment || "unknown")} ranking</strong></div>
           <div class="sparkie-summary-row"><span>Daily risk evidence</span><strong>${Number(match.days_tested || 0)} daily observations · worst day $${Number(match.worst_daily_pnl || 0).toLocaleString()} · ${Number(match.max_loss_days || 0)} loss-budget breach days</strong></div>
+          <div class="sparkie-summary-row"><span>Risk-adjusted selection</span><strong>Score ${Number(match.selection_score || 0).toFixed(1)} / 100 · return/risk ${Number(match.return_to_risk || 0).toFixed(2)} · worst-day budget used ${Number(match.risk_budget_utilization_pct || 0).toFixed(1)}%</strong></div>
+          <div class="sparkie-summary-row"><span>Profitable-day confidence</span><strong>${(Number(match.positive_day_rate || 0) * 100).toFixed(1)}% observed · ${(Number(match.positive_day_rate_95pct_low || 0) * 100).toFixed(1)}% conservative 95% lower estimate · requested ${(Number(match.confidence_preference || 0) * 100).toFixed(1)}%</strong></div>
           <div class="sparkie-summary-row"><span>Historical monthly range</span><strong>Conservative $${Number(match.conservative_monthly_pnl || 0).toLocaleString()} (${Number(match.conservative_monthly_return_pct || 0).toFixed(2)}%) · typical $${Number(match.typical_monthly_pnl || 0).toLocaleString()} (${Number(match.typical_monthly_return_pct || 0).toFixed(2)}%) · strong $${Number(match.strong_monthly_pnl || 0).toLocaleString()} (${Number(match.strong_monthly_return_pct || 0).toFixed(2)}%)</strong></div>
           <div class="sparkie-summary-row"><span>Daily loss budget / drawdown</span><strong>-$${Number(match.daily_risk_budget || 0).toLocaleString()} daily stop · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
           ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
         </div>
         ${match.qualified ? `<div class="sparkie-actions"><button class="btn btn-primary" type="button" data-weekly-verify="${escapeHtml(match.symbol)}" data-weekly-cash="${Number(match.account_equity || 0)}">Run Fresh Finalist Verification</button></div>` : ""}
+      </div>
+    `;
+  }
+
+  function alternativeMatchesTable(matches) {
+    if (!Array.isArray(matches) || matches.length === 0) return "";
+    const rows = matches.map((match, index) => `
+      <tr>
+        <td>${index + 2}</td>
+        <td>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</td>
+        <td>${Number(match.selection_score || 0).toFixed(1)}</td>
+        <td>${(Number(match.positive_day_rate_95pct_low || 0) * 100).toFixed(1)}%</td>
+        <td>$${Number(match.conservative_monthly_pnl || 0).toLocaleString()}</td>
+        <td>$${Number(match.worst_daily_pnl || 0).toLocaleString()}</td>
+        <td>$${Number(match.estimated_max_drawdown || 0).toLocaleString()}</td>
+        <td><button class="btn btn-secondary" type="button" data-weekly-verify="${escapeHtml(match.symbol)}" data-weekly-cash="${Number(match.account_equity || 0)}">Verify</button></td>
+      </tr>
+    `).join("");
+    return `
+      <h3 style="margin-top:18px;">Risk-adjusted runner-ups</h3>
+      <div style="overflow-x:auto;">
+        <table class="sparkie-table">
+          <thead><tr><th>Rank</th><th>Combination</th><th>Score</th><th>95% day confidence</th><th>Conservative month</th><th>Worst day</th><th>Drawdown</th><th>Action</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function riskSensitivityTable(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return "";
+    const body = rows.map((item) => `
+      <tr>
+        <td>${(Number(item.risk_per_day_pct || 0) * 100).toFixed(0)}%</td>
+        <td>-$${Number(item.daily_risk_budget || 0).toLocaleString()}</td>
+        <td>${item.symbol ? `${escapeHtml(item.symbol)} ${escapeHtml(item.interval || "")} ${escapeHtml(item.algo_name || "")}` : "No calculable result"}</td>
+        <td>${item.qualified ? "Qualified" : "Did not pass every gate"}</td>
+        <td>${Number(item.selection_score || 0).toFixed(1)}</td>
+      </tr>
+    `).join("");
+    return `
+      <h3 style="margin-top:18px;">Risk-input sensitivity</h3>
+      <div style="overflow-x:auto;">
+        <table class="sparkie-table">
+          <thead><tr><th>Daily risk</th><th>Loss budget</th><th>Top candidate</th><th>Gate result</th><th>Score</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
       </div>
     `;
   }
@@ -874,10 +939,15 @@
         <div class="sparkie-summary-row"><span>Maximum daily loss trigger</span><strong>-$${Number(data.daily_risk_budget || 0).toLocaleString()} · Sparkie blocks new entries after this daily loss budget is reached</strong></div>
         <div class="sparkie-summary-row"><span>Risk</span><strong>Up to 100% of client cash is deployed; the loss threshold is not guaranteed.</strong></div>
         <div class="sparkie-summary-row"><span>Selection method</span><strong>${escapeHtml(data.recommendation_method || "Historical evidence ranking")}</strong></div>
+        <div class="sparkie-summary-row"><span>Catalog scope</span><strong>${escapeHtml(data.catalog_scope_note || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Why cash may not change the winner</span><strong>${escapeHtml(data.cash_scaling_note || "")}</strong></div>
+        <div class="sparkie-summary-row"><span>Selection diagnostic</span><strong>${escapeHtml(data.selection_diagnostic || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Catalog gate analysis</span><strong>${Number(analysis.qualified_results || 0).toLocaleString()} qualified / ${Number(analysis.evaluated_results || 0).toLocaleString()} evaluated · minimum ${Number(analysis.minimum_daily_evidence_days || 0).toLocaleString()} daily observations</strong></div>
         ${failureText ? `<div class="sparkie-summary-row"><span>Failed-gate counts</span><strong>${escapeHtml(failureText)}</strong></div>` : ""}
       </div>
       ${matchCard(`Requested cash $${Number(data.account_equity || 0).toLocaleString()}`, data.requested_cash_match)}
+      ${alternativeMatchesTable(data.alternative_matches)}
+      ${riskSensitivityTable(data.risk_sensitivity)}
     `;
   }
 

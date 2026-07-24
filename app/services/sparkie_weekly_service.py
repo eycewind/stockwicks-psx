@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.sparkie import SparkieWeeklyResult, SparkieWeeklyRun
 from app.services.barchart_symbols import barchart_weekly_rows_with_source
+from app.services.sparkie_risk_scoring import risk_adjusted_selection_metrics
 
 
 WEEKLY_ACTIVE_STATUSES = {"queued", "snapshotting", "running", "stopping"}
@@ -234,12 +235,6 @@ def weekly_recommendation(
         raise ValueError("The latest weekly catalog has no usable strategy results.")
 
     daily_risk_budget = round(float(account_equity) * float(risk_per_day_pct), 2)
-    requested = _best_match(
-        usable_rows,
-        account_equity=float(account_equity),
-        daily_risk_budget=daily_risk_budget,
-        confidence_level=float(confidence_level),
-    )
     evaluated_requested = [
         match
         for row in usable_rows
@@ -250,6 +245,24 @@ def weekly_recommendation(
             confidence_level=float(confidence_level),
         ))
     ]
+    ranked_requested = _rank_matches(evaluated_requested)
+    requested = ranked_requested[0] if ranked_requested else None
+    alternative_matches = _unique_symbol_alternatives(
+        ranked_requested,
+        exclude_symbol=str((requested or {}).get("symbol") or ""),
+        limit=4,
+    )
+    risk_sensitivity = _risk_sensitivity(
+        usable_rows,
+        account_equity=float(account_equity),
+        confidence_level=float(confidence_level),
+    )
+    sensitivity_winners = {
+        str(item.get("symbol") or "")
+        for item in risk_sensitivity
+        if item.get("symbol")
+    }
+    same_winner_across_risk_levels = len(sensitivity_winners) == 1 and bool(sensitivity_winners)
     evidence_ready_count = sum(
         1 for match in evaluated_requested
         if int(match.get("days_tested") or 0) >= MIN_RECOMMENDATION_DAYS
@@ -274,8 +287,9 @@ def weekly_recommendation(
             "minimum_daily_evidence_days": MIN_RECOMMENDATION_DAYS,
         },
         "recommendation_method": (
-            "Ranks candidates within the client's daily loss budget by conservative, typical, and strong historical "
-            "monthly P/L scenarios. Historical profits and losses are not clipped."
+            "Ranks candidates within the client's daily loss budget using bounded return evidence, profitable-day "
+            "confidence, drawdown, worst-day loss, downside deviation, and holdout validation. Raw historical P/L "
+            "is shown but cannot dominate the score by itself."
         ),
         "account_equity": round(float(account_equity), 2),
         "risk_per_day_pct": float(risk_per_day_pct),
@@ -283,6 +297,23 @@ def weekly_recommendation(
         "confidence_level": float(confidence_level),
         "all_cash_at_risk": True,
         "requested_cash_match": requested,
+        "alternative_matches": alternative_matches,
+        "risk_sensitivity": risk_sensitivity,
+        "same_winner_across_risk_levels": same_winner_across_risk_levels,
+        "cash_scaling_note": (
+            "Because every candidate deploys approximately 100% of cash, changing cash scales profit and loss "
+            "approximately proportionally and often should not change the ranking. Whole-share rounding can cause "
+            "small differences."
+        ),
+        "catalog_scope_note": (
+            "This saved-result search compares the completed 200-symbol weekly catalog. The stock-source and ticker "
+            "fields above apply to a fresh Sparkie Evaluation, not to this catalog search."
+        ),
+        "selection_diagnostic": (
+            f"{next(iter(sensitivity_winners))} remains the top risk-adjusted candidate at every tested risk level."
+            if same_winner_across_risk_levels
+            else "The top candidate changes as the daily risk budget changes."
+        ),
         "minimum_cash_match": None,
         "screening_only": True,
         "verification_required": True,
@@ -526,18 +557,71 @@ def _best_match(
             matches.append(match)
     if not matches:
         return None
-    matches.sort(
+    ranked = _rank_matches(matches)
+    return ranked[0] if ranked else None
+
+
+def _rank_matches(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        matches,
         key=lambda item: (
             bool(item["qualified"]),
+            float(item.get("selection_score") or 0.0),
+            float(item.get("positive_day_rate_95pct_low") or 0.0),
+            float(item.get("return_to_risk") or 0.0),
             float(item.get("conservative_monthly_pnl") or 0.0),
-            float(item.get("typical_monthly_pnl") or 0.0),
-            float(item["positive_day_rate"]),
-            float(item["score"]),
-            -float(item["estimated_max_drawdown"]),
+            -float(item.get("estimated_max_drawdown") or 0.0),
         ),
         reverse=True,
     )
-    return matches[0]
+
+
+def _unique_symbol_alternatives(
+    matches: list[dict[str, Any]],
+    *,
+    exclude_symbol: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen = {str(exclude_symbol or "").upper()}
+    for match in matches:
+        symbol = str(match.get("symbol") or "").upper()
+        if not symbol or symbol in seen:
+            continue
+        selected.append(match)
+        seen.add(symbol)
+        if len(selected) >= int(limit):
+            break
+    return selected
+
+
+def _risk_sensitivity(
+    rows: list[SparkieWeeklyResult],
+    *,
+    account_equity: float,
+    confidence_level: float,
+) -> list[dict[str, Any]]:
+    sensitivity: list[dict[str, Any]] = []
+    for risk_pct in (0.10, 0.25, 0.50, 1.00):
+        risk_budget = float(account_equity) * risk_pct
+        match = _best_match(
+            rows,
+            account_equity=float(account_equity),
+            daily_risk_budget=risk_budget,
+            confidence_level=float(confidence_level),
+        )
+        sensitivity.append({
+            "risk_per_day_pct": risk_pct,
+            "daily_risk_budget": round(risk_budget, 2),
+            "symbol": (match or {}).get("symbol"),
+            "interval": (match or {}).get("interval"),
+            "algo_name": (match or {}).get("algo_name"),
+            "qualified": bool((match or {}).get("qualified")),
+            "selection_score": (match or {}).get("selection_score"),
+            "conservative_monthly_pnl": (match or {}).get("conservative_monthly_pnl"),
+            "worst_daily_pnl": (match or {}).get("worst_daily_pnl"),
+        })
+    return sensitivity
 
 
 def _evaluate_result(
@@ -574,6 +658,17 @@ def _evaluate_result(
     estimated_strategy_drawdown = abs(float(row.max_drawdown or 0.0)) * scale
     effective_drawdown = max(max_drawdown, estimated_strategy_drawdown)
     monthly = _monthly_profile(scaled, float(account_equity))
+    scaled_validation_pnl = float(row.validation_profit_loss or 0.0) * scale
+    selection_metrics = risk_adjusted_selection_metrics(
+        daily_profits=scaled,
+        account_equity=float(account_equity),
+        daily_risk_budget=float(daily_risk_budget),
+        conservative_monthly_pnl=float(monthly.get("conservative_monthly_pnl") or 0.0),
+        typical_monthly_pnl=float(monthly.get("typical_monthly_pnl") or 0.0),
+        max_drawdown=effective_drawdown,
+        validation_profit_loss=scaled_validation_pnl,
+        confidence_preference=float(confidence_level),
+    )
     gates = {
         "minimum_daily_evidence": len(scaled) >= MIN_RECOMMENDATION_DAYS,
         "positive_average": avg > 0,
@@ -608,8 +703,10 @@ def _evaluate_result(
         "score": round(float(row.score or 0.0), 4),
         "win_rate": round(float(row.win_rate or 0.0), 4),
         "trades": int(row.trades or 0),
+        "validation_profit_loss": round(scaled_validation_pnl, 2),
         "params": _json_dict(row.params_json),
         "universe_sentiment": _json_dict(row.params_json).get("sparkie_universe_sentiment"),
+        **selection_metrics,
     }
 
 
