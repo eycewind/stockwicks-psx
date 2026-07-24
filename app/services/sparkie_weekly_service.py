@@ -27,6 +27,7 @@ WEEKLY_PROCESS_PREFIX = "sparkie-weekly-process:"
 DEFAULT_BASELINE_CASH = 10_000.0
 DEFAULT_BATCH_SIZE = 5
 DAILY_LOSS_MULTIPLIER = 5.0
+WEEKLY_UNIVERSE_POLICY = "barchart_price_volume_leaders_200"
 MIN_RECOMMENDATION_DAYS = max(20, int(os.getenv("SPARKIE_WEEKLY_MIN_RECOMMENDATION_DAYS", "20")))
 
 
@@ -56,6 +57,7 @@ def create_weekly_run(
         "algos": algos,
         "baseline_cash": float(baseline_cash),
         "batch_size": DEFAULT_BATCH_SIZE,
+        "universe_policy": WEEKLY_UNIVERSE_POLICY,
         "cash_policy": "full_cash_v1",
         "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
         "analysis_model_version": SPARKIE_ANALYSIS_MODEL_VERSION,
@@ -102,7 +104,7 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
     run.error_message = None
     run.status = "snapshotting"
     run.stage = "snapshotting"
-    run.message = "Saving the current Barchart Top 100 and Bottom 100 universe."
+    run.message = "Saving Barchart's current 200 Price Volume Leaders."
     run.heartbeat_at = datetime.utcnow()
     db.commit()
 
@@ -197,7 +199,7 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
                 "failed_symbols": int(run.failed_symbols or 0),
                 "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
                 "cash_policy": "full_cash_v1",
-                "universe_policy": "barchart_top_100_plus_bottom_100",
+                "universe_policy": WEEKLY_UNIVERSE_POLICY,
                 "exports": export_files,
             }
         )
@@ -236,6 +238,13 @@ def weekly_recommendation(
     )
     if not run:
         raise ValueError("Complete a Weekly Sparkie research run before using saved recommendations.")
+
+    run_summary = _json_dict(run.summary_json)
+    if run_summary.get("universe_policy") != WEEKLY_UNIVERSE_POLICY:
+        raise ValueError(
+            "The latest completed Weekly Sparkie catalog uses the retired Top/Bottom universe. "
+            "Restart Weekly Sparkie to build the required 200 Price Volume Leaders catalog."
+        )
 
     rows = db.query(SparkieWeeklyResult).filter_by(run_id=run.id).all()
     usable_rows = [row for row in rows if not row.error_message and row.daily_pnl_json]
@@ -327,8 +336,8 @@ def weekly_recommendation(
             "small differences."
         ),
         "catalog_scope_note": (
-            "This saved-result search compares the completed 200-symbol weekly catalog. The stock-source and ticker "
-            "fields above apply to a fresh Sparkie Evaluation, not to this catalog search."
+            "This saved-result search compares the completed Barchart 200 Price Volume Leaders catalog. "
+            "The stock-source and ticker fields above apply to a fresh Sparkie Evaluation, not to this catalog search."
         ),
         "weekly_risk_model_note": (
             "This catalog was backtested with a fixed 10% daily-loss lock. Risk requests above 10% can change "
@@ -372,6 +381,14 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
     now = datetime.utcnow()
     heartbeat_age = int((now - run.heartbeat_at).total_seconds()) if run.heartbeat_at else None
     summary = _json_dict(run.summary_json)
+    universe_rows = _json_list(run.universe_json)
+    universe_policy = summary.get("universe_policy") if isinstance(summary, dict) else None
+    if not universe_policy:
+        universe_policy = (
+            WEEKLY_UNIVERSE_POLICY
+            if not universe_rows or any(row.get("sparkieUniverseType") == "price_volume" for row in universe_rows)
+            else "legacy_top_bottom_200"
+        )
     return {
         "run_id": run.id,
         "status": run.status,
@@ -394,6 +411,7 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
         "heartbeat_age_seconds": heartbeat_age,
         "error_message": run.error_message,
         "exports": summary.get("exports", {}) if isinstance(summary, dict) else {},
+        "universe_policy": universe_policy,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -512,7 +530,9 @@ def _process_weekly_symbol(
                         params_json=_json({
                             **row,
                             "sparkie_universe_sentiment": universe_row.get("sparkieSentiment"),
+                            "sparkie_universe_type": universe_row.get("sparkieUniverseType"),
                             "sparkie_universe_rank": _universe_rank(universe_row),
+                            "sparkie_price_volume": _float_or_none(universe_row.get("priceVolume")),
                         }),
                     )
                 )
@@ -764,6 +784,13 @@ def _evaluate_result(
         ) if median_daily_dollar_volume > 0 else None,
         "params": params,
         "universe_sentiment": params.get("sparkie_universe_sentiment"),
+        "universe_type": params.get("sparkie_universe_type"),
+        "universe_label": (
+            "Barchart Price Volume Leaders"
+            if params.get("sparkie_universe_type") == "price_volume"
+            else params.get("sparkie_universe_sentiment")
+        ),
+        "price_volume": params.get("sparkie_price_volume"),
         **selection_metrics,
     }
 
@@ -821,6 +848,9 @@ def _wilson_interval(successes: int, trials: int, z_score: float = 1.96) -> tupl
 
 
 def _universe_rank(row: dict[str, Any]) -> int | None:
+    explicit_rank = _int_or_none(row.get("sparkieUniverseRank"))
+    if explicit_rank is not None:
+        return explicit_rank
     if str(row.get("sparkieSentiment") or "").lower() == "bearish":
         return _int_or_none(row.get("currentRankUsBottom100"))
     return _int_or_none(row.get("currentRankUsTop100"))
@@ -870,9 +900,9 @@ def _write_universe_snapshot(run: SparkieWeeklyRun, rows: list[dict[str, Any]]) 
     base.mkdir(parents=True, exist_ok=True)
     (base / "universe.json").write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
     fields = (
-        "symbol", "symbolName", "weightedAlpha", "currentRankUsTop100", "currentRankUsBottom100", "sparkieSentiment", "previousRank",
-        "lastPrice", "priceChange", "percentChange", "highPrice1y", "lowPrice1y",
-        "percentChange1y", "tradeTime",
+        "symbol", "symbolName", "sparkieUniverseRank", "sparkieUniverseType",
+        "priceVolume", "volume", "previousVolume", "lastPrice", "priceChange",
+        "percentChange", "tradeTime", "symbolType", "hasOptions",
     )
     with (base / "universe.csv").open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fields, extrasaction="ignore")
@@ -900,10 +930,10 @@ def _write_weekly_result_exports(
         .all()
     )
     results = [_weekly_result_export_row(row) for row in rows]
-    sentiment_counts: dict[str, int] = {}
+    universe_type_counts: dict[str, int] = {}
     for universe_row in universe:
-        sentiment = str(universe_row.get("sparkieSentiment") or "unknown")
-        sentiment_counts[sentiment] = sentiment_counts.get(sentiment, 0) + 1
+        universe_type = str(universe_row.get("sparkieUniverseType") or "unknown")
+        universe_type_counts[universe_type] = universe_type_counts.get(universe_type, 0) + 1
 
     results_json = base / "results.json"
     results_csv = base / "results.csv"
@@ -911,7 +941,8 @@ def _write_weekly_result_exports(
     results_json.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
 
     csv_fields = (
-        "symbol", "universe_rank", "universe_sentiment", "weighted_alpha", "interval", "algo_name",
+        "symbol", "universe_rank", "universe_type", "price_volume",
+        "universe_sentiment", "weighted_alpha", "interval", "algo_name",
         "reference_price", "baseline_cash", "baseline_shares", "score", "average_daily_pnl",
         "median_daily_pnl", "profitable_day_rate", "max_daily_profit", "max_daily_loss",
         "max_drawdown", "trades", "win_rate", "validation_profit_loss", "validation_trades",
@@ -927,7 +958,8 @@ def _write_weekly_result_exports(
         "generated_at": datetime.utcnow().isoformat(),
         "baseline_cash": float(run.baseline_cash or 0.0),
         "universe_symbols": len(universe),
-        "universe_by_sentiment": sentiment_counts,
+        "universe_policy": WEEKLY_UNIVERSE_POLICY,
+        "universe_by_type": universe_type_counts,
         "completed_symbols": int(run.completed_symbols or 0),
         "failed_symbols": int(run.failed_symbols or 0),
         "strategy_results": len(results),
@@ -950,6 +982,8 @@ def _weekly_result_export_row(row: SparkieWeeklyResult) -> dict[str, Any]:
         "symbol": row.symbol,
         "universe_rank": row.universe_rank,
         "universe_sentiment": params.get("sparkie_universe_sentiment", "unknown"),
+        "universe_type": params.get("sparkie_universe_type", "unknown"),
+        "price_volume": params.get("sparkie_price_volume"),
         "weighted_alpha": row.weighted_alpha,
         "interval": row.interval,
         "algo_name": row.algo_name,

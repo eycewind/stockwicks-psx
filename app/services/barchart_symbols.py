@@ -22,6 +22,10 @@ BARCHART_BEARISH_PAGE = (
     "https://www.barchart.com/stocks/top-100-stocks/bottom"
     "?viewName=main&orderBy=weightedAlpha&orderDir=asc"
 )
+BARCHART_PRICE_VOLUME_PAGE = (
+    "https://www.barchart.com/stocks/most-active/price-volume-leaders"
+    "?orderBy=priceVolume&orderDir=desc&page=all"
+)
 # Keep the original public constant for the existing Sparkie integration.
 BARCHART_TOP_100_PAGE = BARCHART_BULLISH_PAGE
 BARCHART_TOP_100_API = "https://www.barchart.com/proxies/core-api/v1/quotes/get"
@@ -38,6 +42,20 @@ BARCHART_TOP_100_FIELDS = (
     "highPrice1y",
     "lowPrice1y",
     "percentChange1y",
+    "tradeTime",
+    "symbolCode",
+    "hasOptions",
+    "symbolType",
+)
+BARCHART_PRICE_VOLUME_FIELDS = (
+    "symbol",
+    "symbolName",
+    "lastPrice",
+    "priceChange",
+    "percentChange",
+    "volume",
+    "previousVolume",
+    "priceVolume",
     "tradeTime",
     "symbolCode",
     "hasOptions",
@@ -61,6 +79,7 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 _CACHE: dict[str, dict[str, Any]] = {
     "bullish": {"rows": [], "expires_at": 0.0},
     "bearish": {"rows": [], "expires_at": 0.0},
+    "price_volume": {"rows": [], "expires_at": 0.0},
 }
 _SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "data" / "barchart_top_100_stocks.csv"
 
@@ -120,21 +139,102 @@ def barchart_bearish_rows_with_source(*, force_refresh: bool = False) -> tuple[l
 
 
 def barchart_weekly_rows_with_source(*, force_refresh: bool = False) -> tuple[list[dict[str, Any]], str]:
-    """Build the weekly 200-symbol universe from bullish and bearish leaders."""
-    bullish, bullish_source = barchart_bullish_rows_with_source(force_refresh=force_refresh)
-    bearish, bearish_source = barchart_bearish_rows_with_source(force_refresh=force_refresh)
+    """Return Barchart's 200 most-active stocks ranked by price volume."""
+
+    rows = barchart_price_volume_rows(force_refresh=force_refresh)
+    return rows, "barchart:price_volume_leaders:live"
+
+
+def barchart_price_volume_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:
+    """Return 200 U.S. common stocks ordered by current price × volume.
+
+    This is the same All US Exchanges universe displayed by Barchart's Price
+    Volume Leaders page. The page excludes ETFs and several non-common-stock
+    security types, making it a more suitable execution universe for Sparkie
+    than a directional weighted-alpha ranking.
+    """
+
+    now = time.monotonic()
+    cache = _CACHE["price_volume"]
+    cached = list(cache.get("rows") or [])
+    if cached and not force_refresh and float(cache.get("expires_at") or 0.0) > now:
+        return cached
+
+    timeout = max(2.0, min(float(os.getenv("SPARKIE_BARCHART_TIMEOUT_SECONDS", "12")), 30.0))
+    user_agent = "Mozilla/5.0 (compatible; Stockwicks-Sparkie/1.0)"
+    session = requests.Session()
+    page_response = session.get(
+        BARCHART_PRICE_VOLUME_PAGE,
+        headers={"Accept": "text/html,application/xhtml+xml", "User-Agent": user_agent},
+        timeout=timeout,
+    )
+    page_response.raise_for_status()
+
+    headers = {
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": BARCHART_PRICE_VOLUME_PAGE,
+        "User-Agent": user_agent,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    xsrf_token = session.cookies.get("XSRF-TOKEN")
+    if xsrf_token:
+        headers["X-XSRF-TOKEN"] = unquote(xsrf_token)
+
+    response = session.get(
+        BARCHART_TOP_100_API,
+        params={
+            "list": "stocks.us.price_volume.advances.overall",
+            "fields": ",".join(BARCHART_PRICE_VOLUME_FIELDS),
+            "orderBy": "priceVolume",
+            "orderDir": "desc",
+            "meta": "field.shortName,field.type,field.description,lists.lastUpdate",
+            "page": 1,
+            "limit": 200,
+            "raw": 1,
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    raw_rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list):
+        raise RuntimeError("Barchart Price Volume Leaders returned an unexpected response.")
+
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for sentiment, ranked_rows in (("bullish", bullish), ("bearish", bearish)):
-        for row in ranked_rows:
-            symbol = str(row.get("symbol") or "").upper().strip()
-            if not symbol or symbol in seen:
-                continue
-            seen.add(symbol)
-            rows.append({**row, "sparkieSentiment": sentiment})
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        symbol = str(raw_row.get("symbol") or "").upper().strip()
+        if not _SYMBOL_PATTERN.fullmatch(symbol) or symbol in seen:
+            continue
+        seen.add(symbol)
+        raw_values = raw_row.get("raw") if isinstance(raw_row.get("raw"), dict) else {}
+        row = {
+            field: raw_values.get(field) if field in raw_values else raw_row.get(field)
+            for field in BARCHART_PRICE_VOLUME_FIELDS
+        }
+        row.update(
+            {
+                "symbol": symbol,
+                "sparkieUniverseRank": len(rows) + 1,
+                "sparkieUniverseType": "price_volume",
+                # Preserve the existing result/export key while replacing its
+                # directional meaning with the new liquidity universe label.
+                "sparkieSentiment": "price_volume",
+            }
+        )
+        rows.append(row)
+
     if len(rows) < 200:
-        raise RuntimeError(f"Barchart weekly universe contained only {len(rows)} unique symbols; expected 200.")
-    return rows, f"bullish:{bullish_source},bearish:{bearish_source}"
+        raise RuntimeError(
+            f"Barchart Price Volume Leaders returned only {len(rows)} valid equities; expected 200."
+        )
+
+    ttl = max(60, min(int(os.getenv("SPARKIE_BARCHART_CACHE_SECONDS", "600")), 86_400))
+    cache.update({"rows": rows[:200], "expires_at": now + ttl})
+    return rows[:200]
 
 
 def barchart_top_100_rows(*, force_refresh: bool = False) -> list[dict[str, Any]]:

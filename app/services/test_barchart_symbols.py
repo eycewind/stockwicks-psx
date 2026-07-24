@@ -67,3 +67,33 @@ def test_bearish_ranking_uses_bottom_feed_and_rank(monkeypatch):
     assert rows[0]["currentRankUsBottom100"] == "1"
     assert session.calls[1][1]["params"]["list"] == "stocks.us.weighted_alpha.declines"
     assert session.calls[1][1]["params"]["orderDir"] == "asc"
+
+
+def test_weekly_universe_uses_200_price_volume_leaders(monkeypatch):
+    raw_rows = [
+        {
+            "symbol": f"PV{rank:03}",
+            "symbolName": f"Price Volume {rank}",
+            "lastPrice": str(250 - rank),
+            "volume": str(1_000_000 + rank),
+            "priceVolume": str(300_000_000 - rank),
+            "symbolType": 1,
+        }
+        for rank in range(200)
+    ]
+    session = _FakeSession(raw_rows)
+    monkeypatch.setattr(rankings.requests, "Session", lambda: session)
+    rankings._CACHE["price_volume"] = {"rows": [], "expires_at": 0.0}
+
+    rows, source = rankings.barchart_weekly_rows_with_source(force_refresh=True)
+
+    assert len(rows) == 200
+    assert rows[0]["sparkieUniverseRank"] == 1
+    assert rows[-1]["sparkieUniverseRank"] == 200
+    assert all(row["sparkieUniverseType"] == "price_volume" for row in rows)
+    assert source == "barchart:price_volume_leaders:live"
+    params = session.calls[1][1]["params"]
+    assert params["list"] == "stocks.us.price_volume.advances.overall"
+    assert params["orderBy"] == "priceVolume"
+    assert params["orderDir"] == "desc"
+    assert params["limit"] == 200

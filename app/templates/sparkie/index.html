@@ -271,7 +271,7 @@
     <div class="sparkie-header" style="margin-bottom:12px;">
       <div>
         <h2>Weekly Sparkie Research</h2>
-        <p class="sparkie-muted">Save Barchart's Top 100 and Bottom 100 (200 symbols), process five symbols at a time, and reuse the completed catalog for fast cash/target matching. This runner does not use Celery.</p>
+        <p class="sparkie-muted">Save Barchart's 200 Price Volume Leaders, process five symbols at a time, and reuse the completed high-activity catalog for fast cash/risk matching. This runner does not use Celery.</p>
       </div>
     </div>
     <div class="sparkie-row">
@@ -807,7 +807,7 @@
     }
     const status = String(run.status || "").toLowerCase();
     if (!Number(run.total_symbols || 0) && status === "snapshotting") {
-      // The database count is populated after both Barchart lists download.
+      // The database count is populated after Barchart's live list downloads.
       // Show the planned universe while that snapshot is being created.
       run.total_symbols = 200;
     }
@@ -834,6 +834,7 @@
       </div>
       <div class="sparkie-summary">
         <div class="sparkie-summary-row"><span>Run</span><strong>${escapeHtml(run.run_id)}</strong></div>
+        <div class="sparkie-summary-row"><span>Universe</span><strong>${run.universe_policy === "barchart_price_volume_leaders_200" ? "Barchart 200 Price Volume Leaders" : "Legacy Top/Bottom catalog"}</strong></div>
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(run.completed_symbols || 0)} / ${Number(run.total_symbols || 100)} symbols · ${Number(run.progress_pct || 0)}%</strong></div>
         <div class="sparkie-summary-row"><span>Current batch</span><strong>${Number(run.current_batch || 0)} · ${escapeHtml(run.current_symbol || "checkpoint idle")}</strong></div>
         <div class="sparkie-summary-row"><span>Saved results</span><strong>${Number(run.result_count || 0).toLocaleString()} · failed symbols ${Number(run.failed_symbols || 0)}</strong></div>
@@ -864,7 +865,7 @@
         <div class="sparkie-summary">
           <div class="sparkie-summary-row"><span>Combination</span><strong>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</strong></div>
           <div class="sparkie-summary-row"><span>Cash deployment</span><strong>${Number(match.shares || 0).toLocaleString()} shares · about $${Number(match.estimated_notional || 0).toLocaleString()} (${Number(match.cash_deployment_pct || 0).toFixed(1)}% of cash)</strong></div>
-          <div class="sparkie-summary-row"><span>Universe</span><strong>${escapeHtml(match.universe_sentiment || "unknown")} ranking</strong></div>
+          <div class="sparkie-summary-row"><span>Universe</span><strong>${escapeHtml(match.universe_label || match.universe_type || match.universe_sentiment || "unknown")}</strong></div>
           <div class="sparkie-summary-row"><span>Daily risk evidence</span><strong>${Number(match.days_tested || 0)} daily observations · worst day $${Number(match.worst_daily_pnl || 0).toLocaleString()} · ${Number(match.max_loss_days || 0)} loss-budget breach days</strong></div>
           <div class="sparkie-summary-row"><span>Risk-adjusted selection</span><strong>Score ${Number(match.selection_score || 0).toFixed(1)} / 100 · return/risk ${Number(match.return_to_risk || 0).toFixed(2)} · worst-day budget used ${Number(match.risk_budget_utilization_pct || 0).toFixed(1)}%</strong></div>
           <div class="sparkie-summary-row"><span>Profitable-day confidence</span><strong>${(Number(match.positive_day_rate || 0) * 100).toFixed(1)}% observed · ${(Number(match.positive_day_rate_95pct_low || 0) * 100).toFixed(1)}% conservative 95% lower estimate · requested ${(Number(match.confidence_preference || 0) * 100).toFixed(1)}%</strong></div>
@@ -1002,7 +1003,7 @@
     weeklyStatusBox.innerHTML = renderWeeklyStatus(data.weekly_run);
   });
   document.getElementById("weeklyRestartBtn").addEventListener("click", async () => {
-    if (!window.confirm("Restart Weekly Sparkie from fresh Top 100 and Bottom 100 snapshots? Existing run history will remain saved.")) return;
+    if (!window.confirm("Restart Weekly Sparkie from a fresh Barchart 200 Price Volume Leaders snapshot? Existing run history will remain saved.")) return;
     const data = await requestJson("/api/sparkie/weekly/restart", {
       method: "POST",
       body: JSON.stringify({baseline_cash: Number(document.getElementById("weeklyBaselineCash").value || 10000)})
