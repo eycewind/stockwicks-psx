@@ -119,12 +119,17 @@ def create_sparkie_job(
     symbol_bucket: list[str] | None = None,
     symbol_source: str = "own_list",
     risk_per_day_pct: float | None = None,
+    interval_policy: list[str] | None = None,
+    algo_policy: list[str] | None = None,
+    finalist_verification: bool = False,
+    replay_gate_override: bool = False,
+    override_failed_gates: list[str] | None = None,
 ) -> SparkieJob:
     # A user may intentionally narrow or replace the configured universe for
     # one evaluation. An empty selection keeps the operator's default policy.
     symbols = list(symbol_bucket or []) or sparkie_symbol_bucket()
-    intervals = sparkie_interval_policy()
-    algos = sparkie_algo_policy()
+    intervals = list(interval_policy or []) or sparkie_interval_policy()
+    algos = list(algo_policy or []) or sparkie_algo_policy()
     request = {
         "account_equity": float(account_equity),
         "target_profit": float(target_profit),
@@ -133,6 +138,11 @@ def create_sparkie_job(
         "symbol_bucket": symbols,
         "symbol_source": symbol_source,
         "cash_deployment_policy": CASH_DEPLOYMENT_POLICY,
+        "finalist_verification": bool(finalist_verification),
+        "replay_gate_override": bool(replay_gate_override),
+        "override_failed_gates": sorted(
+            {str(gate).strip() for gate in (override_failed_gates or []) if str(gate).strip()}
+        ),
     }
     if risk_per_day_pct is not None:
         risk_pct = max(0.10, min(float(risk_per_day_pct), 1.0))
@@ -419,6 +429,24 @@ def run_sparkie_job(db: Session, job_id: str) -> dict[str, Any]:
 
     best = ranked[0]
     decision = _decision_for_candidate(job, best)
+    if not decision["run_replay"] and _replay_gate_override_requested(job):
+        overridden_gates = sorted(
+            set(_replay_override_failed_gates(job))
+            | set(_risk_first_failed_gates(job, best))
+        )
+        request = _json_dict(job.request_json)
+        request["override_failed_gates"] = overridden_gates
+        job.request_json = _json(request)
+        original_reason = str(decision.get("reason") or decision.get("message") or "")
+        decision = {
+            "recommendation": "paper_override_candidate",
+            "run_replay": True,
+            "message": "Sparkie queued Replay under the user's explicit research-gate override.",
+            "reason": (
+                f"Replay-only override acknowledged for: {', '.join(overridden_gates) or 'the failed research gates'}. "
+                f"Original screening decision: {original_reason} A completed Replay is still required before bot setup."
+            ),
+        }
     _apply_best_candidate(db, job, best, decision)
 
     replay_session_id = None
@@ -1321,6 +1349,19 @@ def _is_risk_first_job(job: SparkieJob) -> bool:
     return request.get("analysis_mode") == "risk_first_monthly_v1"
 
 
+def _replay_gate_override_requested(job: SparkieJob) -> bool:
+    request = _json_dict(job.request_json)
+    return bool(request.get("replay_gate_override"))
+
+
+def _replay_override_failed_gates(job: SparkieJob) -> list[str]:
+    request = _json_dict(job.request_json)
+    raw = request.get("override_failed_gates")
+    if not isinstance(raw, list):
+        return []
+    return sorted({str(gate).strip() for gate in raw if str(gate).strip()})
+
+
 def _risk_first_budget(job: SparkieJob) -> float:
     request = _json_dict(job.request_json)
     return max(0.0, float(request.get("risk_per_day_usd") or job.target_profit or 0.0))
@@ -1406,6 +1447,41 @@ def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]
         "monthly_return_profile": profile,
         "selection_metrics": selection_metrics,
     }
+
+
+def _risk_first_failed_gates(job: SparkieJob, row: dict[str, Any]) -> list[str]:
+    if not _is_risk_first_job(job):
+        return []
+    raw_daily = (row.get("params") or {}).get("daily_pnl")
+    profile = _monthly_return_profile(raw_daily, float(job.account_equity or 0.0))
+    risk_budget = _risk_first_budget(job)
+    metrics = _risk_first_selection_metrics(job, row, profile)
+    execution = _execution_evidence(row)
+    daily_profits = [
+        float(item.get("profit_loss") or 0.0)
+        for item in raw_daily
+        if isinstance(raw_daily, list) and isinstance(item, dict) and item.get("date")
+    ] if isinstance(raw_daily, list) else []
+    failed: list[str] = []
+    if not profile.get("available") or int(profile.get("days_tested") or 0) < MIN_FINALIST_DAILY_EVIDENCE_DAYS:
+        failed.append("minimum_daily_evidence")
+    if float(profile.get("worst_daily_pnl") or 0.0) < -risk_budget:
+        failed.append("daily_loss_limit_respected")
+    if float(profile.get("conservative_monthly_pnl") or 0.0) <= 0:
+        failed.append("conservative_monthly_return_positive")
+    if not daily_profits or sum(daily_profits) / len(daily_profits) <= 0:
+        failed.append("positive_average")
+    if float(row.get("validation_profit_loss") or 0.0) <= 0 or int(row.get("validation_trades") or 0) < 3:
+        failed.append("validation_positive")
+    if int(row.get("trades") or 0) < 5:
+        failed.append("trade_evidence")
+    if not execution["execution_cost_model_present"]:
+        failed.append("execution_cost_model_present")
+    if not execution["liquidity_capacity_passed"]:
+        failed.append("liquidity_capacity")
+    if float(metrics.get("positive_day_rate_95pct_low") or 0.0) < float(job.confidence_level or 0.0):
+        failed.append("profitable_day_confidence")
+    return failed
 
 
 def _risk_first_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tuple[float, ...]:

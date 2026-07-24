@@ -337,6 +337,7 @@
   let activeJobId = null;
   let statusTimer = null;
   let runRequestPending = false;
+  let pendingWeeklyVerification = null;
 
   function apiPath(path) {
     return `${urlPrefix}${path}`;
@@ -415,13 +416,20 @@
       .split(/[\s,]+/)
       .map((value) => value.trim().toUpperCase())
       .filter(Boolean);
+    const verification = pendingWeeklyVerification;
     return {
       account_equity: Number(document.getElementById("accountEquity").value || 0),
       risk_per_day_pct: Number(document.getElementById("riskPerDayPct").value || 0) / 100,
       confidence_level: Number(document.getElementById("confidenceLevel").value || 0.6),
       symbol_source: symbolSource.value,
       acknowledged_full_cash_risk: fullCashRiskAcknowledged.checked,
-      symbols
+      symbols,
+      finalist_verification: Boolean(verification),
+      replay_gate_override: Boolean(verification && !verification.qualified),
+      acknowledged_gate_override: Boolean(verification && !verification.qualified),
+      override_failed_gates: verification ? verification.failedGates : [],
+      forced_interval: verification ? verification.interval : null,
+      forced_algo_name: verification ? verification.algoName : null
     };
   }
 
@@ -519,6 +527,8 @@
       ? `${escapeHtml(replay.status || "unknown")} &middot; ${Number(replay.calendar_days || 0)}-calendar-day window (${escapeHtml(replay.start_date || "?")} to ${escapeHtml(replay.end_date || "?")}) &middot; P/L $${Number(replay.profit_loss || 0).toLocaleString()} &middot; ${Number(replay.trades || 0).toLocaleString()} trades${replay.error_message ? ` &middot; ${escapeHtml(replay.error_message)}` : ""}`
       : "Not queued yet";
     const botSetup = data.bot_setup || {};
+    const liveOverrideGates = Array.isArray(botSetup.live_override_gates) ? botSetup.live_override_gates : [];
+    const liveOverrideGateText = liveOverrideGates.map((gate) => String(gate).replaceAll("_", " ")).join(", ");
     const setupBotActions = botSetup.paper_allowed ? `
       <div style="height:14px"></div>
       <div class="sparkie-status-banner">
@@ -527,9 +537,10 @@
         <div class="sparkie-actions">
           <button class="btn btn-primary" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', false)">Start Paper Bot</button>
           ${botSetup.live_mirror_allowed ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true)">Start Schwab Live Bot</button>` : ""}
+          ${botSetup.live_override_available ? `<button class="btn btn-danger" type="button" onclick="setupSparkieBot('${escapeHtml(data.job_id)}', true, true, '${escapeHtml(liveOverrideGates.join(","))}')">Start Schwab Live Bot With Override</button>` : ""}
         </div>
         ${!botSetup.live_mirror_allowed
-          ? `<div class="sparkie-warn">Live Mirror is blocked: ${escapeHtml(botSetup.live_mirror_block_reason || "the historical evidence or Replay verification does not meet Sparkie's safety gate.")} Paper mode remains available.</div>`
+          ? `<div class="sparkie-warn">Live Mirror standard approval is blocked: ${escapeHtml(botSetup.live_mirror_block_reason || "the historical evidence or Replay verification does not meet Sparkie's safety gate.")} ${botSetup.live_override_available ? `User override is available for: ${escapeHtml(liveOverrideGateText)}.` : "Paper mode remains available."}</div>`
           : `<div class="sparkie-warn">Live quantity is recalculated from the full cash allocation at each actual entry price; Replay's historical share count is never reused for a live order.</div>`}
       </div>
     ` : "";
@@ -598,7 +609,7 @@
     `;
   }
 
-  async function setupSparkieBot(jobId, mirrorLive) {
+  async function setupSparkieBot(jobId, mirrorLive, gateOverride = false, overrideGatesCsv = "") {
     if (!fullCashRiskAcknowledged.checked) {
       window.alert("Acknowledge the full-cash risk before setting up a bot.");
       return;
@@ -607,14 +618,23 @@
       if (!window.confirm("Create and immediately start a paper bot using this verified Replay configuration?")) return;
     } else {
       const accepted = window.prompt(
-        "WARNING: This starts a live bot that can submit real Schwab orders using the configured full-cash sizing. Sparkie's recommendation is guidance, not a guarantee. Type LIVE to acknowledge and start."
+        gateOverride
+          ? "HIGH-RISK OVERRIDE: This starts a live bot despite failed research gates. It can submit real Schwab orders using full-cash sizing, and historical results are not a guarantee. Type LIVE OVERRIDE to acknowledge and start."
+          : "WARNING: This starts a live bot that can submit real Schwab orders using the configured full-cash sizing. Sparkie's recommendation is guidance, not a guarantee. Type LIVE to acknowledge and start."
       );
-      if (accepted !== "LIVE") return;
+      if (accepted !== (gateOverride ? "LIVE OVERRIDE" : "LIVE")) return;
     }
     try {
+      const overrideGates = String(overrideGatesCsv || "").split(",").map((gate) => gate.trim()).filter(Boolean);
       const data = await requestJson(`/api/sparkie/setup-live-bot/${encodeURIComponent(jobId)}`, {
         method: "POST",
-        body: JSON.stringify({mirror_live: mirrorLive, acknowledged_live_risk: mirrorLive, acknowledged_full_cash_risk: true})
+        body: JSON.stringify({
+          mirror_live: mirrorLive,
+          acknowledged_live_risk: mirrorLive,
+          acknowledged_full_cash_risk: true,
+          acknowledged_gate_override: Boolean(gateOverride),
+          override_failed_gates: gateOverride ? overrideGates : []
+        })
       });
       const mode = data.mirror_live ? "Schwab Live Mirror" : "paper";
       window.alert(`Bot #${data.bot_id} started in ${mode} mode for ${data.symbol} ${data.interval} ${data.algo_name}.`);
@@ -711,6 +731,7 @@
         method: "POST",
         body: JSON.stringify(evaluationPayload())
       });
+      pendingWeeklyVerification = null;
       activeJobId = data.job_id;
       saveActiveJob(activeJobId);
       resultBox.innerHTML = renderEvaluation(data);
@@ -860,7 +881,11 @@
 
   function matchCard(title, match) {
     if (!match) return `<div class="sparkie-status-banner"><strong>${escapeHtml(title)}</strong><div class="sparkie-muted">No calculable saved match.</div></div>`;
-    const failedGates = Object.entries(match.gates || {}).filter(([, passed]) => !passed).map(([name]) => name.replaceAll("_", " ")).join(", ");
+    const failedGateNames = Object.entries(match.gates || {}).filter(([, passed]) => !passed).map(([name]) => name);
+    const failedGates = failedGateNames.map((name) => name.replaceAll("_", " ")).join(", ");
+    const verificationLabel = match.qualified
+      ? "Run Fresh Finalist Verification"
+      : "Run Replay With Gate Override";
     return `
       <div class="sparkie-status-banner" style="border-color:${match.qualified ? "rgba(94,234,212,.6)" : "rgba(251,191,36,.6)"}">
         <strong>${escapeHtml(title)} · ${match.qualified ? "Qualified for fresh verification" : "Did not pass every gate"}</strong>
@@ -877,14 +902,25 @@
           <div class="sparkie-summary-row"><span>Daily loss budget / drawdown</span><strong>-$${Number(match.daily_risk_budget || 0).toLocaleString()} daily stop · estimated max drawdown $${Number(match.estimated_max_drawdown || 0).toLocaleString()}</strong></div>
           ${failedGates ? `<div class="sparkie-summary-row"><span>Failed gates</span><strong>${escapeHtml(failedGates)}</strong></div>` : ""}
         </div>
-        ${match.qualified ? `<div class="sparkie-actions"><button class="btn btn-primary" type="button" data-weekly-verify="${escapeHtml(match.symbol)}" data-weekly-cash="${Number(match.account_equity || 0)}">Run Fresh Finalist Verification</button></div>` : ""}
+        <div class="sparkie-actions">
+          <button class="${match.qualified ? "btn btn-primary" : "btn btn-secondary"}" type="button"
+            data-weekly-verify="${escapeHtml(match.symbol)}"
+            data-weekly-cash="${Number(match.account_equity || 0)}"
+            data-weekly-interval="${escapeHtml(match.interval)}"
+            data-weekly-algo="${escapeHtml(match.algo_name)}"
+            data-weekly-qualified="${match.qualified ? "true" : "false"}"
+            data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}">${verificationLabel}</button>
+        </div>
+        ${!match.qualified ? `<div class="sparkie-warn">This permits historical Replay and then a paper bot. Live Mirror still requires a profitable Replay and a separate acknowledgement; structural evidence gates cannot be overridden for live trading.</div>` : ""}
       </div>
     `;
   }
 
   function alternativeMatchesTable(matches) {
     if (!Array.isArray(matches) || matches.length === 0) return "";
-    const rows = matches.map((match, index) => `
+    const rows = matches.map((match, index) => {
+      const failedGateNames = Object.entries(match.gates || {}).filter(([, passed]) => !passed).map(([name]) => name);
+      return `
       <tr>
         <td>${index + 2}</td>
         <td>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</td>
@@ -893,9 +929,16 @@
         <td>$${Number(match.conservative_monthly_pnl || 0).toLocaleString()}</td>
         <td>$${Number(match.worst_daily_pnl || 0).toLocaleString()}</td>
         <td>$${Number(match.estimated_max_drawdown || 0).toLocaleString()}</td>
-        <td><button class="btn btn-secondary" type="button" data-weekly-verify="${escapeHtml(match.symbol)}" data-weekly-cash="${Number(match.account_equity || 0)}">Verify</button></td>
+        <td><button class="btn btn-secondary" type="button"
+          data-weekly-verify="${escapeHtml(match.symbol)}"
+          data-weekly-cash="${Number(match.account_equity || 0)}"
+          data-weekly-interval="${escapeHtml(match.interval)}"
+          data-weekly-algo="${escapeHtml(match.algo_name)}"
+          data-weekly-qualified="${match.qualified ? "true" : "false"}"
+          data-weekly-failed-gates="${escapeHtml(failedGateNames.join(","))}">${match.qualified ? "Verify" : "Replay override"}</button></td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
     return `
       <h3 style="margin-top:18px;">Different-symbol alternatives</h3>
       <div style="overflow-x:auto;">
@@ -909,7 +952,12 @@
 
   function rankingAuditTable(matches) {
     if (!Array.isArray(matches) || matches.length === 0) return "";
-    const rows = matches.map((match) => `
+    const rows = matches.map((match) => {
+      const failedGates = Object.entries(match.gates || {})
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name.replaceAll("_", " "))
+        .join(", ");
+      return `
       <tr>
         <td>${Number(match.catalog_rank || 0)}</td>
         <td>${escapeHtml(match.symbol)} ${escapeHtml(match.interval)} ${escapeHtml(match.algo_name)}</td>
@@ -919,13 +967,15 @@
         <td>${Number(match.selection_score || 0).toFixed(1)}</td>
         <td>$${Number(match.worst_daily_pnl || 0).toLocaleString()}</td>
         <td>$${Number(match.conservative_monthly_pnl || 0).toLocaleString()}</td>
+        <td>${escapeHtml(failedGates || "None")}</td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
     return `
       <h3 style="margin-top:18px;">Ranking audit — top 10 combinations</h3>
       <div style="overflow-x:auto;">
         <table class="sparkie-table">
-          <thead><tr><th>Rank</th><th>Symbol / interval / algo</th><th>Passed gates</th><th>95% success floor</th><th>Observed success</th><th>Risk score</th><th>Worst day</th><th>Conservative month</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Symbol / interval / algo</th><th>Passed gates</th><th>95% success floor</th><th>Observed success</th><th>Composite score</th><th>Worst day</th><th>Conservative month</th><th>Failed gates</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -1037,12 +1087,36 @@
   weeklyRecommendationBox.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-weekly-verify]");
     if (!button) return;
+    const qualified = button.getAttribute("data-weekly-qualified") === "true";
+    const failedGates = String(button.getAttribute("data-weekly-failed-gates") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const interval = button.getAttribute("data-weekly-interval");
+    const algoName = button.getAttribute("data-weekly-algo");
+    if (!qualified) {
+      const readableGates = failedGates.map((gate) => gate.replaceAll("_", " ")).join(", ");
+      const accepted = window.confirm(
+        `This candidate did not pass: ${readableGates || "one or more research gates"}.\n\n` +
+        "Continue with a historical Replay override? Replay sends no broker orders. " +
+        "Paper setup remains available afterward; Live Mirror requires a profitable Replay and a separate explicit override."
+      );
+      if (!accepted) return;
+    }
+    pendingWeeklyVerification = {
+      qualified,
+      failedGates,
+      interval,
+      algoName
+    };
     document.getElementById("accountEquity").value = button.getAttribute("data-weekly-cash");
     symbolSource.value = "own_list";
     await loadSymbolSource();
     symbolBucket.value = button.getAttribute("data-weekly-verify");
     symbolBucket.readOnly = false;
-    resultBox.textContent = "Weekly match loaded. Starting a fresh one-symbol Sparkie evaluation and Replay verification...";
+    resultBox.textContent = qualified
+      ? "Weekly match loaded. Starting an exact finalist backtest and Replay verification..."
+      : "Weekly match loaded. Starting an exact finalist backtest and user-authorized Replay override...";
     runBtn.click();
   });
 

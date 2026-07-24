@@ -90,6 +90,23 @@ SPARKIE_PROCESS_PREFIX = "sparkie-process:"
 # A live account must have enough independent historical days to evaluate a
 # daily-target claim.  Six days can look good by chance and is paper-only.
 SPARKIE_MIN_LIVE_EVIDENCE_DAYS = max(20, int(os.getenv("SPARKIE_MIN_LIVE_EVIDENCE_DAYS", "20")))
+SPARKIE_RESEARCH_GATES = {
+    "minimum_daily_evidence",
+    "positive_average",
+    "validation_positive",
+    "trade_evidence",
+    "daily_loss_limit_respected",
+    "execution_cost_model_present",
+    "liquidity_capacity",
+    "profitable_day_confidence",
+    "conservative_monthly_return_positive",
+}
+# These gates express client risk preference or market-capacity conservatism.
+# Structural evidence/model gates remain non-overridable for live brokerage.
+SPARKIE_LIVE_OVERRIDABLE_GATES = {
+    "liquidity_capacity",
+    "profitable_day_confidence",
+}
 
 
 class GoalFeasibilityRequest(BaseModel):
@@ -125,6 +142,12 @@ class SparkieEvaluationRequest(BaseModel):
     max_sessions: int = Field(12, ge=1, le=30)
     use_backtest_prefilter: bool = True
     replay_finalists: int = Field(3, ge=1, le=12)
+    finalist_verification: bool = False
+    replay_gate_override: bool = False
+    acknowledged_gate_override: bool = False
+    override_failed_gates: list[str] = Field(default_factory=list)
+    forced_interval: str | None = None
+    forced_algo_name: str | None = None
 
 
 class SparkieClearHistoryRequest(BaseModel):
@@ -135,6 +158,8 @@ class SparkieLiveBotSetupRequest(BaseModel):
     mirror_live: bool = False
     acknowledged_live_risk: bool = False
     acknowledged_full_cash_risk: bool = False
+    acknowledged_gate_override: bool = False
+    override_failed_gates: list[str] = Field(default_factory=list)
 
 
 class SparkieWeeklyRunRequest(BaseModel):
@@ -270,12 +295,39 @@ def run_evaluation(
         return result
 
     if float(payload.account_equity or 0.0) < MIN_ACCOUNT_EQUITY:
-        raise HTTPException(status_code=400, detail="Sparkie requires at least $5,000 account equity.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sparkie requires at least ${MIN_ACCOUNT_EQUITY:,.0f} account equity.",
+        )
+
+    override_failed_gates = sorted(
+        {str(gate).strip() for gate in payload.override_failed_gates if str(gate).strip()}
+    )
+    unknown_override_gates = sorted(set(override_failed_gates) - SPARKIE_RESEARCH_GATES)
+    if unknown_override_gates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown Sparkie gate override(s): {', '.join(unknown_override_gates)}.",
+        )
+    if payload.replay_gate_override and not payload.finalist_verification:
+        raise HTTPException(status_code=400, detail="Replay gate override requires an exact finalist verification.")
+    if payload.finalist_verification:
+        if payload.replay_gate_override and not payload.acknowledged_gate_override:
+            raise HTTPException(
+                status_code=400,
+                detail="Explicit failed-gate acknowledgement is required for a Replay override.",
+            )
+        if not payload.forced_interval or payload.forced_interval not in {"5min", "10min", "15min"}:
+            raise HTTPException(status_code=400, detail="Select the exact 5min, 10min, or 15min finalist interval.")
+        if not payload.forced_algo_name or payload.forced_algo_name not in ALLOWED_MM_ALGOS:
+            raise HTTPException(status_code=400, detail="Select the exact supported finalist algorithm.")
 
     if payload.symbol_source == "own_list":
         selected_symbols = _clean_symbols(payload.symbols)
         if not selected_symbols:
             raise HTTPException(status_code=400, detail="Enter at least one ticker for Own List.")
+        if payload.finalist_verification and len(selected_symbols) != 1:
+            raise HTTPException(status_code=400, detail="Finalist verification must use exactly one symbol.")
     else:
         try:
             selected_symbols = (
@@ -298,6 +350,11 @@ def run_evaluation(
         symbol_bucket=selected_symbols,
         symbol_source=payload.symbol_source,
         risk_per_day_pct=payload.risk_per_day_pct,
+        interval_policy=[payload.forced_interval] if payload.finalist_verification else None,
+        algo_policy=[payload.forced_algo_name] if payload.finalist_verification else None,
+        finalist_verification=payload.finalist_verification,
+        replay_gate_override=payload.replay_gate_override,
+        override_failed_gates=override_failed_gates,
     )
     db.commit()
 
@@ -480,6 +537,39 @@ def setup_live_bot(
     if payload.mirror_live:
         if not payload.acknowledged_live_risk:
             raise HTTPException(status_code=400, detail="Explicit live-trading risk acknowledgement is required.")
+        request_payload = _parse_json_value(job.request_json, {})
+        job_override_gates = {
+            str(gate).strip()
+            for gate in (
+                request_payload.get("override_failed_gates", [])
+                if isinstance(request_payload, dict)
+                else []
+            )
+            if str(gate).strip()
+        }
+        requested_override_gates = {
+            str(gate).strip() for gate in payload.override_failed_gates if str(gate).strip()
+        }
+        non_overridable_gates = sorted(job_override_gates - SPARKIE_LIVE_OVERRIDABLE_GATES)
+        if non_overridable_gates:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Live Mirror remains blocked because these structural gates cannot be overridden: "
+                    f"{', '.join(non_overridable_gates)}. Start a paper bot instead."
+                ),
+            )
+        if job_override_gates:
+            if not payload.acknowledged_gate_override:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Explicit live failed-gate acknowledgement is required.",
+                )
+            if not job_override_gates.issubset(requested_override_gates):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Acknowledge every failed research gate before starting Live Mirror.",
+                )
         candidate = (
             db.query(SparkieCandidate)
             .filter(SparkieCandidate.job_id == job.id)
@@ -491,9 +581,21 @@ def setup_live_bot(
         best = _sparkie_candidate_payload(candidate, job.target_period, job.target_profit) if candidate else _sparkie_best_backtest_payload(job)
         readiness = _sparkie_live_readiness(best, float(job.confidence_level or 0.0))
         replay_pnl, _replay_trades = _replay_session_pnl(db, int(replay.id))
-        if not readiness["eligible"] or replay_pnl <= 0:
-            detail = readiness["reason"] if not readiness["eligible"] else "Replay verification was not profitable."
-            raise HTTPException(status_code=409, detail=f"Live Mirror is blocked: {detail} Start a paper bot instead.")
+        confidence_overridden = bool(
+            "profitable_day_confidence" in job_override_gates
+            and "confidence" in str(readiness.get("reason") or "").lower()
+        )
+        readiness_eligible = bool(readiness["eligible"] or confidence_overridden)
+        if not readiness_eligible:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Live Mirror is blocked: {readiness['reason']} Start a paper bot instead.",
+            )
+        if replay_pnl <= 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Live Mirror is blocked: Replay verification was not profitable. Start a paper bot instead.",
+            )
 
     bot = _create_live_bot_from_replay_session(
         db,
@@ -509,7 +611,15 @@ def setup_live_bot(
             f"Started bot #{bot.id} from Replay #{replay.id} "
             f"({'Schwab Live Mirror' if payload.mirror_live else 'paper-only'})."
         ),
-        {"bot_id": bot.id, "replay_session_id": replay.id, "mirror_live": bool(payload.mirror_live)},
+        {
+            "bot_id": bot.id,
+            "replay_session_id": replay.id,
+            "mirror_live": bool(payload.mirror_live),
+            "acknowledged_gate_override": bool(payload.acknowledged_gate_override),
+            "override_failed_gates": sorted(
+                {str(gate).strip() for gate in payload.override_failed_gates if str(gate).strip()}
+            ),
+        },
     )
     db.commit()
     return {
@@ -821,6 +931,22 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         and int(replay_verification.get("trades") or 0) > 0
     )
     live_readiness = _sparkie_live_readiness(best, float(job.confidence_level or 0.0))
+    replay_override_gates = sorted({
+        str(gate).strip()
+        for gate in (
+            request_payload.get("override_failed_gates", [])
+            if isinstance(request_payload, dict)
+            else []
+        )
+        if str(gate).strip()
+    })
+    non_overridable_live_gates = sorted(
+        set(replay_override_gates) - SPARKIE_LIVE_OVERRIDABLE_GATES
+    )
+    confidence_live_override = bool(
+        "profitable_day_confidence" in replay_override_gates
+        and "confidence" in str(live_readiness.get("reason") or "").lower()
+    )
     live_mirror_allowed = bool(
         job.replay_session_id
         and replay_completed
@@ -828,6 +954,27 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
         and job.recommendation == "paper_candidate"
         and live_readiness["eligible"]
     )
+    live_override_available = bool(
+        job.replay_session_id
+        and replay_completed
+        and replay_positive
+        and job.recommendation == "paper_override_candidate"
+        and replay_override_gates
+        and not non_overridable_live_gates
+        and (live_readiness["eligible"] or confidence_live_override)
+    )
+    if non_overridable_live_gates:
+        live_block_reason = (
+            "These structural research gates cannot be overridden for live brokerage: "
+            f"{', '.join(non_overridable_live_gates)}."
+        )
+    elif live_override_available:
+        live_block_reason = (
+            "Standard Live Mirror approval was not granted. A positive Replay allows an explicit user override "
+            f"for: {', '.join(replay_override_gates)}."
+        )
+    else:
+        live_block_reason = live_readiness["reason"]
     payload = {
         "ok": True,
         "job_id": job.id,
@@ -884,9 +1031,15 @@ def _sparkie_v2_job_payload(db: Session, job: SparkieJob, *, include_details: bo
             "paper_allowed": bool(job.replay_session_id and replay_completed),
             "live_mirror_allowed": live_mirror_allowed,
             "live_mirror_recommended": live_mirror_allowed,
-            "live_mirror_block_reason": None if live_mirror_allowed else live_readiness["reason"],
+            "live_override_available": live_override_available,
+            "live_override_gates": replay_override_gates,
+            "live_mirror_block_reason": None if live_mirror_allowed else live_block_reason,
             "live_readiness": live_readiness,
         },
+        "replay_gate_override": bool(
+            isinstance(request_payload, dict) and request_payload.get("replay_gate_override")
+        ),
+        "override_failed_gates": replay_override_gates,
         "summary_file": result_payload.get("summary_file") if isinstance(result_payload, dict) else None,
         "backtest_timing": result_payload.get("backtest_timing") if isinstance(result_payload, dict) else None,
         "error_message": job.error_message,
