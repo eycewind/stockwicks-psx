@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from app.services.sparkie_weekly_service import _evaluate_result
 
 
-def _result(daily_values):
+def _result(daily_values, *, win_rate=0.65):
     return SimpleNamespace(
         reference_price=100.0,
         baseline_shares=100,
@@ -17,7 +17,7 @@ def _result(daily_values):
         validation_profit_loss=500.0,
         validation_trades=10,
         trades=20,
-        win_rate=0.65,
+        win_rate=win_rate,
         max_drawdown=100.0,
         score=5.0,
         symbol="TEST",
@@ -56,3 +56,16 @@ def test_weekly_match_rejects_a_daily_risk_budget_breach():
     assert match["qualified"] is False
     assert match["daily_risk_budget"] == 500.0
     assert match["gates"]["daily_loss_limit_respected"] is False
+
+
+def test_weekly_match_does_not_reject_positive_strategy_only_for_sub_fifty_win_rate():
+    match = _evaluate_result(
+        _result(([125.0, 140.0, 130.0, 150.0, -50.0, -50.0] * 4), win_rate=0.489),
+        account_equity=10_000.0,
+        daily_risk_budget=1_000.0,
+        confidence_level=0.60,
+    )
+
+    assert match is not None
+    assert match["qualified"] is True
+    assert match["gates"]["trade_evidence"] is True

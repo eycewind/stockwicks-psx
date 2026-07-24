@@ -1326,8 +1326,8 @@ def _risk_first_decision(job: SparkieJob, row: dict[str, Any]) -> dict[str, Any]
         return _paper_only_decision(
             f"Historical worst day ${profile['worst_daily_pnl']:,.2f} exceeded the client's ${risk_budget:,.2f} daily risk budget."
         )
-    if int(row.get("trades") or 0) < 5 or float(row.get("win_rate") or 0.0) < 0.50:
-        return _paper_only_decision("Trade count or win rate is below Sparkie's evidence threshold.")
+    if int(row.get("trades") or 0) < 5:
+        return _paper_only_decision("Trade count is below Sparkie's minimum evidence threshold.")
     if float(row.get("validation_profit_loss") or 0.0) <= 0 or int(row.get("validation_trades") or 0) < 3:
         return _paper_only_decision("The holdout validation result is not positive enough.")
     if float(profile["conservative_monthly_pnl"]) <= 0:
@@ -1356,7 +1356,6 @@ def _risk_first_selection_sort_key(job: SparkieJob, row: dict[str, Any]) -> tupl
         and float(row.get("validation_profit_loss") or 0.0) > 0
         and int(row.get("validation_trades") or 0) >= 3
         and int(row.get("trades") or 0) >= 5
-        and float(row.get("win_rate") or 0.0) >= 0.50
     )
     return (
         float(qualified),

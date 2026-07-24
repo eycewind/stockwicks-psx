@@ -578,7 +578,11 @@ def _evaluate_result(
         "minimum_daily_evidence": len(scaled) >= MIN_RECOMMENDATION_DAYS,
         "positive_average": avg > 0,
         "validation_positive": float(row.validation_profit_loss or 0.0) > 0 and int(row.validation_trades or 0) >= 3,
-        "trade_evidence": int(row.trades or 0) >= 5 and float(row.win_rate or 0.0) >= 0.50,
+        # A strategy can be profitable with a sub-50% trade win rate when
+        # average winners exceed average losers. Daily loss, holdout
+        # validation, trade count, and the monthly-return profile are the
+        # relevant safety gates for Sparkie's risk-first selection.
+        "trade_evidence": int(row.trades or 0) >= 5,
         "daily_loss_limit_respected": loss_hits == 0,
         "conservative_monthly_return_positive": bool(monthly.get("monthly_estimate_available")) and float(monthly["conservative_monthly_pnl"] or 0.0) > 0,
     }
