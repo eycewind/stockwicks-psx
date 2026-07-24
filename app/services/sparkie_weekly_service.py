@@ -28,6 +28,11 @@ DEFAULT_BASELINE_CASH = 10_000.0
 DEFAULT_BATCH_SIZE = 5
 DAILY_LOSS_MULTIPLIER = 5.0
 WEEKLY_UNIVERSE_POLICY = "barchart_price_volume_leaders_200"
+SYMBOL_OUTCOME_ANALYZED = "analyzed"
+SYMBOL_OUTCOME_NO_RESULT = "no_result"
+SYMBOL_OUTCOME_DATA_FAILURE = "data_failure"
+SYMBOL_OUTCOME_BACKTEST_FAILURE = "backtest_failure"
+SYMBOL_FAILURE_OUTCOMES = {SYMBOL_OUTCOME_DATA_FAILURE, SYMBOL_OUTCOME_BACKTEST_FAILURE}
 MIN_RECOMMENDATION_DAYS = max(20, int(os.getenv("SPARKIE_WEEKLY_MIN_RECOMMENDATION_DAYS", "20")))
 
 
@@ -147,7 +152,7 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
             _update_timing(run, started)
             db.commit()
 
-            success = _process_weekly_symbol(
+            outcome = _process_weekly_symbol(
                 db,
                 run=run,
                 universe_row=universe_row,
@@ -158,14 +163,11 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
             run = db.get(SparkieWeeklyRun, run.id)
             if not run or run.stop_requested_at or str(run.status or "").lower() in {"stopping", "stopped"}:
                 return _finish_stopped(db, run, started)
-            if success:
-                _store_symbol_checkpoint(db, run, universe_row, failed=False)
-                run.completed_symbols = int(run.completed_symbols or 0) + 1
-            else:
+            if outcome in SYMBOL_FAILURE_OUTCOMES:
                 run.failed_symbols = int(run.failed_symbols or 0) + 1
-                # A failed symbol is still checkpointed so Resume advances.
-                run.completed_symbols = int(run.completed_symbols or 0) + 1
-                _store_symbol_checkpoint(db, run, universe_row, failed=True)
+            # Every terminal symbol outcome is checkpointed so Resume advances.
+            run.completed_symbols = int(run.completed_symbols or 0) + 1
+            _store_symbol_checkpoint(db, run, universe_row, outcome=outcome)
             run.current_symbol = None
             run.heartbeat_at = datetime.utcnow()
             _update_timing(run, started)
@@ -179,7 +181,12 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
         )
         run.status = "completed"
         run.stage = "completed"
-        run.message = f"Weekly Sparkie research completed with {result_count} saved strategy results."
+        symbol_outcomes = _checkpoint_counts(db, run.id)
+        run.failed_symbols = sum(symbol_outcomes.get(name, 0) for name in SYMBOL_FAILURE_OUTCOMES)
+        run.message = (
+            f"Weekly Sparkie analyzed {int(run.completed_symbols or 0)} symbols and saved "
+            f"{result_count} strategy results."
+        )
         run.progress_pct = 100.0
         run.eta_seconds = 0
         run.current_symbol = None
@@ -197,6 +204,7 @@ def run_weekly_research(db: Session, run_id: str) -> dict[str, Any]:
                 "total_symbols": int(run.total_symbols or 0),
                 "completed_symbols": int(run.completed_symbols or 0),
                 "failed_symbols": int(run.failed_symbols or 0),
+                "symbol_outcomes": symbol_outcomes,
                 "daily_loss_multiplier": DAILY_LOSS_MULTIPLIER,
                 "cash_policy": "full_cash_v1",
                 "universe_policy": WEEKLY_UNIVERSE_POLICY,
@@ -310,6 +318,8 @@ def weekly_recommendation(
             "gate_failures": gate_failures,
             "minimum_daily_evidence_days": MIN_RECOMMENDATION_DAYS,
             "execution_model_ready_results": modern_evidence_count,
+            "current_analysis_model_results": modern_evidence_count,
+            "required_analysis_model_version": SPARKIE_ANALYSIS_MODEL_VERSION,
         },
         "recommendation_method": (
             "Applies the client's maximum daily loss and requested confidence as hard gates, then ranks qualified "
@@ -356,8 +366,8 @@ def weekly_recommendation(
             "A risk-budget-compatible historical result was found; run a fresh finalist verification before bot setup."
             if requested and requested["qualified"]
             else (
-                "The latest weekly catalog predates Sparkie's execution-cost and liquidity-capacity model. "
-                "Run Weekly Sparkie again before using saved recommendations."
+                "The latest weekly catalog predates Sparkie's complete-evidence analysis model. "
+                "Run Weekly Sparkie again so every tested strategy, execution cost, and liquidity check is retained."
                 if modern_evidence_count == 0
                 else
                 "The saved catalog does not yet contain enough independent daily observations to make a recommendation. "
@@ -378,6 +388,14 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
         .filter(SparkieWeeklyResult.daily_pnl_json.isnot(None))
         .count()
     )
+    result_symbol_count = (
+        db.query(SparkieWeeklyResult.symbol)
+        .filter_by(run_id=run.id)
+        .filter(SparkieWeeklyResult.daily_pnl_json.isnot(None))
+        .distinct()
+        .count()
+    )
+    symbol_outcomes = _checkpoint_counts(db, run.id)
     now = datetime.utcnow()
     heartbeat_age = int((now - run.heartbeat_at).total_seconds()) if run.heartbeat_at else None
     summary = _json_dict(run.summary_json)
@@ -406,6 +424,12 @@ def weekly_run_payload(db: Session, run: SparkieWeeklyRun | None) -> dict[str, A
         "elapsed_seconds": int(run.elapsed_seconds or 0),
         "eta_seconds": run.eta_seconds,
         "result_count": result_count,
+        "result_symbol_count": result_symbol_count,
+        "symbol_outcomes": symbol_outcomes,
+        "no_result_symbols": int(symbol_outcomes.get(SYMBOL_OUTCOME_NO_RESULT, 0)),
+        "technical_failure_symbols": sum(
+            int(symbol_outcomes.get(name, 0)) for name in SYMBOL_FAILURE_OUTCOMES
+        ),
         "task_id": run.task_id,
         "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
         "heartbeat_age_seconds": heartbeat_age,
@@ -435,7 +459,7 @@ def _process_weekly_symbol(
     universe_row: dict[str, Any],
     intervals: list[str],
     algos: set[str],
-) -> bool:
+) -> str:
     from app.services.sparkie_engine import _backtest_symbol_interval, refresh_symbol_data
 
     symbol = str(universe_row.get("symbol") or "").upper().strip()
@@ -456,9 +480,10 @@ def _process_weekly_symbol(
         run.heartbeat_at = datetime.utcnow()
         run.message = f"Batch {run.current_batch}: {symbol} skipped because data was insufficient."
         db.commit()
-        return False
+        return SYMBOL_OUTCOME_DATA_FAILURE
     frames = meta.get("frames") or {}
     stored = 0
+    completed_intervals = 0
     errors: list[str] = []
     db.query(SparkieWeeklyResult).filter_by(run_id=run.id, symbol=symbol).delete(synchronize_session=False)
     db.commit()
@@ -483,11 +508,15 @@ def _process_weekly_symbol(
                 float(run.baseline_cash) * 0.10,
                 builder_days=lookback_days,
             )
+            completed_intervals += 1
+            errors.extend(
+                f"{interval}: {message}"
+                for message in (result.get("errors") or [])
+                if message
+            )
             candidates = [
-                row for row in (result.get("top") or [])
+                row for row in (result.get("best_by_algo") or result.get("top") or [])
                 if str(row.get("algo_name") or "") in algos
-                and float(row.get("total_profit") or 0.0) > 0
-                and float(row.get("validation_total_profit") or 0.0) > 0
             ]
             best_by_algo: dict[str, dict[str, Any]] = {}
             for row in candidates:
@@ -550,7 +579,11 @@ def _process_weekly_symbol(
 
     if stored <= 0 and errors:
         run.error_message = "; ".join(errors)[:1000]
-    return stored > 0
+    if stored > 0:
+        return SYMBOL_OUTCOME_ANALYZED
+    if completed_intervals > 0:
+        return SYMBOL_OUTCOME_NO_RESULT
+    return SYMBOL_OUTCOME_BACKTEST_FAILURE
 
 
 def _store_symbol_checkpoint(
@@ -558,7 +591,7 @@ def _store_symbol_checkpoint(
     run: SparkieWeeklyRun,
     universe_row: dict[str, Any],
     *,
-    failed: bool,
+    outcome: str,
 ) -> None:
     symbol = str(universe_row.get("symbol") or "").upper().strip()
     if not symbol:
@@ -576,13 +609,29 @@ def _store_symbol_checkpoint(
             universe_rank=_universe_rank(universe_row),
             weighted_alpha=_float_or_none(universe_row.get("weightedAlpha")),
             interval="__checkpoint__",
-            algo_name="failed" if failed else "completed",
+            algo_name=str(outcome),
             baseline_cash=float(run.baseline_cash),
             baseline_shares=0,
             error_message=(
-                (run.error_message or "No validated result was produced for this symbol.")[:1000]
-                if failed
+                (run.error_message or "Sparkie could not complete this symbol.")[:1000]
+                if outcome in SYMBOL_FAILURE_OUTCOMES
                 else None
+            ),
+            params_json=_json(
+                {
+                    "sparkie_symbol_outcome": outcome,
+                    "sparkie_symbol_detail": (
+                        (
+                            run.error_message
+                            or "Backtests completed, but no strategy result row was produced."
+                        )
+                        if outcome == SYMBOL_OUTCOME_NO_RESULT
+                        else run.error_message
+                    ),
+                    "sparkie_universe_type": universe_row.get("sparkieUniverseType"),
+                    "sparkie_universe_rank": _universe_rank(universe_row),
+                    "sparkie_price_volume": _float_or_none(universe_row.get("priceVolume")),
+                }
             ),
         )
     )
@@ -869,6 +918,48 @@ def _completed_symbols(db: Session, run_id: str) -> set[str]:
     }
 
 
+def _checkpoint_counts(db: Session, run_id: str) -> dict[str, int]:
+    counts = {
+        SYMBOL_OUTCOME_ANALYZED: 0,
+        SYMBOL_OUTCOME_NO_RESULT: 0,
+        SYMBOL_OUTCOME_DATA_FAILURE: 0,
+        SYMBOL_OUTCOME_BACKTEST_FAILURE: 0,
+    }
+    rows = (
+        db.query(SparkieWeeklyResult.algo_name, SparkieWeeklyResult.error_message)
+        .filter_by(run_id=run_id, interval="__checkpoint__")
+        .all()
+    )
+    for raw_outcome, error_message in rows:
+        outcome = _normalize_symbol_outcome(raw_outcome, error_message)
+        if outcome in counts:
+            counts[outcome] += 1
+    return counts
+
+
+def _normalize_symbol_outcome(raw_outcome: Any, error_message: Any = None) -> str:
+    outcome = str(raw_outcome or "").lower()
+    detail = str(error_message or "").lower()
+    if outcome == "completed":
+        return SYMBOL_OUTCOME_ANALYZED
+    if outcome != "failed":
+        return outcome
+    if "no validated result was produced" in detail:
+        return SYMBOL_OUTCOME_NO_RESULT
+    if any(
+        marker in detail
+        for marker in (
+            "data preparation",
+            "downloaded data",
+            "no cached bars",
+            "no schwab candles",
+            "stale",
+        )
+    ):
+        return SYMBOL_OUTCOME_DATA_FAILURE
+    return SYMBOL_OUTCOME_BACKTEST_FAILURE
+
+
 def _finish_stopped(db: Session, run: SparkieWeeklyRun | None, started: datetime) -> dict[str, Any]:
     if not run:
         return {"ok": False, "status": "stopped"}
@@ -930,6 +1021,14 @@ def _write_weekly_result_exports(
         .all()
     )
     results = [_weekly_result_export_row(row) for row in rows]
+    checkpoints = (
+        db.query(SparkieWeeklyResult)
+        .filter_by(run_id=run.id, interval="__checkpoint__")
+        .order_by(SparkieWeeklyResult.universe_rank.asc().nullslast(), SparkieWeeklyResult.id.asc())
+        .all()
+    )
+    symbol_outcomes = [_weekly_symbol_outcome_export_row(row) for row in checkpoints]
+    outcome_counts = _checkpoint_counts(db, run.id)
     universe_type_counts: dict[str, int] = {}
     for universe_row in universe:
         universe_type = str(universe_row.get("sparkieUniverseType") or "unknown")
@@ -937,8 +1036,11 @@ def _write_weekly_result_exports(
 
     results_json = base / "results.json"
     results_csv = base / "results.csv"
+    outcomes_json = base / "symbol_outcomes.json"
+    outcomes_csv = base / "symbol_outcomes.csv"
     summary_json = base / "summary.json"
     results_json.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+    outcomes_json.write_text(json.dumps(symbol_outcomes, indent=2, default=str), encoding="utf-8")
 
     csv_fields = (
         "symbol", "universe_rank", "universe_type", "price_volume",
@@ -952,6 +1054,14 @@ def _write_weekly_result_exports(
         writer = csv.DictWriter(csv_file, fieldnames=csv_fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(results)
+    with outcomes_csv.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=("symbol", "universe_rank", "outcome", "detail"),
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(symbol_outcomes)
 
     summary = {
         "run_id": run.id,
@@ -962,17 +1072,21 @@ def _write_weekly_result_exports(
         "universe_by_type": universe_type_counts,
         "completed_symbols": int(run.completed_symbols or 0),
         "failed_symbols": int(run.failed_symbols or 0),
+        "symbol_outcomes": outcome_counts,
         "strategy_results": len(results),
         "cash_policy": "full_cash_v1",
         "day_trading_policy": "end-of-day close; no overnight positions",
         "top_results_by_backtest_score": results[:20],
         "result_files": {"json": str(results_json), "csv": str(results_csv)},
+        "symbol_outcome_files": {"json": str(outcomes_json), "csv": str(outcomes_csv)},
     }
     summary_json.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     return {
         "summary_json": str(summary_json),
         "results_json": str(results_json),
         "results_csv": str(results_csv),
+        "outcomes_json": str(outcomes_json),
+        "outcomes_csv": str(outcomes_csv),
     }
 
 
@@ -1004,6 +1118,17 @@ def _weekly_result_export_row(row: SparkieWeeklyResult) -> dict[str, Any]:
         "confidence": row.confidence,
         "daily_pnl_json": row.daily_pnl_json,
         "params_json": row.params_json,
+    }
+
+
+def _weekly_symbol_outcome_export_row(row: SparkieWeeklyResult) -> dict[str, Any]:
+    outcome = _normalize_symbol_outcome(row.algo_name, row.error_message)
+    params = _json_dict(row.params_json)
+    return {
+        "symbol": row.symbol,
+        "universe_rank": row.universe_rank,
+        "outcome": outcome,
+        "detail": row.error_message or params.get("sparkie_symbol_detail"),
     }
 
 

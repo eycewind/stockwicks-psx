@@ -2,8 +2,13 @@ import json
 from types import SimpleNamespace
 
 from app.services.sparkie_weekly_service import (
+    SYMBOL_OUTCOME_ANALYZED,
+    SYMBOL_OUTCOME_BACKTEST_FAILURE,
+    SYMBOL_OUTCOME_DATA_FAILURE,
+    SYMBOL_OUTCOME_NO_RESULT,
     _best_match,
     _evaluate_result,
+    _normalize_symbol_outcome,
     _rank_matches,
     _unique_symbol_alternatives,
 )
@@ -182,3 +187,25 @@ def test_weekly_match_rejects_legacy_cost_free_catalog_result():
     assert match["qualified"] is False
     assert match["gates"]["execution_cost_model_present"] is False
     assert match["gates"]["liquidity_capacity"] is False
+
+
+def test_weekly_legacy_checkpoint_outcomes_are_separated():
+    assert _normalize_symbol_outcome("completed") == SYMBOL_OUTCOME_ANALYZED
+    assert (
+        _normalize_symbol_outcome(
+            "failed",
+            "No validated result was produced for this symbol.",
+        )
+        == SYMBOL_OUTCOME_NO_RESULT
+    )
+    assert (
+        _normalize_symbol_outcome(
+            "failed",
+            "ABC: data preparation skipped: Downloaded data has only 10 trading days.",
+        )
+        == SYMBOL_OUTCOME_DATA_FAILURE
+    )
+    assert (
+        _normalize_symbol_outcome("failed", "5min: model training exploded")
+        == SYMBOL_OUTCOME_BACKTEST_FAILURE
+    )

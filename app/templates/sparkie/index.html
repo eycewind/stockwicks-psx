@@ -824,7 +824,7 @@
       : "";
     const exports = run.exports || {};
     const exportDetail = exports.summary_json
-      ? `<div class="sparkie-muted">Exports: summary JSON ${escapeHtml(exports.summary_json)}<br>All strategy results: ${escapeHtml(exports.results_json || "")}, ${escapeHtml(exports.results_csv || "")}</div>`
+      ? `<div class="sparkie-muted">Exports: summary JSON ${escapeHtml(exports.summary_json)}<br>All strategy results: ${escapeHtml(exports.results_json || "")}, ${escapeHtml(exports.results_csv || "")}<br>Per-symbol outcomes: ${escapeHtml(exports.outcomes_json || "")}, ${escapeHtml(exports.outcomes_csv || "")}</div>`
       : "";
     return `
       <div class="sparkie-status-banner">
@@ -837,7 +837,9 @@
         <div class="sparkie-summary-row"><span>Universe</span><strong>${run.universe_policy === "barchart_price_volume_leaders_200" ? "Barchart 200 Price Volume Leaders" : "Legacy Top/Bottom catalog"}</strong></div>
         <div class="sparkie-summary-row"><span>Progress</span><strong>${Number(run.completed_symbols || 0)} / ${Number(run.total_symbols || 100)} symbols · ${Number(run.progress_pct || 0)}%</strong></div>
         <div class="sparkie-summary-row"><span>Current batch</span><strong>${Number(run.current_batch || 0)} · ${escapeHtml(run.current_symbol || "checkpoint idle")}</strong></div>
-        <div class="sparkie-summary-row"><span>Saved results</span><strong>${Number(run.result_count || 0).toLocaleString()} · failed symbols ${Number(run.failed_symbols || 0)}</strong></div>
+        <div class="sparkie-summary-row"><span>Strategy results</span><strong>${Number(run.result_count || 0).toLocaleString()} across ${Number(run.result_symbol_count || 0).toLocaleString()} symbols</strong></div>
+        <div class="sparkie-summary-row"><span>No strategy row</span><strong>${Number(run.no_result_symbols || 0).toLocaleString()} symbols</strong></div>
+        <div class="sparkie-summary-row"><span>Technical/data failures</span><strong>${Number(run.technical_failure_symbols || 0).toLocaleString()} symbols</strong></div>
         <div class="sparkie-summary-row"><span>Runtime</span><strong>${secondsText(run.elapsed_seconds)} · ETA ${secondsText(run.eta_seconds)}</strong></div>
         <div class="sparkie-summary-row"><span>Heartbeat</span><strong>${run.heartbeat_at ? new Date(run.heartbeat_at + "Z").toLocaleString() : "Not started"}</strong></div>
       </div>
@@ -973,7 +975,7 @@
         <div class="sparkie-summary-row"><span>Why cash may not change the winner</span><strong>${escapeHtml(data.cash_scaling_note || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Selection diagnostic</span><strong>${escapeHtml(data.selection_diagnostic || "")}</strong></div>
         <div class="sparkie-summary-row"><span>Catalog gate analysis</span><strong>${Number(analysis.qualified_results || 0).toLocaleString()} qualified / ${Number(analysis.evaluated_results || 0).toLocaleString()} evaluated · minimum ${Number(analysis.minimum_daily_evidence_days || 0).toLocaleString()} daily observations</strong></div>
-        <div class="sparkie-summary-row"><span>Execution-model coverage</span><strong>${Number(analysis.execution_model_ready_results || 0).toLocaleString()} / ${Number(analysis.evaluated_results || 0).toLocaleString()} results include the required slippage and liquidity evidence</strong></div>
+        <div class="sparkie-summary-row"><span>Current analysis coverage</span><strong>${Number(analysis.current_analysis_model_results || analysis.execution_model_ready_results || 0).toLocaleString()} / ${Number(analysis.evaluated_results || 0).toLocaleString()} results use ${escapeHtml(analysis.required_analysis_model_version || "the current model")} with complete strategy, slippage, and liquidity evidence</strong></div>
         ${failureText ? `<div class="sparkie-summary-row"><span>Failed-gate counts</span><strong>${escapeHtml(failureText)}</strong></div>` : ""}
       </div>
       ${matchCard(`Requested cash $${Number(data.account_equity || 0).toLocaleString()}`, data.requested_cash_match)}

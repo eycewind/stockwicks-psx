@@ -4,7 +4,7 @@ import math
 from typing import Any, Iterable
 
 
-SPARKIE_ANALYSIS_MODEL_VERSION = "success_risk_liquidity_v2"
+SPARKIE_ANALYSIS_MODEL_VERSION = "success_risk_liquidity_v3"
 
 
 def wilson_lower_bound(successes: int, trials: int, z_score: float = 1.96) -> float:

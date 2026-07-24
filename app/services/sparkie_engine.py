@@ -921,7 +921,18 @@ def _backtest_symbol_interval(
         "median_daily_dollar_volume": round(float(median_daily_dollar_volume), 2),
         "execution_slippage_bps": execution_slippage_bps,
     }
-    for row in result.get("top") or []:
+    evidence_rows: list[dict[str, Any]] = []
+    seen_evidence_rows: set[int] = set()
+    for row in [
+        *(result.get("top") or []),
+        *(result.get("best_by_algo") or []),
+    ]:
+        row_identity = id(row)
+        if row_identity in seen_evidence_rows:
+            continue
+        seen_evidence_rows.add(row_identity)
+        evidence_rows.append(row)
+    for row in evidence_rows:
         row["sparkie_trade_size"] = float(trade_size)
         row["sparkie_allocation_usd"] = round(float(allocation_usd), 2)
         row["sparkie_cash_deployment_policy"] = CASH_DEPLOYMENT_POLICY
