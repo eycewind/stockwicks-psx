@@ -1,0 +1,112 @@
+name: stockwicks-c2-dev
+
+x-app-environment: &app-environment
+  APP_ENV: ${APP_ENV:-development}
+  APP_PORT: "8101"
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8101}
+  CLIENT_SLUG: ${CLIENT_SLUG:-local-dev}
+  REDUCED_LOCAL_RUNTIME: "true"
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env.dev}
+  MASTER_ADMIN_API_KEY: ${MASTER_ADMIN_API_KEY:?set MASTER_ADMIN_API_KEY in .env.dev}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-stockwicks_dev}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.dev}@postgres:5432/${POSTGRES_DB:-stockwicks_dev}
+  DATA_DIR: /workspace/data
+  LOG_DIR: /workspace/logs
+  MODEL_DIR: /workspace/models
+  REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  TRADING_ENABLED: "false"
+  PAPER_TRADING_ENABLED: "false"
+  LIVE_TRADING_ENABLED: "false"
+  EMERGENCY_STOP: "true"
+  SCHWAB_CLIENT_ID: ""
+  SCHWAB_CLIENT_SECRET: ""
+  SCHWAB_REDIRECT_URI: ""
+  STOCK_DATA_API_TOKEN: ""
+  API_TOKEN: ""
+  FINNHUB_API_KEY: ""
+  SENDGRID_API_KEY: ""
+  MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-}
+  MARKET_DATA_BASE_URL: ${MARKET_DATA_BASE_URL:-}
+
+services:
+  postgres:
+    image: postgres:16.4-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stockwicks_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-stockwicks_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.dev}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - postgres-c2-data:/var/lib/postgresql/data
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8101}:8101"
+    volumes:
+      - app-c2-data:/workspace/data
+      - app-c2-logs:/workspace/logs
+      - app-c2-models:/workspace/models
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        python -m scripts.dev_bootstrap
+        exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8101
+
+  redis:
+    image: redis:7.4.2-bookworm
+    profiles: ["worker"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    profiles: ["worker"]
+    healthcheck:
+      disable: true
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - app-c2-data:/workspace/data
+      - app-c2-logs:/workspace/logs
+      - app-c2-models:/workspace/models
+    command:
+      - python
+      - -m
+      - celery
+      - -A
+      - app.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+      - --queues=default,replay
+
+volumes:
+  postgres-c2-data:
+    name: stockwicks-c2-postgres-data
+  app-c2-data:
+    name: stockwicks-c2-app-data
+  app-c2-logs:
+    name: stockwicks-c2-app-logs
+  app-c2-models:
+    name: stockwicks-c2-app-models

@@ -1,0 +1,5 @@
+-r runtime.in
+
+httpx==0.28.1
+pip-tools==7.5.1
+pytest==8.4.2

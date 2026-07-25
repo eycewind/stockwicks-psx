@@ -1,0 +1,27 @@
+FROM python:3.12.3-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /workspace
+
+RUN groupadd --gid 10001 stockwicks \
+    && useradd --uid 10001 --gid stockwicks --create-home stockwicks
+
+COPY requirements/runtime.lock /tmp/runtime.lock
+RUN python -m pip install --require-hashes --no-deps -r /tmp/runtime.lock
+
+COPY --chown=stockwicks:stockwicks app ./app
+COPY --chown=stockwicks:stockwicks scripts ./scripts
+RUN mkdir -p data logs models \
+    && chown -R stockwicks:stockwicks /workspace
+
+USER stockwicks
+
+EXPOSE 8101
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD python -c "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8101/healthz', timeout=2)).get('ok') is True"
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8101"]

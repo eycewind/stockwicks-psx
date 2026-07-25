@@ -246,6 +246,11 @@ app.include_router(schwab_api.router, prefix="/auth")
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting background tasks...")
+    if settings.reduced_local_runtime:
+        logger.info(
+            "Reduced local runtime enabled; optional feature schema helpers are disabled."
+        )
+        return
     try:
         from app.services.spx_0dte_schema import ensure_spx_0dte_tables
 

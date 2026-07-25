@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", env="APP_ENV")
     app_port: int = Field(default=8101, env="APP_PORT")
     public_base_url: str = Field(default="http://127.0.0.1:8101", env="PUBLIC_BASE_URL")
+    reduced_local_runtime: bool = Field(default=False, env="REDUCED_LOCAL_RUNTIME")
 
     # Security
     secret_key: str = Field(default="change_me", env="SECRET_KEY")

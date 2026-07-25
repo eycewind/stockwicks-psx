@@ -1,0 +1,35 @@
+# Direct dependencies for the reduced web runtime and optional Celery worker.
+# Python 3.12.3 is the supported interpreter.
+aiohttp==3.12.15
+bcrypt==5.0.0
+bokeh==3.8.0
+cachetools==6.2.0
+celery==5.5.3
+email-validator==2.3.0
+fastapi==0.139.2
+itsdangerous==2.2.0
+Jinja2==3.1.6
+joblib==1.5.3
+matplotlib==3.10.6
+numpy==2.2.6
+oauthlib==3.3.1
+pandas==2.3.2
+pandas-ta==0.4.71b0
+passlib==1.7.4
+psycopg2-binary==2.9.12
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+python-jose[cryptography]==3.5.0
+python-multipart==0.0.32
+pytz==2025.2
+PyYAML==6.0.3
+redis==6.4.0
+requests==2.32.5
+requests-oauthlib==2.0.0
+scikit-learn==1.7.2
+scipy==1.16.2
+SQLAlchemy==2.0.51
+uvicorn[standard]==0.51.0
+websockets==15.0.1
+Werkzeug==3.1.3
+WTForms==3.2.1
