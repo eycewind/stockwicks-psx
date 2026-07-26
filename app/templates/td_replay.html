@@ -301,7 +301,7 @@
       </div>
       <p class="muted" style="font-size:0.8rem; margin-top:10px;">
         Algo1_MM-5_MM use probability models. Algo4_MM is the older adaptive MM model path. Algo_SMI and Algo_MACD are indicator-only and should match their live bot runners.
-        Dates must be within the last 30 days. If you've never ingested data for this symbol, we'll auto-download on Submit.
+        Intraday dates are limited to 30 days. The 1 day interval supports up to 2 years. If you've never ingested data for this symbol, we'll auto-download on Submit.
       </p>
     </form>
   </div>
@@ -427,8 +427,23 @@ let sessionListInterval = null;
 let lastBarCount = 0;
 
 // =============================================================================
-// Init form defaults (30-day window within last 30 days)
+// Init form defaults and interval-aware date limits.
 // =============================================================================
+function applyReplayDateLimits() {
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  const interval = document.getElementById("f_interval").value;
+  const rangeDays = interval === "1d" ? 730 : 30;
+  const min = new Date(today);
+  min.setDate(min.getDate() - rangeDays);
+  const startEl = document.getElementById("f_start");
+  const endEl = document.getElementById("f_end");
+  startEl.min = fmt(min);
+  endEl.min = fmt(min);
+  startEl.max = fmt(today);
+  endEl.max = fmt(today);
+}
+
 (function initDates() {
   const today = new Date();
   const end = new Date(today);
@@ -436,18 +451,12 @@ let lastBarCount = 0;
   const start = new Date(today);
   start.setDate(start.getDate() - 15);
   const fmt = d => d.toISOString().slice(0, 10);
-
-  const min = new Date(today);
-  min.setDate(min.getDate() - 30);
-
   const startEl = document.getElementById("f_start");
   const endEl = document.getElementById("f_end");
   startEl.value = fmt(start);
   endEl.value = fmt(end);
-  startEl.min = fmt(min);
-  startEl.max = fmt(today);
-  endEl.min = fmt(min);
-  endEl.max = fmt(today);
+  applyReplayDateLimits();
+  document.getElementById("f_interval").addEventListener("change", applyReplayDateLimits);
 })();
 
 function applyOptimizerReplayParams() {
@@ -483,6 +492,7 @@ function applyOptimizerReplayParams() {
   const eodBox = document.querySelector("#startForm [name='eod_auto_close']");
   if (shortBox && params.has("allow_short_selling")) shortBox.checked = params.get("allow_short_selling") === "on";
   if (eodBox && params.has("eod_auto_close")) eodBox.checked = params.get("eod_auto_close") === "on";
+  applyReplayDateLimits();
   const formCard = document.getElementById("formCard");
   if (formCard) formCard.scrollIntoView({ behavior: "smooth", block: "start" });
 }

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     log_dir: str = Field(default="logs", env="LOG_DIR")
     model_dir: str = Field(default="models", env="MODEL_DIR")
 
+    # Market data
+    market_data_provider: str = Field(default="schwab", env="MARKET_DATA_PROVIDER")
+    market_data_base_url: str = Field(default="", env="MARKET_DATA_BASE_URL")
+    psx_db_path: str = Field(default="", env="PSX_DB_PATH")
+    psx_price_mode: str = Field(default="adjusted", env="PSX_PRICE_MODE")
+
     # Schwab OAuth
     schwab_client_id: str = Field(default="", env="SCHWAB_CLIENT_ID")
     schwab_client_secret: str = Field(default="", env="SCHWAB_CLIENT_SECRET")

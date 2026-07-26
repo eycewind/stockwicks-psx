@@ -80,7 +80,11 @@ def max_bar_age_for_interval(interval: str) -> timedelta:
 # ──────────────────────────────────────────────
 
 def process_interval(df: pd.DataFrame, interval: str, symbol: str):
-    tz = _ET
+    tz = (
+        pytz.timezone("Asia/Karachi")
+        if str(getattr(df.index, "tz", "")) == "Asia/Karachi"
+        else _ET
+    )
     if df is None or df.empty:
         logging.warning("[BOT] Empty DF for %s", symbol)
         return None, None, None
@@ -226,6 +230,39 @@ def get_schwab_history(
     For algoMM bots pass cfg.builder_days (typically 60).
     """
     interval = (interval or "1min").lower()
+    if os.getenv("MARKET_DATA_PROVIDER", "schwab").strip().lower() == "psx_sqlite":
+        if interval != "1d":
+            from app.market_data.errors import UnsupportedMarketDataInterval
+
+            raise UnsupportedMarketDataInterval(
+                "PSX SQLite supports only the 1d interval"
+            )
+        from app.market_data.history import fetch_psx_history, result_to_dataframe
+
+        end_date = pd.Timestamp.now(tz="Asia/Karachi").date()
+        # Daily files may legitimately lag the wall clock across holidays or
+        # source-refresh gaps. Query a bounded wider window, then return only
+        # the requested number of stored sessions.
+        scan_days = max(int(max(lookback_days, 7) * 4), 30)
+        start_date = end_date - pd.Timedelta(days=scan_days)
+        result = fetch_psx_history(
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if len(result.audit_bars) > lookback_days:
+            result = fetch_psx_history(
+                symbol=symbol,
+                start_date=result.audit_bars[-lookback_days].trade_date,
+                end_date=end_date,
+            )
+        frame = result_to_dataframe(result)
+        if frame.empty and raise_on_empty:
+            raise RuntimeError(
+                f"No PSX candles for {symbol.upper()} 1d in the requested range"
+            )
+        return frame
+
     if interval not in _SUPPORTED_INTERVALS:
         logging.warning("[SCHWAB] Unsupported interval '%s', defaulting to 1min", interval)
         interval = "1min"

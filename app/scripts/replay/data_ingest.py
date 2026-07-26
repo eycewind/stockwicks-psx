@@ -41,10 +41,13 @@ from app.scripts.stock_algos.base_wiring import get_schwab_history
 # Config
 # =============================================================================
 ET = pytz.timezone("US/Eastern")
+PKT = pytz.timezone("Asia/Karachi")
 UTC = pytz.UTC
 
 DATA_DIR = os.getenv("DATA_DIR", "/var/www/stockwicks/data")
-MAX_DAYS = 120
+MAX_INTRADAY_DAYS = 120
+MAX_DAILY_DAYS = 730
+MAX_DAYS = MAX_INTRADAY_DAYS
 DEFAULT_DAYS = 30
 FRESH_HOURS = 6            # reuse cache if younger than this
 
@@ -121,7 +124,10 @@ def is_fresh(
 ) -> bool:
     if meta is None:
         return False
-    if getattr(meta, "source_mode", "legacy") != "live_rth_v1":
+    if getattr(meta, "source_mode", "legacy") not in {
+        "live_rth_v1",
+        "psx_daily_v1",
+    }:
         return False
     try:
         dl_at = datetime.fromisoformat(meta.downloaded_at)
@@ -151,9 +157,10 @@ def fetch_and_save(
     """
     symbol = symbol.upper().strip()
     interval = str(interval or "1min").lower().strip()
-    if interval not in {"1min", "5min", "10min", "15min", "30min"}:
+    if interval not in {"1min", "5min", "10min", "15min", "30min", "1d"}:
         raise ValueError(f"Unsupported replay ingest interval: {interval}")
-    days = max(1, min(int(days), MAX_DAYS))
+    max_days = MAX_DAILY_DAYS if interval == "1d" else MAX_INTRADAY_DAYS
+    days = max(1, min(int(days), max_days))
 
     csv_path, meta_path = get_data_paths(user_id, symbol, interval)
     existing = _load_meta(meta_path)
@@ -165,7 +172,7 @@ def fetch_and_save(
         )
         return csv_path, existing
 
-    logger.info(f"[{symbol}] Fetching {days} trading sessions of {interval} bars from Schwab...")
+    logger.info(f"[{symbol}] Fetching {days} trading sessions of {interval} bars...")
     # Use the same source fetch path as live AlgoMM bots. This keeps replay
     # candles aligned with live candles before the replay engine evaluates them.
     df = get_schwab_history(
@@ -176,15 +183,15 @@ def fetch_and_save(
     )
 
     if df is None or df.empty:
-        raise RuntimeError(f"Schwab returned no data for {symbol}")
+        raise RuntimeError(f"Market-data provider returned no data for {symbol}")
 
-    # --- Normalize to ET tz-aware, then convert to ET tz-naive for storage ---
+    # Daily PSX bars retain Karachi trade-date semantics. Intraday replay keeps
+    # its inherited ET storage convention.
+    storage_tz = PKT if interval == "1d" else ET
     if df.index.tz is None:
-        # assume UTC if naive (Schwab returns epoch ms which _to_ohlcv_frame
-        # typically already made UTC — this is a safety net)
-        df.index = df.index.tz_localize(UTC).tz_convert(ET)
+        df.index = df.index.tz_localize(UTC).tz_convert(storage_tz)
     else:
-        df.index = df.index.tz_convert(ET)
+        df.index = df.index.tz_convert(storage_tz)
 
     # Keep only the columns we care about
     needed = ["open", "high", "low", "close", "volume"]
@@ -213,7 +220,7 @@ def fetch_and_save(
         last_bar=df_out.index[-1].isoformat(),
         total_rows=int(len(df_out)),
         unique_dates=sorted({str(d) for d in df_out.index.date}),
-        source_mode="live_rth_v1",
+        source_mode="psx_daily_v1" if interval == "1d" else "live_rth_v1",
     )
     meta_path.write_text(json.dumps(meta.to_dict(), indent=2, default=str))
 

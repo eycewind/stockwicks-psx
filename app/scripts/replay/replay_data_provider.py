@@ -80,11 +80,12 @@ if not logger.handlers:
 # =============================================================================
 class ReplayDataProvider:
     """
-    Loads 1-min CSV → filters by date range → resamples to target interval.
+    Loads an interval-appropriate cache → filters by date range → resamples.
 
-    All bar timestamps are exposed as timezone-NAIVE ET pandas Timestamps, so
-    they match what the existing paper_trading models store. The orchestrator
-    writes these same timestamps to replay_open_trades.entry_time etc.
+    Intraday timestamps remain timezone-naive ET to match the inherited
+    paper-trading storage convention. Daily timestamps preserve the PSX
+    Karachi trade date as timezone-naive calendar dates. The orchestrator
+    writes these timestamps to replay_open_trades.entry_time etc.
     """
 
     def __init__(
@@ -122,7 +123,13 @@ class ReplayDataProvider:
 
     # ------------------------------------------------------------ paths
     def _csv_path(self) -> Path:
-        return Path(DATA_DIR) / str(self.user_id) / "replay" / f"{self.symbol}_1min.csv"
+        source_interval = "1d" if self.interval == "1d" else "1min"
+        return (
+            Path(DATA_DIR)
+            / str(self.user_id)
+            / "replay"
+            / f"{self.symbol}_{source_interval}.csv"
+        )
 
     # --------------------------------------------------- load + transform
     def _load_filter_resample(self) -> pd.DataFrame:

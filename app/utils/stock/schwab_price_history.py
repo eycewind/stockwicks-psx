@@ -36,6 +36,26 @@ def _ms(ts: dt.datetime) -> int:
 
 def _request(params: dict) -> pd.DataFrame:
     """Perform Schwab pricehistory request and return ET-tz DataFrame: [open,high,low,close,volume]."""
+    if os.getenv("MARKET_DATA_PROVIDER", "schwab").strip().lower() == "psx_sqlite":
+        from app.market_data.history import (
+            fetch_compatibility_response,
+            result_to_dataframe,
+        )
+        from app.market_data.models import MarketDataResult, QualitySummary
+
+        response = fetch_compatibility_response(params)
+        summary_data = response["quality"]
+        summary = QualitySummary(
+            symbol=summary_data["symbol"],
+            start_date=summary_data["startDate"],
+            end_date=summary_data["endDate"],
+            returned_bar_count=summary_data["returnedBarCount"],
+        )
+        summary.counts.update(summary_data["counts"])
+        summary.affected_dates.update(summary_data.get("affectedDates", {}))
+        result = MarketDataResult(response["symbol"], response["candles"], [], summary)
+        return result_to_dataframe(result)
+
     cache_ttl = int(os.getenv("SCHWAB_HISTORY_CACHE_SECONDS", "60"))
     cache_key = tuple(sorted((str(k), str(v)) for k, v in params.items()))
     cached = _HISTORY_CACHE.get(cache_key)
@@ -143,6 +163,24 @@ def get_schwab_history(
     Raw passthrough returning JSON (legacy).
     NOTE: For intraday with today's bars, prefer date-bounded fetch via helpers above.
     """
+    if os.getenv("MARKET_DATA_PROVIDER", "schwab").strip().lower() == "psx_sqlite":
+        from app.market_data.history import fetch_compatibility_response
+
+        params = {
+            "symbol": symbol,
+            "frequencyType": frequencyType,
+            "frequency": frequency,
+            "needExtendedHoursData": str(bool(needExtendedHoursData)).lower(),
+            "needPreviousClose": str(bool(needPreviousClose)).lower(),
+        }
+        if startDate is not None and endDate is not None:
+            params["startDate"] = startDate
+            params["endDate"] = endDate
+        else:
+            params["periodType"] = periodType
+            params["period"] = period
+        return fetch_compatibility_response(params)
+
     access_token = get_valid_access_token()
     if not access_token:
         raise RuntimeError("No valid Schwab access token.")

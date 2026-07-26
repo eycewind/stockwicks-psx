@@ -26,8 +26,10 @@ x-app-environment: &app-environment
   API_TOKEN: ""
   FINNHUB_API_KEY: ""
   SENDGRID_API_KEY: ""
-  MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-}
+  MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-psx_sqlite}
   MARKET_DATA_BASE_URL: ${MARKET_DATA_BASE_URL:-}
+  PSX_DB_PATH: /market-data/psx.db
+  PSX_PRICE_MODE: ${PSX_PRICE_MODE:-adjusted}
 
 services:
   postgres:
@@ -48,7 +50,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      REPLAY_PID_LIVENESS_CHECK: "false"
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,6 +62,7 @@ services:
       - app-c2-data:/workspace/data
       - app-c2-logs:/workspace/logs
       - app-c2-models:/workspace/models
+      - ${PSX_DB_HOST_PATH:?set PSX_DB_HOST_PATH in .env.dev}:/market-data/psx.db:ro
     command:
       - /bin/sh
       - -ec
@@ -81,7 +86,9 @@ services:
     profiles: ["worker"]
     healthcheck:
       disable: true
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      REPLAY_PID_LIVENESS_CHECK: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,6 +98,7 @@ services:
       - app-c2-data:/workspace/data
       - app-c2-logs:/workspace/logs
       - app-c2-models:/workspace/models
+      - ${PSX_DB_HOST_PATH:?set PSX_DB_HOST_PATH in .env.dev}:/market-data/psx.db:ro
     command:
       - python
       - -m

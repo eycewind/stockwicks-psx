@@ -46,6 +46,7 @@ from app.scripts.ml.model_refresh_policy import (
     DEFAULT_MODEL_REFRESH_MODE,
 )
 from app.services.replay_process import (
+    pid_liveness_checks_enabled,
     pid_is_alive,
     purge_old_sessions,
     reap_stale_sessions,
@@ -62,6 +63,41 @@ if not log.handlers:
     _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [ReplayRoutes] %(message)s"))
     log.addHandler(_h)
 log.setLevel(logging.INFO)
+
+
+# Replay accepts user-facing aliases only at this HTTP/form boundary. All
+# stored and downstream interval values remain canonical.
+_REPLAY_INTERVALS = {"1min", "5min", "10min", "15min", "30min", "1d"}
+_REPLAY_DAILY_ALIASES = {"1d", "1day", "1 day", "daily"}
+_REPLAY_INTRADAY_RANGE_DAYS = 30
+_REPLAY_DAILY_RANGE_DAYS = 730
+
+
+def normalize_replay_interval(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in _REPLAY_DAILY_ALIASES:
+        return "1d"
+    if normalized in _REPLAY_INTERVALS:
+        return normalized
+    raise ValueError(
+        f"Unsupported Replay interval: {value!r}. "
+        f"Supported: {', '.join(sorted(_REPLAY_INTERVALS))}"
+    )
+
+
+def replay_ingest_days(interval: str, start_date, end_date) -> int:
+    span_days = (end_date - start_date).days + 1
+    max_days = (
+        _REPLAY_DAILY_RANGE_DAYS
+        if interval == "1d"
+        else _REPLAY_INTRADAY_RANGE_DAYS
+    )
+    if span_days > max_days:
+        label = "daily" if interval == "1d" else "intraday"
+        raise ValueError(
+            f"{label.capitalize()} Replay range cannot exceed {max_days} days"
+        )
+    return max(30, span_days) if interval == "1d" else 30
 
 
 # Commercial MM replay config: keep aligned with paper_trade_bot.py and
@@ -420,11 +456,12 @@ def start_replay(
 
     # 1) Normalize + validate
     symbol = (symbol or "").upper().strip()
-    interval = (interval or "5min").strip().lower()
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol is required")
-    if interval not in ("1min", "5min", "10min", "15min", "30min", "1d"):
-        raise HTTPException(status_code=400, detail=f"Unsupported interval: {interval}")
+    try:
+        interval = normalize_replay_interval(interval)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     algo_name = (algo_name or "Algo1_MM").strip()
     if algo_name == "AlgoMM":
@@ -439,16 +476,27 @@ def start_replay(
         raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
     if ed < sd:
         raise HTTPException(status_code=400, detail="end_date must be >= start_date")
+    try:
+        ingest_days = replay_ingest_days(interval, sd, ed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # 2) Reap stale sessions. One-session enforcement is intentionally disabled.
     _safe_replay_housekeeping(db)
 
     # 3) Ensure data is available — auto-ingest if missing
-    csv_path, _ = get_data_paths(user.id, symbol)
+    ingest_interval = "1d" if interval == "1d" else "1min"
+    csv_path, _ = get_data_paths(user.id, symbol, ingest_interval)
     if not csv_path.exists():
         log.info("[%s] no local replay data for user %s; ingesting", symbol, user.id)
         try:
-            fetch_and_save(user_id=user.id, symbol=symbol, days=30, force=False)
+            fetch_and_save(
+                user_id=user.id,
+                symbol=symbol,
+                days=ingest_days,
+                force=False,
+                interval=ingest_interval,
+            )
         except Exception as e:
             raise HTTPException(
                 status_code=502,
@@ -467,7 +515,13 @@ def start_replay(
         except Exception as e:
             log.info("[%s] range check failed (%s); forcing re-ingest", symbol, e)
             try:
-                fetch_and_save(user_id=user.id, symbol=symbol, days=30, force=True)
+                fetch_and_save(
+                    user_id=user.id,
+                    symbol=symbol,
+                    days=ingest_days,
+                    force=True,
+                    interval=ingest_interval,
+                )
             except Exception as ee:
                 raise HTTPException(
                     status_code=502,
@@ -647,7 +701,12 @@ def api_state(
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Liveness sanity — only reap PID-based sessions.
-    if sess.status == "RUNNING" and sess.pid and not pid_is_alive(sess.pid):
+    if (
+        pid_liveness_checks_enabled()
+        and sess.status == "RUNNING"
+        and sess.pid
+        and not pid_is_alive(sess.pid)
+    ):
         _safe_replay_housekeeping(db)
         db.refresh(sess)
 

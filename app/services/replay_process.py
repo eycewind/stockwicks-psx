@@ -47,6 +47,22 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 # =============================================================================
 # Liveness
 # =============================================================================
+def pid_liveness_checks_enabled() -> bool:
+    """
+    Return whether this process can inspect Replay orchestrator PIDs.
+
+    A PID is meaningful only inside the namespace that spawned it. In the
+    Compose topology the worker owns orchestrators, so the web container must
+    use database state/heartbeats instead of probing worker-local PIDs.
+    """
+    return os.getenv("REPLAY_PID_LIVENESS_CHECK", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def pid_is_alive(pid: int) -> bool:
     """Return True iff the OS has a process with this pid."""
     if not pid or pid <= 0:
@@ -195,6 +211,9 @@ def reap_stale_sessions(db: Session) -> int:
 
     Returns the number of sessions reaped.
     """
+    if not pid_liveness_checks_enabled():
+        return 0
+
     stale = (
         db.query(ReplaySession)
           .filter(ReplaySession.status == "RUNNING")

@@ -32,4 +32,9 @@ def test_compose_forces_safe_effective_flags_and_no_real_credentials():
     assert environment["EMERGENCY_STOP"] == "true"
     assert environment["SCHWAB_CLIENT_ID"] == ""
     assert environment["SCHWAB_CLIENT_SECRET"] == ""
-    assert "psx_watcher.db" not in (ROOT / "compose.dev.yml").read_text()
+    assert environment["REPLAY_PID_LIVENESS_CHECK"] == "false"
+    assert (
+        compose["services"]["worker"]["environment"]["REPLAY_PID_LIVENESS_CHECK"]
+        == "true"
+    )
+    assert "/home/" not in (ROOT / "compose.dev.yml").read_text()
